@@ -1,0 +1,5 @@
+langgraph==0.6.6
+langchain==0.3.27
+langchain-openai==0.3.32
+langchain-tavily==0.2.11
+psycopg==3.2.9
