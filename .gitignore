@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual env
+.venv/
+venv/
+
+# OS / Editors
+.DS_Store
+.idea/
+.vscode/
+
+# Build / Artifacts
+dist/
+build/
+*.egg-info/
+*.log
+output.xml
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Env files
+.env
+.env.*
+
+# Local backup (not tracked)
+local_backup/
