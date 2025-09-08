@@ -1,30 +1,23 @@
 """
-基于 go-cqhttp(OneBot v11) HTTP 回调的 QQ 群机器人。
+基于 OneBot v11 HTTP 回调的 QQ 群机器人（兼容 NapCat.OneBot / Lagrange.OneBot / go-cqhttp）。
 
 特点：
 - 使用 Python 标准库 http.server + urllib，无需安装第三方依赖；
-- 通过 go-cqhttp 的 HTTP 回调接收事件，调用 LangGraph SQL Agent 生成回复；
-- 通过 go-cqhttp 的 HTTP API 发送群消息；
+- 通过 OneBot 的 HTTP 回调接收事件，调用 LangGraph SQL Agent 生成回复；
+- 通过 OneBot 的 HTTP API 发送群消息；
 - 所有敏感信息通过环境变量注入，不在代码中硬编码。
 
 运行前提：
-- 你已部署并登录可用的 go-cqhttp，启用 HTTP API 与 HTTP POST 回调；
-- go-cqhttp 配置示例（仅供参考，按你本地实际修改）：
-  servers:
-    - http:
-        enabled: true
-        host: 127.0.0.1
-        port: 5700
-    - post:
-        enabled: true
-        url: http://127.0.0.1:8080/
-        secret: ${GOCQHTTP_SECRET}
+- 你已部署并登录可用的 OneBot v11 实现（如 NapCat.OneBot / Lagrange.OneBot / go-cqhttp）；
+- 启用 HTTP API 与 HTTP POST 回调（回调指向本服务地址）。
 
 环境变量：
 - BOT_HOST: 监听地址，默认 127.0.0.1
 - BOT_PORT: 监听端口，默认 8080
-- GOCQHTTP_API_BASE: go-cqhttp HTTP API Base，例如 http://127.0.0.1:5700 （必须）
-- GOCQHTTP_SECRET: go-cqhttp 回调密钥（可选，若配置了 post.secret 则必须）
+- ONEBOT_API_BASE: OneBot HTTP API Base，例如 http://127.0.0.1:5700 （推荐）
+- ONEBOT_SECRET: OneBot 回调密钥（可选，若配置了回调 secret 则必须）
+- ONEBOT_ACCESS_TOKEN: OneBot HTTP API access_token（可选，若配置了需在请求头携带）
+- 兼容旧名：GOCQHTTP_API_BASE / GOCQHTTP_SECRET / GOCQHTTP_ACCESS_TOKEN
 - ALLOWED_GROUPS: 允许响应的群ID，逗号分隔；为空表示不限制
 - MODEL_NAME, LANGGRAPH_PG, THREAD_ID, ENABLE_TOOLS 等：透传给 SQL Agent
 
@@ -63,26 +56,28 @@ class BotConfig:
     port: int = 8080
     api_base: str = ""
     secret: str = ""
+    access_token: str = ""
     allowed_groups: tuple[int, ...] = ()
 
     @staticmethod
     def from_env() -> "BotConfig":
         host = os.environ.get("BOT_HOST", "127.0.0.1")
         port = int(os.environ.get("BOT_PORT", "8080"))
-        api_base = os.environ.get("GOCQHTTP_API_BASE", "").rstrip("/")
-        secret = os.environ.get("GOCQHTTP_SECRET", "")
+        api_base = (os.environ.get("ONEBOT_API_BASE") or os.environ.get("GOCQHTTP_API_BASE", "")).rstrip("/")
+        secret = os.environ.get("ONEBOT_SECRET") or os.environ.get("GOCQHTTP_SECRET", "")
+        access_token = os.environ.get("ONEBOT_ACCESS_TOKEN") or os.environ.get("GOCQHTTP_ACCESS_TOKEN", "")
         groups_env = os.environ.get("ALLOWED_GROUPS", "").strip()
         groups: tuple[int, ...] = ()
         if groups_env:
             groups = tuple(int(x) for x in groups_env.split(",") if x.strip().isdigit())
-        cfg = BotConfig(host=host, port=port, api_base=api_base, secret=secret, allowed_groups=groups)
+        cfg = BotConfig(host=host, port=port, api_base=api_base, secret=secret, access_token=access_token, allowed_groups=groups)
         # 基础校验
-        assert cfg.api_base, "缺少 GOCQHTTP_API_BASE（例如 http://127.0.0.1:5700）"
+        assert cfg.api_base, "缺少 ONEBOT_API_BASE（或 GOCQHTTP_API_BASE），例如 http://127.0.0.1:5700"
         return cfg
 
 
 def _verify_signature(secret: str, body: bytes, signature: str) -> bool:
-    """验证 go-cqhttp X-Signature（HMAC-SHA1）。"""
+    """验证 OneBot X-Signature（HMAC-SHA1，值形如 sha1=...）。"""
     if not secret:
         return True
     if not signature or not signature.startswith("sha1="):
@@ -91,18 +86,21 @@ def _verify_signature(secret: str, body: bytes, signature: str) -> bool:
     return hmac.compare_digest("sha1=" + mac, signature)
 
 
-def _send_group_msg(api_base: str, group_id: int, text: str) -> None:
-    """调用 go-cqhttp HTTP API 发送群消息。"""
+def _send_group_msg(api_base: str, group_id: int, text: str, access_token: str = "") -> None:
+    """调用 OneBot HTTP API 发送群消息。"""
     url = urljoin(api_base + "/", "send_group_msg")
     payload = {"group_id": group_id, "message": text}
-    req = Request(url, data=json.dumps(payload).encode("utf-8"), headers={"Content-Type": "application/json"})
+    headers = {"Content-Type": "application/json"}
+    if access_token:
+        headers["Authorization"] = f"Bearer {access_token}"
+    req = Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers)
     with urlopen(req, timeout=15) as resp:
         if resp.status != 200:
             raise RuntimeError(f"send_group_msg HTTP {resp.status}")
 
 
 class QQBotHandler(BaseHTTPRequestHandler):
-    """处理 go-cqhttp HTTP 回调的 Handler。"""
+    """处理 OneBot HTTP 回调的 Handler。"""
 
     # 共享对象（由主程序注入）
     bot_cfg: BotConfig
@@ -183,9 +181,9 @@ class QQBotHandler(BaseHTTPRequestHandler):
 
         # 发送回群
         try:
-            _send_group_msg(self.bot_cfg.api_base, group_id, answer)
+            _send_group_msg(self.bot_cfg.api_base, group_id, answer, self.bot_cfg.access_token)
         except Exception as e:
-            # 回应失败也返回 200，避免 go-cqhttp 重试风暴
+            # 回应失败也返回 200，避免上游不断重试
             self._send_json(200, {"ok": False, "error": str(e)})
             return
 
@@ -205,7 +203,7 @@ def _build_agent_from_env() -> SQLCheckpointAgentStreamingPlus:
 
 
 def main() -> None:
-    """启动 HTTP 服务器，接收 go-cqhttp 回调并处理群消息。"""
+    """启动 HTTP 服务器，接收 OneBot 回调并处理群消息。"""
     # 必须使用虚拟环境
     assert os.environ.get("VIRTUAL_ENV") or sys.prefix.endswith(
         ".venv"
@@ -239,4 +237,3 @@ if __name__ == "__main__":
                 break
             time.sleep(1)
     main()
-
