@@ -83,7 +83,7 @@ python sql_agent_cli.py
 - 触发搜索并总结：
 
 ```
-User: 搜索青木阳菜
+User: 搜索...
 Tool: Calling tool [tavily_search]
 Agent: （综合工具结果的中文总结 + 简明要点 + 参考链接）
 ```
@@ -99,10 +99,10 @@ Agent: （解释现实限制 + 合理建议；不生搬工具原文）
 - 连续搜索（多轮）：
 
 ```
-User: 搜索MyGO!!!!!
-User: MyGO
+User: 搜索XXX
+User: 是XXXXXXXX
 User: 继续
-User: Search for MyGO!!!!!
+User: Search for XXXXXX
 ```
 
 > 在上述多轮中，增强版会避免“跨轮误判导致不再调用工具”的问题；当用户输入“继续”且上轮 AI 承诺搜索时，会再次调用工具兑现承诺。
@@ -125,14 +125,6 @@ User: Search for MyGO!!!!!
 ```bash
 brew services stop postgresql
 ```
-
-## 开发与提交规范
-
-- 使用虚拟环境：`source .venv/bin/activate`
-- 遵循 AGENTS.md：
-  - 不在 `main` 上直接修改；从 `main` 新建分支，如 `feat-xxx`、`fix-xxx`、`docs-xxx`
-  - 不使用 `git add .`，仅提交必要改动文件
-  - 提交信息遵循 Conventional Commits（中文）
 
 ## 目录
 
