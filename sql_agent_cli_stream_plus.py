@@ -29,12 +29,6 @@ from langgraph.prebuilt import ToolNode, tools_condition
 
 # 说明：严禁在代码中硬编码密钥；请通过环境变量注入：
 # - OPENAI_API_KEY, TAVILY_API_KEY, LANGGRAPH_PG, THREAD_ID（可选）
-os.environ["OPENAI_API_KEY"] = (
-    "***REMOVED***"
-)
-os.environ["TAVILY_API_KEY"] = "***REMOVED***"
-os.environ["LANGGRAPH_PG"] = "***REMOVED***"
-os.environ.setdefault("THREAD_ID", "demo-plus")
 
 
 class State(TypedDict):
