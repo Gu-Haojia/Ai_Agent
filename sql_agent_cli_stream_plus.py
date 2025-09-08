@@ -28,8 +28,6 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 
 # 说明：严禁在代码中硬编码密钥；请通过环境变量注入：
-# - OPENAI_API_KEY, TAVILY_API_KEY, LANGGRAPH_PG, THREAD_ID（可选）
-
 
 class State(TypedDict):
     """Agent 的图状态。"""
