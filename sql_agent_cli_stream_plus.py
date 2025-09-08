@@ -8,7 +8,6 @@
 - REPL 仅在输入 :help 时显示帮助；
 - 历史按时间顺序输出（timetravel 风格），支持索引回放。
 
-调试需求：按你的要求，保留 apikey 及 brew 启停逻辑，便于本机快速测试。
 """
 
 from __future__ import annotations
