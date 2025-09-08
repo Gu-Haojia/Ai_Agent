@@ -29,6 +29,12 @@ from langgraph.prebuilt import ToolNode, tools_condition
 
 # 说明：严禁在代码中硬编码密钥；请通过环境变量注入：
 # - OPENAI_API_KEY, TAVILY_API_KEY, LANGGRAPH_PG, THREAD_ID（可选）
+os.environ["OPENAI_API_KEY"] = (
+    "***REMOVED***"
+)
+os.environ["TAVILY_API_KEY"] = "***REMOVED***"
+os.environ["LANGGRAPH_PG"] = "***REMOVED***"
+os.environ.setdefault("THREAD_ID", "demo-plus")
 
 
 class State(TypedDict):
@@ -135,6 +141,7 @@ class SQLCheckpointAgentStreamingPlus:
             except Exception:
                 messages = state["messages"]
 
+            """
             # 策略增强：
             # - 仅统计“最后一条 human 之后”的 Tool 消息，避免跨轮次误判。
             # - 显式搜索请求或“继续”且上次 AI 承诺搜索时，强制调用工具。
@@ -221,7 +228,8 @@ class SQLCheckpointAgentStreamingPlus:
                 last_user_text.strip() in {"继续", "go on", "continue"}
                 and _last_ai_promised_search()
             )
-
+            """
+            """
             if has_tool_feedback and hasattr(llm_tools_none, "stream"):
                 for chunk in llm_tools_none.stream(messages):
                     last_msg = chunk
@@ -237,16 +245,21 @@ class SQLCheckpointAgentStreamingPlus:
                 if last_msg is not None:
                     return {"messages": [last_msg]}
                 return {"messages": [AIMessage(content="")]}  # 空聚合兜底
+            """
 
-            # 首轮/无工具反馈：改为流式输出（优先使用 stream + chunk 累加）
+            # 首轮/无工具反馈：同样改为流式输出
+            # 显式要求则强制工具，否则交由模型自动决定
             runner = llm_tools_auto
+
             if hasattr(runner, "stream"):
+                # 使用 LangChain 的 chunk 相加协议，将增量内容与工具调用一起合并
                 accumulated = None
                 for c in runner.stream(messages):  # type: ignore[attr-defined]
                     txt = getattr(c, "content", None)
                     if txt:
                         on_token(txt)
                     accumulated = c if accumulated is None else accumulated + c
+
                 if accumulated is not None:
                     return {"messages": [accumulated]}
 
@@ -504,6 +517,12 @@ class _FakeStreamingEcho:
 if __name__ == "__main__":
     # 按需启动/停止本机 brew postgresql，便于你的调试
     os.system("brew services start postgresql")
+    # wait for postgresql to be ready
+    while True:
+        res = os.system("pg_isready -q")
+        if res == 0:
+            break
+        time.sleep(1)
 
     if os.environ.get("RUN_AGENT_TEST") == "1":
         cfg = _read_env_config()
