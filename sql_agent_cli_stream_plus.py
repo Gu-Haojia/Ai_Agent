@@ -238,8 +238,19 @@ class SQLCheckpointAgentStreamingPlus:
                     return {"messages": [last_msg]}
                 return {"messages": [AIMessage(content="")]}  # 空聚合兜底
 
-            # 首轮/无工具反馈：显式要求则强制工具，否则交给模型自动决定
-            runner = llm_tools_force if should_force_tool else llm_tools_auto
+            # 首轮/无工具反馈：改为流式输出（优先使用 stream + chunk 累加）
+            runner = llm_tools_auto
+            if hasattr(runner, "stream"):
+                accumulated = None
+                for c in runner.stream(messages):  # type: ignore[attr-defined]
+                    txt = getattr(c, "content", None)
+                    if txt:
+                        on_token(txt)
+                    accumulated = c if accumulated is None else accumulated + c
+                if accumulated is not None:
+                    return {"messages": [accumulated]}
+
+            # 退化路径：不支持流式则一次性返回
             msg = runner.invoke(messages)  # type: ignore[attr-defined]
             txt = getattr(msg, "content", "")
             if isinstance(txt, str) and txt:
@@ -310,6 +321,7 @@ class SQLCheckpointAgentStreamingPlus:
                     if isinstance(txt, str) and txt:
                         last_text = txt
         except KeyboardInterrupt:
+            print("\n暂停生成。")
             pass
         finally:
             if not self._printed_in_round and last_text:
