@@ -91,7 +91,7 @@ Agent: （综合工具结果的中文总结 + 简明要点 + 参考链接）
 - 强制先搜索再给建议：
 
 ```
-User: 先用工具搜索互联网,再告诉我如何提高与青木阳菜结婚的可能性
+User: 先用工具搜索互联网,再告诉我如何xxxxxx
 Tool: Calling tool [tavily_search]
 Agent: （解释现实限制 + 合理建议；不生搬工具原文）
 ```
@@ -131,10 +131,6 @@ brew services stop postgresql
 - `sql_agent_cli_stream.py`：流式 + 可暂停 + SQL/内存检查点
 - `sql_agent_cli_stream_plus.py`：增强流式（多轮工具/强制搜索/强化综合）
 - `sql_agent_cli.py`：基础（非流式）
-- `timetravel_sql.py`：官方风格的检查点/回放示例
-- `test_agent_with_timetravel.py`：最小化示例测试
 
 ---
-
-如需将增强逻辑同步到 `sql_agent_cli_stream.py` 或进一步扩展“多轮工具循环”（如先搜索人物、再搜索法律流程等），可在 Issue/PR 中提出，我可以继续完善。
 
