@@ -76,6 +76,29 @@ class SQLCheckpointAgentStreamingPlus:
         self._graph = self._build_graph()
         self._printed_in_round: bool = False
 
+    def _load_sys_msg_content(self) -> str:
+        """读取系统提示词内容。
+
+        优先从环境变量 `SYS_MSG_FILE` 指定的路径读取系统提示文本；
+        要求该文件必须存在且非空，否则抛出断言错误。
+
+        Returns:
+            str: 系统提示词全文内容。
+
+        Raises:
+            AssertionError: 当环境变量未设置、文件不存在或内容为空时抛出。
+        """
+        path = os.environ.get("SYS_MSG_FILE")
+        assert (
+            path
+        ), "必须通过环境变量 SYS_MSG_FILE 指定系统提示文件路径。"
+        abs_path = os.path.abspath(path)
+        assert os.path.isfile(abs_path), f"系统提示文件不存在: {abs_path}"
+        with open(abs_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        assert content and content.strip(), "系统提示文件内容为空。"
+        return content
+
     def _build_graph(self):
         model_name = self._config.model_name
         if model_name == "fake:echo":
@@ -115,20 +138,10 @@ class SQLCheckpointAgentStreamingPlus:
             )
             partial: list[str] = []
             last_msg = None
-            # 系统提示：综合 & 不生搬硬套搜索结果
+            # 系统提示：从外部文件读取，综合 & 不生搬硬套搜索结果
             try:
                 from langchain_core.messages import SystemMessage
-
-                sys_msg = SystemMessage(
-                    content=(
-                        "你是可靠且审慎的Agent助手，拥有网页搜索等工具。\n"
-                        "工作流：\n"
-                        "1) 识别用户真实意图，必要时提出简短澄清；\n"
-                        "2) 当需要最新或事实信息时，调用搜索工具（可多次）；\n"
-                        "3) 基于工具结果进行综合推理，给出清晰、结构化、可执行的最终回答；\n"
-                        "4) 切勿直接复制工具文本"
-                    )
-                )
+                sys_msg = SystemMessage(content=self._load_sys_msg_content())
                 messages = [sys_msg] + list(state["messages"])  # 不修改原列表
             except Exception:
                 messages = state["messages"]
