@@ -73,6 +73,9 @@ class SQLCheckpointAgentStreamingPlus:
         else:
             self._enable_tools = env_tools in {"1", "true", "True"}
 
+        # 预先读取并缓存系统提示内容（从外部文件），避免每轮重复IO
+        self._sys_msg_content: str = self._load_sys_msg_content()
+
         self._graph = self._build_graph()
         self._printed_in_round: bool = False
 
