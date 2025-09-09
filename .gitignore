@@ -31,3 +31,7 @@ output.xml
 
 # Local backup (not tracked)
 local_backup/
+
+# Prompts (ignored)
+prompt/
+prompts/
