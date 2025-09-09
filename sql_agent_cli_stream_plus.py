@@ -141,10 +141,10 @@ class SQLCheckpointAgentStreamingPlus:
             )
             partial: list[str] = []
             last_msg = None
-            # 系统提示：从外部文件读取，综合 & 不生搬硬套搜索结果
+            # 系统提示：使用初始化时缓存的外部文件内容，综合 & 不生搬硬套搜索结果
             try:
                 from langchain_core.messages import SystemMessage
-                sys_msg = SystemMessage(content=self._load_sys_msg_content())
+                sys_msg = SystemMessage(content=self._sys_msg_content)
                 messages = [sys_msg] + list(state["messages"])  # 不修改原列表
             except Exception:
                 messages = state["messages"]
