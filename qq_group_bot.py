@@ -41,6 +41,28 @@ from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 
 
+def _load_env_from_files(files: list[str]) -> None:
+    """
+    从 .env/.env.local 读取 KEY=VALUE 并注入到进程环境（不覆盖已存在的环境变量）。
+    Args:
+        files (list[str]): 依次尝试读取的文件路径
+    """
+    for fp in files:
+        if not os.path.exists(fp):
+            continue
+        with open(fp, "r", encoding="utf-8") as f:
+            for line in f:
+                s = line.strip()
+                if not s or s.startswith("#") or "=" not in s:
+                    continue
+                k, v = s.split("=", 1)
+                k = k.strip()
+                v = v.strip().strip("'\"")
+                if k and k not in os.environ:
+                    os.environ[k] = v
+
+_load_env_from_files([".env.local", ".env"])
+
 # 复用现有 Agent
 from sql_agent_cli_stream_plus import (
     AgentConfig,
