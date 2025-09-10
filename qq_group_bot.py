@@ -192,6 +192,30 @@ def _parse_message_and_at(event: dict) -> tuple[str, bool]:
         at_me = f"[CQ:at,qq={self_id}]" in raw
     return (raw, at_me)
 
+def _extract_sender_name(event: dict) -> str:
+    """从事件中提取发送者名称（不额外请求 API）。
+
+    优先级：sender.card > sender.nickname > user_id。
+
+    Args:
+        event (dict): OneBot v11 事件
+
+    Returns:
+        str: 显示名或 QQ 字符串
+    """
+    try:
+        sender = event.get("sender") or {}
+        card = str(sender.get("card") or "").strip()
+        if card:
+            return card
+        nickname = str(sender.get("nickname") or "").strip()
+        if nickname:
+            return nickname
+    except Exception:
+        pass
+    uid = event.get("user_id")
+    return str(uid) if uid is not None else "user"
+
 
 def _list_prompt_names() -> list[str]:
     """列出 prompts 目录下的可用提示词名称（不含扩展名）。
@@ -347,12 +371,15 @@ class QQBotHandler(BaseHTTPRequestHandler):
         # 调用 Agent 生成回复（返回最后聚合文本）
         try:
             # 终端打印服务消息
-            print(f"[Chat] Group {group_id} User {user_id}: {text}")
+            print(f"[Chat] Request get: Group {group_id} User {user_id}: {text}")
             print("[Chat] Generating reply...")
             # 为流式打印添加前缀标记到服务端日志，QQ 群内仅发送最终汇总
             self.agent.set_token_printer(lambda s: sys.stdout.write(s))
+            # 轻量方案：在发给 Agent 的文本前加入说话人标识，提升区分度
+            author = _extract_sender_name(event)
+            model_input = f"User:【{user_id}】; Text: {text}"
             answer = self.agent.chat_once_stream(
-                text, thread_id=self._thread_id_for(group_id)
+                model_input, thread_id=self._thread_id_for(group_id)
             )
             answer = (answer or "").strip()
             if not answer:
@@ -366,6 +393,8 @@ class QQBotHandler(BaseHTTPRequestHandler):
 
         # 发送回群
         try:
+            # 轻量方案：使用 CQ at 前缀 @ 该用户，便于区分接收者
+            #at_prefix = f"[CQ:at,qq={user_id}] "
             _send_group_msg(
                 self.bot_cfg.api_base, group_id, answer, self.bot_cfg.access_token
             )
@@ -534,6 +563,7 @@ def main() -> None:
         ".venv"
     ), "必须先激活虚拟环境 (.venv)。"
 
+    print('--------------------------------------------------------------------------------------------------------')
     bot_cfg = BotConfig.from_env()
     agent = _build_agent_from_env()
 
@@ -546,6 +576,7 @@ def main() -> None:
     )
     print("[QQBot] Allowed command users:", bot_cfg.cmd_allowed_users or "ALL")
     print("[QQBot] Bot now started, press Ctrl+C to stop.")
+    print('--------------------------------------------------------------------------------------------------------')
     try:
         server.serve_forever(poll_interval=0.5)
     except KeyboardInterrupt:
