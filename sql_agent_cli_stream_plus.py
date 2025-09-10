@@ -100,7 +100,8 @@ class SQLCheckpointAgentStreamingPlus:
         with open(abs_path, "r", encoding="utf-8") as f:
             content = f.read()
             print(f"[系统提示] 已加载文件: {abs_path}，长度 {len(content)} 字符。")
-            print("已加载的prompt:", content)
+            #打印头尾各50字符
+            print(f"[系统提示] 内容预览: {content[:50]!r} ... {content[-50:]!r}")
         assert content and content.strip(), "系统提示文件内容为空。"
         return content
 
