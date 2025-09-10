@@ -22,6 +22,7 @@ NapCatQQ 专用的 QQ 群机器人（OneBot v11 HTTP 回调）。
 - ONEBOT_SECRET: 回调签名密钥（可选）
 - ONEBOT_ACCESS_TOKEN: NapCat HTTP API token（若开启验证）
 - ALLOWED_GROUPS: 允许响应的群ID，逗号分隔；为空表示不限制
+- CMD_ALLOWED_USERS: 命令白名单用户QQ号，逗号分隔；为空表示所有人可执行命令
 - MODEL_NAME, LANGGRAPH_PG, THREAD_ID, ENABLE_TOOLS 等：透传给 SQL Agent
 
 安全：
@@ -84,6 +85,7 @@ class BotConfig:
     secret: str = ""
     access_token: str = ""
     allowed_groups: tuple[int, ...] = ()
+    cmd_allowed_users: tuple[int, ...] = ()  # 命令白名单用户（为空表示放行）
 
     @staticmethod
     def from_env() -> "BotConfig":
@@ -98,6 +100,13 @@ class BotConfig:
         groups: tuple[int, ...] = ()
         if groups_env:
             groups = tuple(int(x) for x in groups_env.split(",") if x.strip().isdigit())
+        # 命令白名单（逗号分隔 QQ 号），为空表示放行
+        cmd_env = os.environ.get("CMD_ALLOWED_USERS", "").strip()
+        cmd_allowed: tuple[int, ...] = ()
+        if cmd_env:
+            cmd_allowed = tuple(
+                int(x) for x in cmd_env.split(",") if x.strip().isdigit()
+            )
         cfg = BotConfig(
             host=host,
             port=port,
@@ -105,6 +114,7 @@ class BotConfig:
             secret=secret,
             access_token=access_token,
             allowed_groups=groups,
+            cmd_allowed_users=cmd_allowed,
         )
         # 基础校验
         assert cfg.api_base, "缺少 ONEBOT_API_BASE，例如 http://127.0.0.1:3000"
@@ -330,7 +340,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
 
         # 内部命令：当文本完全命中命令格式时优先处理，并直接在群内回复
         t = text.strip()
-        if self._handle_commands(group_id, t):
+        if self._handle_commands(group_id, user_id, t):
             self._send_no_content()
             return
 
@@ -383,7 +393,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
         # 默认：沿用启动时的线程前缀，保证不同群隔离
         return f"qq-napcat-{group_id}-{self.agent._config.thread_id}"
 
-    def _handle_commands(self, group_id: int, text: str) -> bool:
+    def _handle_commands(self, group_id: int, user_id: int, text: str) -> bool:
         """处理内部命令。
 
         仅在被 @ 且文本完全命中时触发：
@@ -395,6 +405,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
 
         Args:
             group_id (int): 群号
+            user_id (int): 触发命令的用户 QQ 号
             text (str): 纯文本
 
         Returns:
@@ -404,6 +415,16 @@ class QQBotHandler(BaseHTTPRequestHandler):
             return False
         parts = text.split()
         cmd = parts[0]
+        # 命令白名单校验：设置了 CMD_ALLOWED_USERS 时，仅白名单内用户可执行
+        allow_users = getattr(self.bot_cfg, "cmd_allowed_users", ()) or ()
+        if allow_users and user_id not in allow_users:
+            _send_group_msg(
+                self.bot_cfg.api_base,
+                group_id,
+                "无权执行命令（需在白名单内）。",
+                self.bot_cfg.access_token,
+            )
+            return True
 
         if cmd == "/cmd" and len(parts) == 1:
             msg = (
@@ -523,6 +544,7 @@ def main() -> None:
     print(
         f"[QQBot] Listening http://{bot_cfg.host}:{bot_cfg.port} api={bot_cfg.api_base} groups={bot_cfg.allowed_groups or 'ALL'} thread={agent._config.thread_id} model={agent._config.model_name} dry_run={'YES' if agent._config.use_memory_ckpt else 'NO'}"
     )
+    print("[QQBot] Allowed command users:", bot_cfg.cmd_allowed_users or "ALL")
     print("[QQBot] Bot now started, press Ctrl+C to stop.")
     try:
         server.serve_forever(poll_interval=0.5)
