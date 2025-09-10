@@ -1,29 +1,32 @@
 """
-基于 OneBot v11 HTTP 回调的 QQ 群机器人（兼容 NapCat.OneBot / Lagrange.OneBot / go-cqhttp）。
+NapCatQQ 专用的 QQ 群机器人（OneBot v11 HTTP 回调）。
+
+目标与拓扑：
+- 仅在被 @ 机器人时触发回复；
+- NapCat 运行在 Docker：
+  - 宿主机上的机器人通过 `http://127.0.0.1:3000` 请求 NapCat HTTP API；
+  - NapCat 容器通过 `http://host.docker.internal:8080` 回调到机器人。
 
 特点：
-- 使用 Python 标准库 http.server + urllib，无需安装第三方依赖；
-- 通过 OneBot 的 HTTP 回调接收事件，调用 LangGraph SQL Agent 生成回复；
-- 通过 OneBot 的 HTTP API 发送群消息；
-- 所有敏感信息通过环境变量注入，不在代码中硬编码。
+- 标准库 http.server + urllib，无需第三方依赖；
+- 解析 NapCat Array 格式消息段，精准识别 @；
+- 通过 OneBot HTTP API 发送群消息；
+- 所有敏感信息仅用环境变量注入；
+- 内置 .env 加载（不覆盖现有环境变量）；
+- 提供 `/healthz` GET 健康检查。
 
-运行前提：
-- 你已部署并登录可用的 OneBot v11 实现（如 NapCat.OneBot / Lagrange.OneBot / go-cqhttp）；
-- 启用 HTTP API 与 HTTP POST 回调（回调指向本服务地址）。
-
-环境变量：
-- BOT_HOST: 监听地址，默认 127.0.0.1
+环境变量（NapCat 场景推荐）：
+- BOT_HOST: 监听地址，默认 0.0.0.0（容器回调需要）
 - BOT_PORT: 监听端口，默认 8080
-- ONEBOT_API_BASE: OneBot HTTP API Base，例如 http://127.0.0.1:5700 （推荐）
-- ONEBOT_SECRET: OneBot 回调密钥（可选，若配置了回调 secret 则必须）
-- ONEBOT_ACCESS_TOKEN: OneBot HTTP API access_token（可选，若配置了需在请求头携带）
-- 兼容旧名：GOCQHTTP_API_BASE / GOCQHTTP_SECRET / GOCQHTTP_ACCESS_TOKEN
+- ONEBOT_API_BASE: NapCat HTTP API Base，默认 http://127.0.0.1:3000
+- ONEBOT_SECRET: 回调签名密钥（可选）
+- ONEBOT_ACCESS_TOKEN: NapCat HTTP API token（若开启验证）
 - ALLOWED_GROUPS: 允许响应的群ID，逗号分隔；为空表示不限制
 - MODEL_NAME, LANGGRAPH_PG, THREAD_ID, ENABLE_TOOLS 等：透传给 SQL Agent
 
-安全要求：
+安全：
 - 必须通过虚拟环境运行；
-- 严禁硬编码密钥，统一使用环境变量。
+- 严禁硬编码密钥。
 """
 
 from __future__ import annotations
@@ -61,6 +64,7 @@ def _load_env_from_files(files: list[str]) -> None:
                 if k and k not in os.environ:
                     os.environ[k] = v
 
+
 _load_env_from_files([".env.local", ".env"])
 
 # 复用现有 Agent
@@ -72,30 +76,38 @@ from sql_agent_cli_stream_plus import (
 
 @dataclass
 class BotConfig:
-    """QQ 机器人配置。"""
+    """NapCat 机器人配置。"""
 
-    host: str = "127.0.0.1"
+    host: str = "0.0.0.0"
     port: int = 8080
-    api_base: str = ""
+    api_base: str = "http://127.0.0.1:3000"
     secret: str = ""
     access_token: str = ""
     allowed_groups: tuple[int, ...] = ()
 
     @staticmethod
     def from_env() -> "BotConfig":
-        host = os.environ.get("BOT_HOST", "127.0.0.1")
+        host = os.environ.get("BOT_HOST", "0.0.0.0")
         port = int(os.environ.get("BOT_PORT", "8080"))
-        api_base = (os.environ.get("ONEBOT_API_BASE") or os.environ.get("GOCQHTTP_API_BASE", "")).rstrip("/")
-        secret = os.environ.get("ONEBOT_SECRET") or os.environ.get("GOCQHTTP_SECRET", "")
-        access_token = os.environ.get("ONEBOT_ACCESS_TOKEN") or os.environ.get("GOCQHTTP_ACCESS_TOKEN", "")
+        api_base = (os.environ.get("ONEBOT_API_BASE", "http://127.0.0.1:3000")).rstrip(
+            "/"
+        )
+        secret = os.environ.get("ONEBOT_SECRET") or ""
+        access_token = os.environ.get("ONEBOT_ACCESS_TOKEN") or ""
         groups_env = os.environ.get("ALLOWED_GROUPS", "").strip()
         groups: tuple[int, ...] = ()
         if groups_env:
             groups = tuple(int(x) for x in groups_env.split(",") if x.strip().isdigit())
-        cfg = BotConfig(host=host, port=port, api_base=api_base, secret=secret, access_token=access_token, allowed_groups=groups)
+        cfg = BotConfig(
+            host=host,
+            port=port,
+            api_base=api_base,
+            secret=secret,
+            access_token=access_token,
+            allowed_groups=groups,
+        )
         # 基础校验
-        print(cfg.api_base)
-        assert cfg.api_base, "缺少 ONEBOT_API_BASE（或 GOCQHTTP_API_BASE），例如 http://127.0.0.1:5700"
+        assert cfg.api_base, "缺少 ONEBOT_API_BASE，例如 http://127.0.0.1:3000"
         return cfg
 
 
@@ -109,8 +121,17 @@ def _verify_signature(secret: str, body: bytes, signature: str) -> bool:
     return hmac.compare_digest("sha1=" + mac, signature)
 
 
-def _send_group_msg(api_base: str, group_id: int, text: str, access_token: str = "") -> None:
-    """调用 OneBot HTTP API 发送群消息。"""
+def _send_group_msg(
+    api_base: str, group_id: int, text: str, access_token: str = ""
+) -> None:
+    """调用 OneBot HTTP API 发送群消息（NapCat 兼容）。
+
+    Args:
+        api_base (str): NapCat HTTP API 基地址。
+        group_id (int): 群号。
+        text (str): 文本内容。
+        access_token (str): API Token，可为空。
+    """
     url = urljoin(api_base + "/", "send_group_msg")
     payload = {"group_id": group_id, "message": text}
     headers = {"Content-Type": "application/json"}
@@ -122,8 +143,48 @@ def _send_group_msg(api_base: str, group_id: int, text: str, access_token: str =
             raise RuntimeError(f"send_group_msg HTTP {resp.status}")
 
 
+def _parse_message_and_at(event: dict) -> tuple[str, bool]:
+    """解析 NapCat 群消息，返回纯文本与是否@机器人。
+
+    NapCat 的消息可为两种格式：
+    - String（CQ 码）；
+    - Array（段落列表，如 {"type":"text"|"at"|...}）。
+
+    Args:
+        event (dict): OneBot v11 事件。
+
+    Returns:
+        tuple[str, bool]: (纯文本, 是否@机器人)。
+    """
+    self_id = str(event.get("self_id") or "")
+
+    msg = event.get("message")
+    if isinstance(msg, list):
+        texts: list[str] = []
+        at_me = False
+        for seg in msg:
+            try:
+                typ = seg.get("type")
+                data = seg.get("data") or {}
+            except Exception:
+                continue
+            if typ == "text":
+                texts.append(str(data.get("text", "")))
+            elif typ == "at":
+                qq = str(data.get("qq", ""))
+                if self_id and qq == self_id:
+                    at_me = True
+        return ("".join(texts).strip(), at_me)
+
+    raw = str(event.get("raw_message") or msg or "").strip()
+    at_me = False
+    if self_id and "[CQ:at,qq=" in raw:
+        at_me = f"[CQ:at,qq={self_id}]" in raw
+    return (raw, at_me)
+
+
 class QQBotHandler(BaseHTTPRequestHandler):
-    """处理 OneBot HTTP 回调的 Handler。"""
+    """处理 NapCat / OneBot HTTP 回调的 Handler。"""
 
     # 共享对象（由主程序注入）
     bot_cfg: BotConfig
@@ -137,18 +198,72 @@ class QQBotHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _send_no_content(self) -> None:
+        """返回 204，无内容（避免触发 NapCat 快速操作）。"""
+        self.send_response(204)
+        self.end_headers()
+
     def log_message(self, fmt: str, *args) -> None:  # noqa: D401
         # 避免 http.server 默认 stdout 噪音，简化为一行
         sys.stderr.write("[HTTP] " + fmt % args + "\n")
 
-    def do_POST(self) -> None:  # noqa: N802
-        # 读取 body
+    # ---- 内部工具：读取请求体（支持 chunked） ----
+    def _read_body(self) -> tuple[bytes, Optional[str]]:
+        """读取请求体，支持 Content-Length 与 chunked。
+
+        Returns:
+            tuple[bytes, Optional[str]]: (body, error)。当 error 非空时表示读取失败。
+        """
+        te = (self.headers.get("Transfer-Encoding") or "").lower()
+        if "chunked" in te:
+            try:
+                chunks: list[bytes] = []
+                while True:
+                    line = self.rfile.readline()
+                    if not line:
+                        return b"", "bad chunk stream"
+                    size_s = line.strip().split(b";", 1)[0]
+                    try:
+                        size = int(size_s, 16)
+                    except Exception:
+                        return b"", "bad chunk size"
+                    if size == 0:
+                        _ = self.rfile.readline()
+                        break
+                    data = self.rfile.read(size)
+                    _ = self.rfile.read(2)
+                    if data is None:
+                        return b"", "incomplete chunk"
+                    chunks.append(data)
+                return b"".join(chunks), None
+            except Exception as e:
+                return b"", f"chunked read error: {e}"
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except Exception:
-            self._send_json(400, {"error": "bad content-length"})
+            return b"", "bad content-length"
+        if length <= 0:
+            return b"", "empty body"
+        try:
+            body = self.rfile.read(length)
+        except Exception:
+            return b"", "read body failed"
+        return body or b"", None
+
+    def do_GET(self) -> None:  # noqa: N802
+        """健康检查：仅 /healthz 返回 200，其他 GET 返回 501。"""
+        if self.path.rstrip("/") == "/healthz":
+            self._send_json(200, {"ok": True, "service": "qq-napcat-bot"})
             return
-        body = self.rfile.read(length)
+        self.send_error(501, "Unsupported method ('GET')")
+
+    def do_POST(self) -> None:  # noqa: N802
+        # 读取 body（支持 chunked）
+        body, err = self._read_body()
+        if err:
+            sys.stderr.write(f"[HTTP] bad request body: {err}\n")
+            self._send_json(400, {"error": err})
+            return
 
         # 签名校验（可选）
         sig = self.headers.get("X-Signature", "")
@@ -159,39 +274,44 @@ class QQBotHandler(BaseHTTPRequestHandler):
         # 解析事件
         try:
             event = json.loads(body.decode("utf-8"))
-        except Exception:
+        except Exception as e:
+            preview = body[:256]
+            sys.stderr.write(f"[HTTP] invalid json: {e}; body[:256]={preview!r}\n")
             self._send_json(400, {"error": "invalid json"})
             return
 
         # 仅处理群消息
         if not (
-            event.get("post_type") == "message"
-            and event.get("message_type") == "group"
+            event.get("post_type") == "message" and event.get("message_type") == "group"
         ):
-            self._send_json(200, {"ok": True})
+            self._send_no_content()
             return
 
         group_id = int(event.get("group_id", 0))
         user_id = int(event.get("user_id", 0))
-        raw_message = str(event.get("raw_message") or event.get("message") or "").strip()
+        text, at_me = _parse_message_and_at(event)
 
-        if not raw_message:
-            self._send_json(200, {"ok": True})
+        if not text:
+            self._send_no_content()
             return
 
         # 群白名单
         if self.bot_cfg.allowed_groups and group_id not in self.bot_cfg.allowed_groups:
-            self._send_json(200, {"ok": True})
+            self._send_no_content()
             return
 
-        # 简单指令：@机器人 或 以特定前缀触发（前缀可按需扩展）
-        # 这里直接对任意文本做应答，实际可加入白名单、命令开关等控制
+        # 仅在被 @ 机器人时响应
+        if not at_me:
+            self._send_no_content()
+            return
 
         # 调用 Agent 生成回复（返回最后聚合文本）
         try:
             # 为流式打印添加前缀标记到服务端日志，QQ 群内仅发送最终汇总
             self.agent.set_token_printer(lambda s: sys.stdout.write(s))
-            answer = self.agent.chat_once_stream(raw_message, thread_id=f"qq-group-{group_id}")
+            answer = self.agent.chat_once_stream(
+                text, thread_id=f"qq-napcat-{group_id}-{self.agent._config.thread_id}"
+            )
             answer = (answer or "").strip()
             if not answer:
                 answer = "（未生成回复）"
@@ -204,23 +324,28 @@ class QQBotHandler(BaseHTTPRequestHandler):
 
         # 发送回群
         try:
-            _send_group_msg(self.bot_cfg.api_base, group_id, answer, self.bot_cfg.access_token)
+            _send_group_msg(
+                self.bot_cfg.api_base, group_id, answer, self.bot_cfg.access_token
+            )
         except Exception as e:
-            # 回应失败也返回 200，避免上游不断重试
-            self._send_json(200, {"ok": False, "error": str(e)})
+            # 回应失败也返回 204，避免 NapCat 将响应体解析为快速操作
+            sys.stderr.write(f"[HTTP] send_group_msg failed: {e}\n")
+            self._send_no_content()
             return
 
         # 正常结束
-        self._send_json(200, {"ok": True})
+        self._send_no_content()
 
 
 def _build_agent_from_env() -> SQLCheckpointAgentStreamingPlus:
-    """从环境变量构建 SQL Agent（保持与主程序一致的约束）。"""
+    """从环境变量构建 SQL Agent（NapCat 适配，保持与主程序一致约束）。"""
     model = os.environ.get("MODEL_NAME", "openai:gpt-4o-mini")
     pg = os.environ.get("LANGGRAPH_PG", "")
-    thread = os.environ.get("THREAD_ID", "qq-demo")
+    thread = os.environ.get("THREAD_ID", "qq-napcat-demo")
     use_memory = os.environ.get("DRY_RUN") == "1" or not bool(pg)
-    cfg = AgentConfig(model_name=model, pg_conn=pg, thread_id=thread, use_memory_ckpt=use_memory)
+    cfg = AgentConfig(
+        model_name=model, pg_conn=pg, thread_id=thread, use_memory_ckpt=use_memory
+    )
     agent = SQLCheckpointAgentStreamingPlus(cfg)
     return agent
 
@@ -239,7 +364,10 @@ def main() -> None:
     QQBotHandler.agent = agent
 
     server = ThreadingHTTPServer((bot_cfg.host, bot_cfg.port), QQBotHandler)
-    print(f"[QQBot] listening http://{bot_cfg.host}:{bot_cfg.port} api={bot_cfg.api_base}")
+    print(
+        f"[QQBot] Listening http://{bot_cfg.host}:{bot_cfg.port} api={bot_cfg.api_base} groups={bot_cfg.allowed_groups or 'ALL'} thread={agent._config.thread_id} model={agent._config.model_name} dry_run={'YES' if agent._config.use_memory_ckpt else 'NO'}"
+    )
+    print("[QQBot] Bot now started, press Ctrl+C to stop.")
     try:
         server.serve_forever(poll_interval=0.5)
     except KeyboardInterrupt:

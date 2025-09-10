@@ -99,6 +99,8 @@ class SQLCheckpointAgentStreamingPlus:
         assert os.path.isfile(abs_path), f"系统提示文件不存在: {abs_path}"
         with open(abs_path, "r", encoding="utf-8") as f:
             content = f.read()
+            print(f"[系统提示] 已加载文件: {abs_path}，长度 {len(content)} 字符。")
+            print("已加载的prompt:", content)
         assert content and content.strip(), "系统提示文件内容为空。"
         return content
 
