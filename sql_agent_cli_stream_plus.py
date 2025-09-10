@@ -27,6 +27,34 @@ from langgraph.graph import START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 
+# ---- 环境校验：仅在首次需要时检查，避免重复消耗 ----
+_ENV_COMMON_CHECKED: bool = False
+_ENV_OPENAI_CHECKED: bool = False
+
+
+def _ensure_common_env_once() -> None:
+    """进程级通用环境校验，仅首次调用时执行。
+
+    校验内容：
+    - 必须已激活虚拟环境（`VIRTUAL_ENV` 或 `sys.prefix` 以 `.venv` 结尾）。
+    """
+    global _ENV_COMMON_CHECKED
+    if _ENV_COMMON_CHECKED:
+        return
+    assert os.environ.get("VIRTUAL_ENV") or sys.prefix.endswith(
+        ".venv"
+    ), "必须先激活虚拟环境 (.venv)。"
+    _ENV_COMMON_CHECKED = True
+
+
+def _ensure_openai_env_once() -> None:
+    """OpenAI 相关环境校验，仅首次需要 OpenAI 时执行。"""
+    global _ENV_OPENAI_CHECKED
+    if _ENV_OPENAI_CHECKED:
+        return
+    assert os.environ.get("OPENAI_API_KEY"), "缺少 OPENAI_API_KEY 环境变量。"
+    _ENV_OPENAI_CHECKED = True
+
 # 说明：严禁在代码中硬编码密钥；请通过环境变量注入：
 
 class State(TypedDict):
@@ -50,10 +78,8 @@ class SQLCheckpointAgentStreamingPlus:
     """多轮工具 + 强化综合 的流式 Agent。"""
 
     def __init__(self, config: AgentConfig) -> None:
-        # 必须使用虚拟环境
-        assert os.environ.get("VIRTUAL_ENV") or sys.prefix.endswith(
-            ".venv"
-        ), "必须先激活虚拟环境 (.venv)。"
+        # 仅首次进行通用环境校验
+        _ensure_common_env_once()
 
         dry_run = os.environ.get("DRY_RUN") == "1"
         self._config = config
@@ -63,7 +89,8 @@ class SQLCheckpointAgentStreamingPlus:
         if not self._config.use_memory_ckpt:
             assert self._config.pg_conn, "必须通过 LANGGRAPH_PG 提供 Postgres 连接串。"
         if self._config.model_name.startswith("openai:"):
-            assert os.environ.get("OPENAI_API_KEY"), "缺少 OPENAI_API_KEY 环境变量。"
+            # 仅首次需要 OpenAI 时做校验
+            _ensure_openai_env_once()
 
         env_tools = os.environ.get("ENABLE_TOOLS")
         if env_tools is None:

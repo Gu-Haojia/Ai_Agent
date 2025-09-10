@@ -244,8 +244,80 @@ class QQBotHandler(BaseHTTPRequestHandler):
     # 共享对象（由主程序注入）
     bot_cfg: BotConfig
     agent: SQLCheckpointAgentStreamingPlus
-    # 群 -> 线程ID 映射，用于 ::clear 后为群对话分配新线程
+    # 群 -> 线程ID 映射，用于 /clear 后为群对话分配新线程
     _group_threads: dict[int, str] = {}
+    _thread_store_file: str = ""
+    _env_consistency_checked: bool = False  # 本次运行仅检查一次
+
+    @classmethod
+    def setup_thread_store(cls, path: str, current_env_tid: str) -> None:
+        """设置并加载群线程映射配置文件；仅首次执行环境一致性检查。
+
+        当发现任何保存的线程ID与当前环境线程前缀不一致时，清空并覆盖保存文件。
+
+        Args:
+            path (str): 配置文件路径
+            current_env_tid (str): 当前环境变量提供的线程前缀（agent._config.thread_id）
+        """
+        cls._thread_store_file = path
+        try:
+            if os.path.isfile(path):
+                # 兼容空文件：当内容为空或仅空白时按空映射处理
+                with open(path, "r", encoding="utf-8") as f:
+                    raw = f.read()
+                data = {} if not (raw and raw.strip()) else json.loads(raw)
+                if isinstance(data, dict):
+                    m: dict[int, str] = {}
+                    for k, v in data.items():
+                        if str(k).isdigit() and isinstance(v, (str, int)):
+                            m[int(k)] = str(v)
+                    # 一致性检查：仅在本次运行的第一次做
+                    if not cls._env_consistency_checked:
+                        def _env_part_from_full(gid: int, tid: str) -> str:
+                            prefix = f"qq-napcat-{gid}-"
+                            if not tid.startswith(prefix):
+                                return ""
+                            tail = tid[len(prefix):]
+                            # 若末段为纯数字（时间戳），则去掉末段
+                            parts = tail.split("-")
+                            if parts and parts[-1].isdigit():
+                                return "-".join(parts[:-1])
+                            return tail
+
+                        mismatch = False
+                        for gid, tid in m.items():
+                            env_part = _env_part_from_full(gid, tid)
+                            if env_part and env_part != current_env_tid:
+                                mismatch = True
+                                break
+                        if mismatch:
+                            cls._group_threads = {}
+                            cls._env_consistency_checked = True
+                            cls.save_thread_store()
+                            print(f"[QQBot] thread store cleared due to env mismatch: {path}")
+                        else:
+                            cls._group_threads = m
+                            cls._env_consistency_checked = True
+                            print(f"[QQBot] loaded group threads from {path}: {len(m)} groups")
+                    else:
+                        cls._group_threads = m
+                        print(f"[QQBot] loaded group threads from {path}: {len(m)} groups (env check skipped)")
+        except Exception as e:
+            sys.stderr.write(f"[QQBot] load group threads failed: {e}\n")
+
+    @classmethod
+    def save_thread_store(cls) -> None:
+        """将 `_group_threads` 字典保存到配置文件（若已设置路径）。"""
+        if not cls._thread_store_file:
+            return
+        try:
+            body = {str(k): str(v) for k, v in cls._group_threads.items()}
+            tmp = cls._thread_store_file + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(body, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, cls._thread_store_file)
+        except Exception as e:
+            sys.stderr.write(f"[QQBot] save group threads failed: {e}\n")
 
     def _send_json(self, code: int, obj: dict) -> None:
         data = json.dumps(obj, ensure_ascii=False).encode("utf-8")
@@ -409,7 +481,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
 
     # ---- 命令与线程工具 ----
     def _thread_id_for(self, group_id: int) -> str:
-        """返回当前群使用的线程 ID，若未设置则采用默认格式。
+        """返回当前群使用的线程 ID；若缺失则创建与 /clear 相同规则的标准线程并保存。
 
         Args:
             group_id (int): 群号
@@ -419,8 +491,10 @@ class QQBotHandler(BaseHTTPRequestHandler):
         """
         if group_id in self._group_threads:
             return self._group_threads[group_id]
-        # 默认：沿用启动时的线程前缀，保证不同群隔离
-        return f"qq-napcat-{group_id}-{self.agent._config.thread_id}"
+        new_tid = f"qq-napcat-{group_id}-{self.agent._config.thread_id}-{int(time.time())}"
+        self._group_threads[group_id] = new_tid
+        QQBotHandler.save_thread_store()
+        return new_tid
 
     def _handle_commands(self, group_id: int, user_id: int, text: str) -> bool:
         """处理内部命令。
@@ -508,6 +582,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
         if cmd == "/clear" and len(parts) == 1:
             new_tid = f"qq-napcat-{group_id}-{self.agent._config.thread_id}-{int(time.time())}"
             self._group_threads[group_id] = new_tid
+            QQBotHandler.save_thread_store()
             msg = f"已为当前群新建线程：{new_tid}"
             _send_group_msg(
                 self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
@@ -567,12 +642,16 @@ def main() -> None:
     bot_cfg = BotConfig.from_env()
     agent = _build_agent_from_env()
 
+    # 启动时加载群线程映射配置（仅保存/加载 _group_threads 字典）
+    thread_store = os.environ.get("THREAD_STORE_FILE", ".qq_group_threads.json")
+    QQBotHandler.setup_thread_store(thread_store, agent._config.thread_id)
+
     QQBotHandler.bot_cfg = bot_cfg
     QQBotHandler.agent = agent
 
     server = ThreadingHTTPServer((bot_cfg.host, bot_cfg.port), QQBotHandler)
     print(
-        f"[QQBot] Listening http://{bot_cfg.host}:{bot_cfg.port} api={bot_cfg.api_base} groups={bot_cfg.allowed_groups or 'ALL'} thread={agent._config.thread_id} model={agent._config.model_name} dry_run={'YES' if agent._config.use_memory_ckpt else 'NO'}"
+        f"[QQBot] Listening http://{bot_cfg.host}:{bot_cfg.port} api={bot_cfg.api_base} groups={bot_cfg.allowed_groups or 'ALL'} thread={agent._config.thread_id} model={agent._config.model_name} dry_run={'YES' if agent._config.use_memory_ckpt else 'NO'} store={thread_store}"
     )
     print("[QQBot] Allowed command users:", bot_cfg.cmd_allowed_users or "ALL")
     print("[QQBot] Bot now started, press Ctrl+C to stop.")
