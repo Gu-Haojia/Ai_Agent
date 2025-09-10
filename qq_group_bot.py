@@ -94,6 +94,7 @@ class BotConfig:
             groups = tuple(int(x) for x in groups_env.split(",") if x.strip().isdigit())
         cfg = BotConfig(host=host, port=port, api_base=api_base, secret=secret, access_token=access_token, allowed_groups=groups)
         # 基础校验
+        print(cfg.api_base)
         assert cfg.api_base, "缺少 ONEBOT_API_BASE（或 GOCQHTTP_API_BASE），例如 http://127.0.0.1:5700"
         return cfg
 
