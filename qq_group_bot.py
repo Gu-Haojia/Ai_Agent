@@ -183,12 +183,35 @@ def _parse_message_and_at(event: dict) -> tuple[str, bool]:
     return (raw, at_me)
 
 
+def _list_prompt_names() -> list[str]:
+    """列出 prompts 目录下的可用提示词名称（不含扩展名）。
+
+    Returns:
+        list[str]: 文件名去掉后缀的列表，按名称排序。
+    """
+    base = os.path.abspath(os.path.join(os.getcwd(), "prompts"))
+    if not os.path.isdir(base):
+        return []
+    names: list[str] = []
+    try:
+        for fn in os.listdir(base):
+            if fn.startswith('.'):
+                continue
+            if fn.lower().endswith('.txt'):
+                names.append(os.path.splitext(fn)[0])
+    except Exception:
+        pass
+    return sorted(set(names))
+
+
 class QQBotHandler(BaseHTTPRequestHandler):
     """处理 NapCat / OneBot HTTP 回调的 Handler。"""
 
     # 共享对象（由主程序注入）
     bot_cfg: BotConfig
     agent: SQLCheckpointAgentStreamingPlus
+    # 群 -> 线程ID 映射，用于 ::clear 后为群对话分配新线程
+    _group_threads: dict[int, str] = {}
 
     def _send_json(self, code: int, obj: dict) -> None:
         data = json.dumps(obj, ensure_ascii=False).encode("utf-8")
@@ -305,12 +328,21 @@ class QQBotHandler(BaseHTTPRequestHandler):
             self._send_no_content()
             return
 
+        # 内部命令：当文本完全命中命令格式时优先处理，并直接在群内回复
+        t = text.strip()
+        if self._handle_commands(group_id, t):
+            self._send_no_content()
+            return
+
         # 调用 Agent 生成回复（返回最后聚合文本）
         try:
+            # 终端打印服务消息
+            print(f"[Chat] Group {group_id} User {user_id}: {text}")
+            print("[Chat] Generating reply...")
             # 为流式打印添加前缀标记到服务端日志，QQ 群内仅发送最终汇总
             self.agent.set_token_printer(lambda s: sys.stdout.write(s))
             answer = self.agent.chat_once_stream(
-                text, thread_id=f"qq-napcat-{group_id}-{self.agent._config.thread_id}"
+                text, thread_id=self._thread_id_for(group_id)
             )
             answer = (answer or "").strip()
             if not answer:
@@ -335,6 +367,90 @@ class QQBotHandler(BaseHTTPRequestHandler):
 
         # 正常结束
         self._send_no_content()
+
+    # ---- 命令与线程工具 ----
+    def _thread_id_for(self, group_id: int) -> str:
+        """返回当前群使用的线程 ID，若未设置则采用默认格式。
+
+        Args:
+            group_id (int): 群号
+
+        Returns:
+            str: 线程ID
+        """
+        if group_id in self._group_threads:
+            return self._group_threads[group_id]
+        # 默认：沿用启动时的线程前缀，保证不同群隔离
+        return f"qq-napcat-{group_id}-{self.agent._config.thread_id}"
+
+    def _handle_commands(self, group_id: int, text: str) -> bool:
+        """处理内部命令。
+
+        仅在被 @ 且文本完全命中时触发：
+        - ::cmd                → 返回命令列表
+        - ::switch             → 列出 prompts 目录下可用文件名（不含后缀）
+        - ::switch <name>      → 切换到 prompts/<name>.txt（设置 SYS_MSG_FILE）并重建 Agent
+        - ::clear              → 为当前群新建线程
+
+        Args:
+            group_id (int): 群号
+            text (str): 纯文本
+
+        Returns:
+            bool: 是否命中并处理了命令
+        """
+        if not text.startswith("::"):
+            return False
+        parts = text.split()
+        cmd = parts[0]
+
+        if cmd == "::cmd" and len(parts) == 1:
+            msg = (
+                "可用命令:\n"
+                "1) ::cmd — 显示命令列表\n"
+                "2) ::switch — 列出可用 prompts\n"
+                "3) ::switch <name> — 切换到 <name> 并重建 Agent\n"
+                "4) ::clear — 为当前群新建对话线程"
+            )
+            _send_group_msg(self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token)
+            return True
+
+        if cmd == "::switch" and len(parts) == 1:
+            names = _list_prompt_names()
+            msg = (
+                ("可用 prompts: \n    " + "\n    ".join(names)) if names else "未找到可用 prompts（请在 prompts/ 放置 .txt 文件）。"
+            )
+            _send_group_msg(self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token)
+            return True
+
+        if cmd == "::switch" and len(parts) == 2:
+            name = parts[1].strip()
+            base = os.path.abspath(os.path.join(os.getcwd(), "prompts"))
+            path = os.path.join(base, f"{name}.txt")
+            if not os.path.isfile(path):
+                msg = f"切换失败：文件不存在 prompts/{name}.txt"
+                _send_group_msg(self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token)
+                return True
+            os.environ["SYS_MSG_FILE"] = path
+            try:
+                new_agent = _build_agent_from_env()
+                QQBotHandler.agent = new_agent
+                msg = f"已切换到 {name} 并重建 Agent。"
+            except AssertionError as e:
+                msg = f"切换失败：{e}"
+            except Exception as e:
+                msg = f"切换失败（内部错误）：{e}"
+            _send_group_msg(self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token)
+            return True
+
+        if cmd == "::clear" and len(parts) == 1:
+            new_tid = f"qq-napcat-{group_id}-{self.agent._config.thread_id}-{int(time.time())}"
+            self._group_threads[group_id] = new_tid
+            msg = f"已为当前群新建线程：{new_tid}"
+            _send_group_msg(self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token)
+            return True
+
+        return False
 
 
 def _build_agent_from_env() -> SQLCheckpointAgentStreamingPlus:
