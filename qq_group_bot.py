@@ -195,9 +195,9 @@ def _list_prompt_names() -> list[str]:
     names: list[str] = []
     try:
         for fn in os.listdir(base):
-            if fn.startswith('.'):
+            if fn.startswith("."):
                 continue
-            if fn.lower().endswith('.txt'):
+            if fn.lower().endswith(".txt"):
                 names.append(os.path.splitext(fn)[0])
     except Exception:
         pass
@@ -391,6 +391,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
         - ::switch             → 列出 prompts 目录下可用文件名（不含后缀）
         - ::switch <name>      → 切换到 prompts/<name>.txt（设置 SYS_MSG_FILE）并重建 Agent
         - ::clear              → 为当前群新建线程
+        - ::whoami             → 先回当前系统提示词，再基于“你是谁”生成一条消息
 
         Args:
             group_id (int): 群号
@@ -399,55 +400,94 @@ class QQBotHandler(BaseHTTPRequestHandler):
         Returns:
             bool: 是否命中并处理了命令
         """
-        if not text.startswith("::"):
+        if not text.startswith("/"):
             return False
         parts = text.split()
         cmd = parts[0]
 
-        if cmd == "::cmd" and len(parts) == 1:
+        if cmd == "/cmd" and len(parts) == 1:
             msg = (
                 "可用命令:\n"
-                "1) ::cmd — 显示命令列表\n"
-                "2) ::switch — 列出可用 prompts\n"
-                "3) ::switch <name> — 切换到 <name> 并重建 Agent\n"
-                "4) ::clear — 为当前群新建对话线程"
+                "1) /cmd — 显示命令列表\n"
+                "2) /switch — 列出可用 prompts\n"
+                "3) /switch <name> — 切换到 <name> 并重建 Agent\n"
+                "4) /clear — 为当前群新建对话线程\n"
+                "5) /whoami — 你是？"
             )
-            _send_group_msg(self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token)
+            _send_group_msg(
+                self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
+            )
             return True
 
-        if cmd == "::switch" and len(parts) == 1:
+        if cmd == "/switch" and len(parts) == 1:
             names = _list_prompt_names()
             msg = (
-                ("可用 prompts: \n    " + "\n    ".join(names)) if names else "未找到可用 prompts（请在 prompts/ 放置 .txt 文件）。"
+                ("可用 prompts: \n    " + "\n    ".join(names))
+                if names
+                else "未找到可用 prompts（请在 prompts/ 放置 .txt 文件）。"
             )
-            _send_group_msg(self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token)
+            _send_group_msg(
+                self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
+            )
             return True
 
-        if cmd == "::switch" and len(parts) == 2:
+        if cmd == "/switch" and len(parts) == 2:
             name = parts[1].strip()
             base = os.path.abspath(os.path.join(os.getcwd(), "prompts"))
             path = os.path.join(base, f"{name}.txt")
             if not os.path.isfile(path):
                 msg = f"切换失败：文件不存在 prompts/{name}.txt"
-                _send_group_msg(self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token)
+                _send_group_msg(
+                    self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
+                )
                 return True
             os.environ["SYS_MSG_FILE"] = path
             try:
                 new_agent = _build_agent_from_env()
                 QQBotHandler.agent = new_agent
-                msg = f"已切换到 {name} 并重建 Agent。"
+                msg = f"已切换到 {name} 并重建 Agent。需要清除记忆请使用/clear 命令。"
             except AssertionError as e:
                 msg = f"切换失败：{e}"
             except Exception as e:
                 msg = f"切换失败（内部错误）：{e}"
-            _send_group_msg(self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token)
+            _send_group_msg(
+                self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
+            )
             return True
 
-        if cmd == "::clear" and len(parts) == 1:
+        if cmd == "/clear" and len(parts) == 1:
             new_tid = f"qq-napcat-{group_id}-{self.agent._config.thread_id}-{int(time.time())}"
             self._group_threads[group_id] = new_tid
             msg = f"已为当前群新建线程：{new_tid}"
-            _send_group_msg(self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token)
+            _send_group_msg(
+                self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
+            )
+            return True
+
+        if cmd == "/whoami" and len(parts) == 1:
+            # 1) 读取当前系统提示文件名（不泄露全文）
+            prompt_file = os.environ.get("SYS_MSG_FILE") or ""
+            prompt_name = (
+                os.path.splitext(os.path.basename(prompt_file))[0]
+                if prompt_file
+                else "未配置"
+            )
+
+            # 2) 基于“你是谁”生成一条消息
+            try:
+                self.agent.set_token_printer(lambda s: sys.stdout.write(s))
+                answer = self.agent.chat_once_stream(
+                    "你是谁", thread_id=self._thread_id_for(group_id)
+                )
+                answer = (answer or "").strip() or "（未生成回复）"
+            except Exception as e:
+                answer = f"（生成失败）{e}"
+
+            # 3) 合并为一条群消息发送
+            combined = f"当前Prompt：{prompt_name}\n{answer}"
+            _send_group_msg(
+                self.bot_cfg.api_base, group_id, combined, self.bot_cfg.access_token
+            )
             return True
 
         return False
