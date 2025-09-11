@@ -69,49 +69,24 @@ from langchain.memory import ConversationSummaryMemory
 from langchain_openai import ChatOpenAI
 
 
-# ---- 更简洁的消息合并器：使用 ConversationSummaryMemory（惰性初始化） ----
-_summary_mem: ConversationSummaryMemory | None = None
-
-
-def _get_summary_mem() -> ConversationSummaryMemory:
-    """惰性创建用于摘要的记忆体，避免在无 OPENAI_API_KEY 时提前报错。
-
-    Returns:
-        ConversationSummaryMemory: 已初始化的摘要记忆体。
-
-    Raises:
-        AssertionError: 缺少 OPENAI_API_KEY。
-    """
-    global _summary_mem
-    if _summary_mem is None:
-        _ensure_openai_env_once()
-        model = os.environ.get("SUMMARY_MODEL", "gpt-3.5-turbo")
-        llm = ChatOpenAI(model=model, temperature=0)
-        _summary_mem = ConversationSummaryMemory(llm=llm)
-    return _summary_mem
+# ---- 更简洁的消息合并器：使用 ConversationSummaryMemory ----
+_llm_for_summary = ChatOpenAI(
+    model=os.environ.get("SUMMARY_MODEL", "gpt-3.5-turbo"), temperature=0
+)
+_summary_mem = ConversationSummaryMemory(llm=_llm_for_summary)
 
 
 def _role_of(m: object) -> str:
-    """归一化获取角色：human/user/ai/assistant/system/tool/unknown。"""
-    if isinstance(m, BaseMessage):
-        # BaseMessage 子类在 .type 中
-        try:
-            t = getattr(m, "type", "")
-            return str(t or "").lower()
-        except Exception:
-            pass
-    # 兼容 dict 与通用对象
-    role = getattr(m, "role", None)
-    if role is None and isinstance(m, dict):
-        role = m.get("role")
-    t = getattr(m, "type", None)
-    if t is None and isinstance(m, dict):
-        t = m.get("type")
-    r = (role or t or "").lower()
-    # tool-like 统一映射
-    if "tool" in r:
-        return "tool"
-    return r or "unknown"
+    """尽量通用地得到消息角色：human/user/ai/assistant/system/tool/unknown。"""
+    r = str(getattr(m, "type", "") or "").lower()
+    if not r:
+        role = getattr(m, "role", None)
+        if role is None and isinstance(m, dict):
+            role = m.get("role")
+        r = str(role or "").lower()
+    if not r and isinstance(m, dict):
+        r = str(m.get("type") or "").lower()
+    return "tool" if "tool" in r else (r or "unknown")
 
 
 def _is_human_like(m: object) -> bool:
@@ -129,26 +104,6 @@ def _is_system_like(m: object) -> bool:
     return isinstance(m, SystemMessage) or r == "system"
 
 
-def _to_base_message(m: object) -> BaseMessage:
-    """将任意消息对象转换为 BaseMessage（用于摘要输入）。"""
-    if isinstance(m, BaseMessage):
-        return m
-    # 提取文本
-    content = getattr(m, "content", None)
-    if content is None and isinstance(m, dict):
-        content = m.get("content")
-    text = content if isinstance(content, str) else str(content)
-    r = _role_of(m)
-    if r in {"human", "user"}:
-        return HumanMessage(content=text)
-    if r in {"ai", "assistant"}:
-        return AIMessage(content=text)
-    if r == "system":
-        return SystemMessage(content=text)
-    # 其他（工具等）统一转为 system，保留提示前缀
-    return SystemMessage(content=f"[Tool] {text}")
-
-
 def smart_reducer(prev: List[BaseMessage], new: List[BaseMessage]) -> List[BaseMessage]:
     """追加消息时的“清理 + 摘要折叠”逻辑（以 HumanMessage 计轮）。
 
@@ -164,21 +119,21 @@ def smart_reducer(prev: List[BaseMessage], new: List[BaseMessage]) -> List[BaseM
     all_msgs: List[BaseMessage] = (prev or []) + (new or [])
     print(f"[Debug] Total messages before reduction: {len(all_msgs)}", flush=True)
 
-    # 找出所有 Human 的索引（定义轮次），需兼容 dict/通用对象
+    # 找出所有 Human 的索引（定义轮次），兼容 dict/通用对象
     human_indices = [i for i, m in enumerate(all_msgs) if _is_human_like(m)]
     print(f"[Debug] Human indices: {human_indices}", flush=True)
     rounds = len(human_indices)
-    
+    print(f"[Debug] all_msgs: {all_msgs}", flush=True)
 
     # 没有 Human，直接返回
     if rounds == 0:
         return all_msgs
 
-    # ---- 删除 5 轮之前的「非 Human/AI/System(摘要)」消息 ----
-    if rounds > 5:
+    # ---- 删除 3 轮之前的「非 Human/AI/System(摘要)」消息 ----
+    if rounds > 3:
         cutoff_human_idx = human_indices[
-            -5
-        ]  # 最近第 5 个 Human 的索引（最近 5 轮起点）
+            -3
+        ]  # 最近第 3 个 Human 的索引（最近 3 轮起点）
         keep: List[BaseMessage] = []
         for i, m in enumerate(all_msgs):
             if _is_human_like(m) or _is_ai_like(m) or _is_system_like(m):
@@ -195,19 +150,17 @@ def smart_reducer(prev: List[BaseMessage], new: List[BaseMessage]) -> List[BaseM
 
     # ---- 超过 10 轮时做摘要 ----
     if rounds > 10:
-        cutoff_human_idx = human_indices[-5]  # 最近 5 轮的起点（包含该 Human）
+        cutoff_human_idx = human_indices[-3]  # 最近 3 轮的起点（包含该 Human）
         early = all_msgs[:cutoff_human_idx]
         recent = all_msgs[cutoff_human_idx:]
 
         # 生成摘要（基于 ConversationSummaryMemory）
-        mem = _get_summary_mem()
-        mem.chat_memory.clear()
-        conv_early = [_to_base_message(m) for m in early]
-        for bm in conv_early:
-            mem.chat_memory.add_message(bm)
-        summary_text = mem.predict_new_summary(
+        _summary_mem.chat_memory.clear()
+        for m in early:
+            _summary_mem.chat_memory.add_message(m)
+        summary_text = _summary_mem.predict_new_summary(
             "你是一个资深对话整理助手。请将以下历史对话凝练为简洁摘要，保留：用户核心意图、已给出的结论、关键事实、已承诺的后续事项。避免无关细节与冗余。若已有摘要，则在其基础上更新。",
-            conv_early,
+            early,
         )
         summary_msg = SystemMessage(
             content=f"[Summary of earlier conversation]\n{summary_text}"
