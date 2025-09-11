@@ -58,10 +58,28 @@ def _ensure_openai_env_once() -> None:
 # 说明：严禁在代码中硬编码密钥；请通过环境变量注入：
 
 
+def _cap20_messages(prev: list | None, new: list | object) -> list:
+    """消息合并器：仅保持最近 20 条。
+
+    Args:
+        prev (list|None): 既有消息列表
+        new (list|object): 新增消息（单条或列表）
+
+    Returns:
+        list: 合并后截断到最后 20 条的消息列表
+    """
+    prev_list = list(prev or [])
+    if isinstance(new, list):
+        combined = prev_list + new
+    else:
+        combined = prev_list + [new]
+    return combined[-20:]
+
+
 class State(TypedDict):
     """Agent 的图状态。"""
 
-    messages: Annotated[list, add_messages]
+    messages: Annotated[list, _cap20_messages]
 
 
 @dataclass
