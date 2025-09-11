@@ -121,6 +121,7 @@ def smart_reducer(prev: List[BaseMessage], new: List[BaseMessage]) -> List[BaseM
     prev_b: List[BaseMessage] = [_to_base_message(x) for x in (prev or [])]
     new_b: List[BaseMessage] = [_to_base_message(x) for x in (new or [])]
     all_msgs: List[BaseMessage] = prev_b + new_b
+    print(f"[Reducer] 原始消息为{all_msgs}，共 {len(all_msgs)} 条。")
 
     # 找出所有 Human 的索引（定义轮次）
     human_indices = [i for i, m in enumerate(all_msgs) if isinstance(m, HumanMessage)]
@@ -154,8 +155,8 @@ def smart_reducer(prev: List[BaseMessage], new: List[BaseMessage]) -> List[BaseM
         for m in early:
             _summary_mem.chat_memory.add_message(m)
         summary_text = _summary_mem.predict_new_summary(
-            "你是一个资深对话整理助手。请将以下历史对话凝练为简洁摘要，保留：用户核心意图、已给出的结论、关键事实、已承诺的后续事项。避免无关细节与冗余。若已有摘要，则在其基础上更新。",
             early,
+            "",
         )
         summary_msg = SystemMessage(
             content=f"[Summary of earlier conversation]\n{summary_text}"
