@@ -36,3 +36,4 @@ local_backup/
 # Prompts (ignored)
 prompt/
 prompts/
+AGENTS.md
