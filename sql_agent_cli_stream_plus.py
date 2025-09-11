@@ -58,10 +58,194 @@ def _ensure_openai_env_once() -> None:
 # 说明：严禁在代码中硬编码密钥；请通过环境变量注入：
 
 
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+)
+
+
+# ------------------------- 自定义消息合并与整理 -------------------------
+def _msg_type(m: object) -> str:
+    """返回消息类型标识。
+
+    仅依赖 `type` 或 `role` 属性，保证对普通 dict 也兼容。
+    """
+    return getattr(m, "type", "") or getattr(m, "role", "") or ""
+
+
+def _is_ai(m: object) -> bool:
+    t = _msg_type(m).lower()
+    return t in {"ai", "assistant"}
+
+
+def _is_human(m: object) -> bool:
+    t = _msg_type(m).lower()
+    return t in {"human", "user"}
+
+
+def _is_toolish(m: object) -> bool:
+    return "tool" in _msg_type(m).lower()
+
+
+def _is_summary_msg(m: object) -> bool:
+    """判断是否为我们创建的摘要 SystemMessage。
+
+    通过 SystemMessage 且 name == 'conversation_summary' 识别。
+    """
+    return isinstance(m, SystemMessage) and getattr(m, "name", None) == "conversation_summary"
+
+
+def _assign_round_indices(messages: list[object]) -> tuple[list[tuple[object, int]], int]:
+    """为消息分配“轮次索引”。
+
+    规则：从头到尾扫描，遇到 AIMessage 认为完成一轮；
+    在第 r 轮完成前（含该轮 AI），所有消息都标记为 r。
+
+    Returns:
+        (list, int): 每条消息与其所属轮次，总轮次数。
+    """
+    round_idx = 1
+    tagged: list[tuple[object, int]] = []
+    for m in messages:
+        tagged.append((m, round_idx))
+        if _is_ai(m):
+            round_idx += 1
+    total_rounds = round_idx - 1
+    return tagged, total_rounds
+
+
+def _to_base_messages(msgs: list[object]) -> list[BaseMessage]:
+    """将可能混合的消息对象（含 dict）转为 LangChain BaseMessage 列表。
+
+    仅保留可序列化内容；未知结构将转为 SystemMessage 文本描述。
+    """
+    out: list[BaseMessage] = []
+    for m in msgs:
+        if isinstance(m, BaseMessage):
+            out.append(m)
+            continue
+        role = (_msg_type(m) or "").lower()
+        content = getattr(m, "content", None)
+        if content is None and isinstance(m, dict):
+            content = m.get("content")
+        text = content if isinstance(content, str) else str(content)
+        if role in {"human", "user"}:
+            out.append(HumanMessage(content=text))
+        elif role in {"ai", "assistant"}:
+            out.append(AIMessage(content=text))
+        elif "tool" in role:
+            out.append(SystemMessage(content=f"[Tool] {text}"))
+        else:
+            out.append(SystemMessage(content=text))
+    return out
+
+
+def _summarize_earlier(earlier: list[object], existing_summary: str = "") -> str:
+    """对“较早轮次”的消息进行中文摘要。
+
+    使用环境变量 `SUMMARY_MODEL` 指定模型（默认 `openai:gpt-4o-mini`）。
+    需要 OPENAI_API_KEY 存在。
+    """
+    # 仅在需要时进行一次 OpenAI 环境校验
+    _ensure_openai_env_once()
+    model_name = os.environ.get("SUMMARY_MODEL", "openai:gpt-4o-mini")
+    llm = init_chat_model(model_name)
+    msgs = [
+        SystemMessage(
+            content=(
+                "你是一个资深对话整理助手。请将以下历史对话凝练为" \
+                "简洁的中文摘要，保留：用户核心意图、已给出的结论、关键事实、已承诺的后续事项。" \
+                "避免无关细节与冗余。若已有摘要，则在其基础上增量更新。"
+            )
+        )
+    ]
+    if existing_summary and isinstance(existing_summary, str):
+        msgs.append(SystemMessage(content=f"现有摘要：{existing_summary}"))
+    # 附上对话正文（转为基础消息）
+    msgs.extend(_to_base_messages(earlier))
+    res = llm.invoke(msgs)
+    text = getattr(res, "content", "")
+    assert isinstance(text, str) and text.strip(), "摘要生成失败：模型未返回文本内容。"
+    return text.strip()
+
+
+def update_messages_with_summary(prev: list | None, new: list | object) -> list:
+    """自定义 reducer：在追加消息的同时执行清理与摘要折叠。
+
+    触发时机：
+    - 每次字段 `messages` 被更新时调用；
+    - 仅当本次追加包含 AI 回复时，才进行“清理/摘要”逻辑；
+    - 普通（非 AI）追加按原样拼接。
+
+    规则：
+    - 轮次定义：一轮 = 一个 AIMessage；
+    - 追加 AI 回复时：保留所有 HumanMessage、AIMessage、摘要；
+      删除超过 3 轮之前的“中间消息”（如工具调用/返回等非 human/ai/摘要消息）；
+    - 当轮数 > 10：触发一次整理，将“前面的消息”折叠成摘要，
+      仅保留该摘要 + 最近 3 轮的所有消息（包括工具调用/返回）。
+
+    Args:
+        prev (list|None): 既有消息列表。
+        new (list|object): 新增的消息或消息列表。
+
+    Returns:
+        list: 处理后的新消息列表。
+    """
+    existed = list(prev or [])
+    appended = list(new if isinstance(new, list) else [new])
+    # 基础追加
+    combined = existed + appended
+
+    # 若本次未追加 AI，则直接返回“追加结果”。
+    if not any(_is_ai(m) for m in appended):
+        return combined
+
+    # 统计轮次并为每条消息标注所属轮次
+    tagged, total_rounds = _assign_round_indices(combined)
+
+    # 查找现有摘要（若有，取最后一个）
+    existing_summary = ""
+    for m in reversed(combined):
+        if _is_summary_msg(m):
+            existing_summary = getattr(m, "content", "") or ""
+            break
+
+    # 10 轮以内：仅清理“非 human/ai/摘要”的旧中间消息（保留最近 3 轮）
+    if total_rounds <= 10:
+        keep: list[object] = []
+        min_round = max(1, total_rounds - 3 + 1)  # 最近3轮的起始轮
+        for m, r in tagged:
+            if _is_human(m) or _is_ai(m) or _is_summary_msg(m):
+                keep.append(m)
+            else:
+                # 中间消息：仅保留最近3轮
+                if r >= min_round:
+                    keep.append(m)
+        return keep
+
+    # 超过 10 轮：将“前面的消息”折叠为摘要，仅保留摘要 + 最近3轮所有消息
+    cutoff = total_rounds - 3
+    earlier: list[object] = []
+    recent: list[object] = []
+    for m, r in tagged:
+        if r <= cutoff and not _is_summary_msg(m):
+            earlier.append(m)
+        elif r > cutoff:
+            recent.append(m)
+        # 旧摘要不带入（会用新摘要替换）
+
+    # 生成（或增量更新）摘要
+    summary_text = _summarize_earlier(earlier, existing_summary=existing_summary)
+    summary_msg = SystemMessage(content=summary_text, name="conversation_summary")
+    return [summary_msg] + recent
+
+
 class State(TypedDict):
     """Agent 的图状态。"""
 
-    messages: Annotated[list, add_messages]
+    messages: Annotated[list, update_messages_with_summary]
 
 
 @dataclass
@@ -186,6 +370,58 @@ class SQLCheckpointAgentStreamingPlus:
                 )
 
                 tools.append(repl_tool)
+
+                @tool
+                def datetime_now(tz: str = "local") -> str:
+                    """
+                    获取当前时间、日期与星期信息。
+
+                    Args:
+                        tz (str): 时区名称，例如 "Asia/Shanghai"、"UTC"。传入 "local" 使用系统本地时区，默认 "local"。
+
+                    Returns:
+                        str: 形如 "2025-01-01 08:30:05 | Wednesday/周三 | TZ: CST (UTC+08:00)" 的字符串。
+
+                    Raises:
+                        ValueError: 当提供的时区无效时抛出。
+                    """
+                    from datetime import datetime
+                    # 延迟导入，避免在不使用该工具时增加依赖
+                    tz_norm = (tz or "local").strip().lower()
+                    if tz_norm in {"local", "system"}:
+                        dt = datetime.now().astimezone()
+                    else:
+                        try:
+                            from zoneinfo import ZoneInfo  # Python 3.9+
+                        except Exception as e:  # pragma: no cover
+                            raise ValueError("当前运行环境不支持标准库 zoneinfo") from e
+                        try:
+                            dt = datetime.now(ZoneInfo(tz))
+                        except Exception as e:
+                            raise ValueError(f"无效时区: {tz}") from e
+
+                    date_part = dt.strftime("%Y-%m-%d")
+                    time_part = dt.strftime("%H:%M:%S")
+                    weekday_en = dt.strftime("%A")
+                    weekday_map = {
+                        "Monday": "周一",
+                        "Tuesday": "周二",
+                        "Wednesday": "周三",
+                        "Thursday": "周四",
+                        "Friday": "周五",
+                        "Saturday": "周六",
+                        "Sunday": "周日",
+                    }
+                    weekday_zh = weekday_map.get(weekday_en, "")
+                    tzname = dt.tzname() or ""
+                    offset = dt.strftime("%z")  # +0800
+                    if offset and len(offset) == 5:
+                        offset_fmt = offset[:3] + ":" + offset[3:]
+                    else:
+                        offset_fmt = offset
+                    return f"{date_part} {time_part} | {weekday_en}/{weekday_zh} | TZ: {tzname} (UTC{offset_fmt})"
+
+                tools.append(datetime_now)
 
                 if os.environ.get("SERPAPI_API_KEY") and False:
                     from langchain_community.tools.google_finance import (
