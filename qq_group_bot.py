@@ -538,7 +538,8 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 "2) /switch — 列出可用 prompts\n"
                 "3) /switch <name> — 切换到 <name> 并重建 Agent\n"
                 "4) /clear — 为当前群新建对话线程\n"
-                "5) /whoami — 你是？"
+                "5) /whoami — 你是？\n"
+                "6) /token — 输出当前 messages 的 token 数"
             )
             _send_group_msg(
                 self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
@@ -616,7 +617,22 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 self.bot_cfg.api_base, group_id, combined, self.bot_cfg.access_token
             )
             return True
-
+        
+        if cmd == "/token" and len(parts) == 1:
+            # 统计当前群对应线程的消息 token 数
+            try:
+                tid = self._thread_id_for(group_id)
+                tok, cnt = self.agent.count_tokens(thread_id=tid)
+                msg = f"当前线程消息条数={cnt}，估算 tokens={tok} (cl100k_base)"
+            except AssertionError as e:
+                msg = f"统计失败：{e}"
+            except Exception as e:
+                msg = f"统计失败（内部错误）：{e}"
+            _send_group_msg(
+                self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
+            )
+            return True
+        
         return False
 
 
