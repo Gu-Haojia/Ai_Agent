@@ -534,10 +534,14 @@ class SQLCheckpointAgentStreamingPlus:
         """
         cfg = {"configurable": {"thread_id": thread_id or self._config.thread_id}}
         states = list(self._graph.get_state_history(cfg))
+       #print(f"[Debug] Retrieved {len(states)} states for thread '{cfg['configurable']['thread_id']}'",flush=True)
+        #print(f"[Debug] states: {states}",flush=True)
         if not states:
             return []
-        last = states[-1]
+        last = states[0]
+        #print(f"[Debug] Latest {last}",flush=True)
         msgs: list = list(last.values.get("messages", []))
+        #print(f"[Debug] Latest state has {len(msgs)} messages",flush=True)
         return msgs
 
     def count_tokens(self, thread_id: Optional[str] = None) -> tuple[int, int]:

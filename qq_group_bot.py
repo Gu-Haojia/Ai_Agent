@@ -617,7 +617,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 self.bot_cfg.api_base, group_id, combined, self.bot_cfg.access_token
             )
             return True
-
+        
         if cmd == "/token" and len(parts) == 1:
             # 统计当前群对应线程的消息 token 数
             try:
@@ -632,7 +632,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
             )
             return True
-
+        
         return False
 
 
