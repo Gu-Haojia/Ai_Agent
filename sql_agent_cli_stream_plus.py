@@ -63,6 +63,7 @@ from langchain_core.messages import (
     BaseMessage,
     HumanMessage,
     SystemMessage,
+    AIMessageChunk,
 )
 from typing import List
 from langchain.memory import ConversationSummaryMemory
@@ -76,32 +77,36 @@ _llm_for_summary = ChatOpenAI(
 _summary_mem = ConversationSummaryMemory(llm=_llm_for_summary)
 
 
-def _role_of(m: object) -> str:
-    """尽量通用地得到消息角色：human/user/ai/assistant/system/tool/unknown。"""
-    r = str(getattr(m, "type", "") or "").lower()
-    if not r:
-        role = getattr(m, "role", None)
-        if role is None and isinstance(m, dict):
-            role = m.get("role")
-        r = str(role or "").lower()
-    if not r and isinstance(m, dict):
-        r = str(m.get("type") or "").lower()
-    return "tool" if "tool" in r else (r or "unknown")
+def _to_base_message(m: object) -> BaseMessage:
+    """将可能混合的消息对象（dict/Chunk/BaseMessage）规范为 BaseMessage。
 
-
-def _is_human_like(m: object) -> bool:
-    r = _role_of(m)
-    return isinstance(m, HumanMessage) or r in {"human", "user"}
-
-
-def _is_ai_like(m: object) -> bool:
-    r = _role_of(m)
-    return isinstance(m, AIMessage) or r in {"ai", "assistant"}
-
-
-def _is_system_like(m: object) -> bool:
-    r = _role_of(m)
-    return isinstance(m, SystemMessage) or r == "system"
+    - dict: 根据 role/type 转为 Human/AI/System；
+    - AIMessageChunk: 转换为 AIMessage 并保留元数据；
+    - 其他：转为 SystemMessage。
+    """
+    if isinstance(m, BaseMessage) and not isinstance(m, AIMessageChunk):
+        return m
+    if isinstance(m, AIMessageChunk):
+        return AIMessage(
+            content=m.content,
+            additional_kwargs=getattr(m, "additional_kwargs", {}) or {},
+            response_metadata=getattr(m, "response_metadata", {}) or {},
+        )
+    # 提取文本与角色
+    content = getattr(m, "content", None)
+    if content is None and isinstance(m, dict):
+        content = m.get("content")
+    text = content if isinstance(content, str) else str(content)
+    role = (getattr(m, "role", None) or (m.get("role") if isinstance(m, dict) else "") or "").lower()
+    typ = (getattr(m, "type", None) or (m.get("type") if isinstance(m, dict) else "") or "").lower()
+    tag = role or typ
+    if tag in {"human", "user"}:
+        return HumanMessage(content=text)
+    if tag in {"ai", "assistant"}:
+        addk = (m.get("additional_kwargs") if isinstance(m, dict) else getattr(m, "additional_kwargs", None)) or {}
+        meta = (m.get("response_metadata") if isinstance(m, dict) else getattr(m, "response_metadata", None)) or {}
+        return AIMessage(content=text, additional_kwargs=addk, response_metadata=meta)
+    return SystemMessage(content=text if text is not None else "")
 
 
 def smart_reducer(prev: List[BaseMessage], new: List[BaseMessage]) -> List[BaseMessage]:
@@ -112,18 +117,14 @@ def smart_reducer(prev: List[BaseMessage], new: List[BaseMessage]) -> List[BaseM
     - 当轮数 > 5：删除 5 轮之前的其他中间消息（如工具调用/返回），但保留所有 Human/AI/System。
     - 当轮数 > 10：将前面的消息折叠为摘要，仅保留“摘要 + 最近 5 轮的所有消息（包括工具）”。
     """
-    print(
-        f"[Debug] smart_reducer called: prev {len(prev) if prev else 0}, new {len(new) if new else 0}",
-        flush=True,
-    )
-    all_msgs: List[BaseMessage] = (prev or []) + (new or [])
-    print(f"[Debug] Total messages before reduction: {len(all_msgs)}", flush=True)
+    # 统一规范化，避免 dict/Chunk 影响类型判断
+    prev_b: List[BaseMessage] = [_to_base_message(x) for x in (prev or [])]
+    new_b: List[BaseMessage] = [_to_base_message(x) for x in (new or [])]
+    all_msgs: List[BaseMessage] = prev_b + new_b
 
-    # 找出所有 Human 的索引（定义轮次），兼容 dict/通用对象
-    human_indices = [i for i, m in enumerate(all_msgs) if _is_human_like(m)]
-    print(f"[Debug] Human indices: {human_indices}", flush=True)
+    # 找出所有 Human 的索引（定义轮次）
+    human_indices = [i for i, m in enumerate(all_msgs) if isinstance(m, HumanMessage)]
     rounds = len(human_indices)
-    print(f"[Debug] all_msgs: {all_msgs}", flush=True)
 
     # 没有 Human，直接返回
     if rounds == 0:
@@ -131,21 +132,15 @@ def smart_reducer(prev: List[BaseMessage], new: List[BaseMessage]) -> List[BaseM
 
     # ---- 删除 3 轮之前的「非 Human/AI/System(摘要)」消息 ----
     if rounds > 3:
-        cutoff_human_idx = human_indices[
-            -3
-        ]  # 最近第 3 个 Human 的索引（最近 3 轮起点）
+        cutoff_human_idx = human_indices[-3]  # 最近第 3 个 Human 的索引（最近 3 轮起点）
         keep: List[BaseMessage] = []
         for i, m in enumerate(all_msgs):
-            if _is_human_like(m) or _is_ai_like(m) or _is_system_like(m):
+            if isinstance(m, (HumanMessage, AIMessage, SystemMessage)):
                 keep.append(m)
             else:
                 # 工具类消息：只保留最近 3 轮内的
                 if i >= cutoff_human_idx:
                     keep.append(m)
-        print(
-            f"[Info] 历史消息已清理，当前轮次 {rounds}，剩余消息 {len(keep)} 条。",
-            flush=True,
-        )
         all_msgs = keep
 
     # ---- 超过 10 轮时做摘要 ----
@@ -167,8 +162,6 @@ def smart_reducer(prev: List[BaseMessage], new: List[BaseMessage]) -> List[BaseM
         )
 
         all_msgs = [summary_msg] + recent
-        print(f"[Info] 历史消息已折叠为摘要，剩余消息 {len(all_msgs)} 条。", flush=True)
-    print(f"[Debug] 当前消息轮次 {rounds}，总消息数 {len(all_msgs)} 条。", flush=True)
     return all_msgs
 
 
