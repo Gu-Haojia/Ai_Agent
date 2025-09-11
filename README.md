@@ -139,4 +139,54 @@ brew services stop postgresql
 export SYS_MSG_FILE=$(pwd)/prompts/default.txt
 ```
 
+## QQ 群机器人（NapCat / OneBot v11）
+
+文件：`qq_group_bot.py`
+
+特点与行为：
+- 仅在被 @ 机器人时才响应群消息（防刷屏）；
+- 解析 NapCat Array 段落格式，精准识别 @；
+- 通过 OneBot HTTP API 发送群消息；
+- 支持健康检查 `GET /healthz`；
+- 对每个群维持独立会话线程（/clear 可重置）。
+
+拓扑建议（Docker 下 NapCat）：
+- 机器人 HTTP 回调监听在宿主 `http://0.0.0.0:8080`（可配）；
+- NapCat 容器回调到机器人：`http://host.docker.internal:8080`；
+- 机器人请求 NapCat HTTP API：`http://127.0.0.1:3000`（或你的 NapCat API 地址）。
+
+必需/可选环境变量：
+- `BOT_HOST`（默认 `0.0.0.0`）：机器人监听地址；
+- `BOT_PORT`（默认 `8080`）：机器人监听端口；
+- `ONEBOT_API_BASE`（默认 `http://127.0.0.1:3000`）：NapCat HTTP API Base；
+- `ONEBOT_SECRET`（可选）：OneBot 回调签名密钥（HMAC-SHA1）；
+- `ONEBOT_ACCESS_TOKEN`（可选）：NapCat HTTP API Token；
+- `ALLOWED_GROUPS`（可选）：允许响应的群ID，逗号分隔；为空表示不限制；
+- `CMD_ALLOWED_USERS`（可选）：命令白名单QQ号，逗号分隔；为空表示所有人可执行命令；
+- `THREAD_STORE_FILE`（可选，默认 `.qq_group_threads.json`）：群→线程ID 映射存储文件；
+- `SYS_MSG_FILE`：指向 `prompts/*.txt`（系统提示词）；
+- `MODEL_NAME`、`LANGGRAPH_PG`、`THREAD_ID`、`DRY_RUN`、`ENABLE_TOOLS`：透传给 SQL Agent，含义同上文。
+
+运行：
+```bash
+python qq_group_bot.py
+```
+
+健康检查：
+```bash
+curl -s http://127.0.0.1:8080/healthz
+```
+
+群内命令（需 @ 机器人）：
+- `/cmd`：显示命令列表
+- `/switch`：列出可用 `prompts/*.txt`
+- `/switch <name>`：切换到 `prompts/<name>.txt` 并重建 Agent
+- `/clear` 或 “让我忘记一切吧”：为当前群新建线程
+- `/whoami`：回当前 Prompt 名称并生成“你是谁”回答
+
+注意与安全：
+- 必须在虚拟环境中运行；严禁硬编码密钥；
+- 建议使用 `ALLOWED_GROUPS` 与 `CMD_ALLOWED_USERS` 控制可用群与命令权限；
+- 首次启动会读取/创建 `THREAD_STORE_FILE`，存储“群→线程ID”，用于跨重启保持会话。
+
 ---
