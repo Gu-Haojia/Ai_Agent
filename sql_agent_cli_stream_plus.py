@@ -72,6 +72,7 @@ def _cap20_messages(prev: list | None, new: list | object) -> list:
         list: 合并后保留最后 20 条的消息列表。
     """
     combined = add_messages(prev or [], new)
+    #print(f"[Debug] Merged messages count: {len(combined)}")
     return combined[-20:]
 
 
