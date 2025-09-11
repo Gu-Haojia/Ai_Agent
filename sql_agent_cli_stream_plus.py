@@ -518,6 +518,72 @@ class SQLCheckpointAgentStreamingPlus:
                 print("")
         return last_text
 
+    # --------------- 统计/工具 ---------------
+    def get_latest_messages(self, thread_id: Optional[str] = None) -> list:
+        """
+        获取指定线程的最新检查点消息列表。
+
+        Args:
+            thread_id (Optional[str]): 线程 ID，默认读取当前配置中的线程。
+
+        Returns:
+            list: LangChain 消息对象列表；若无历史则返回空列表。
+
+        Raises:
+            AssertionError: 当内部图或检查点访问异常时抛出。
+        """
+        cfg = {"configurable": {"thread_id": thread_id or self._config.thread_id}}
+        states = list(self._graph.get_state_history(cfg))
+        if not states:
+            return []
+        last = states[-1]
+        msgs: list = list(last.values.get("messages", []))
+        return msgs
+
+    def count_tokens(self, thread_id: Optional[str] = None) -> tuple[int, int]:
+        """
+        统计指定线程最新消息列表的 token 数。
+
+        说明：
+        - 为避免与不同模型的聊天消息打包细节强耦合，这里采用将消息文本内容串联后用
+          tiktoken 的 `cl100k_base` 编码估算 token 数；若未安装 tiktoken 则抛出断言。
+
+        Args:
+            thread_id (Optional[str]): 线程 ID，默认读取当前配置中的线程。
+
+        Returns:
+            tuple[int, int]: (token_total, message_count)
+
+        Raises:
+            AssertionError: 当未安装 tiktoken 或统计过程中发生异常时抛出。
+        """
+        try:
+            import tiktoken  # type: ignore
+        except Exception as e:  # pragma: no cover
+            raise AssertionError("缺少依赖：请先安装 tiktoken 用于 token 统计。") from e
+
+        messages = self.get_latest_messages(thread_id)
+        if not messages:
+            return (0, 0)
+
+        parts: list[str] = []
+        for m in messages:
+            c = getattr(m, "content", "")
+            parts.append(c if isinstance(c, str) else str(c))
+        text = "\n".join(parts)
+
+        try:
+            enc = tiktoken.get_encoding("cl100k_base")
+        except Exception as e:  # pragma: no cover
+            raise AssertionError("无法初始化 tiktoken 编码器 cl100k_base。") from e
+
+        try:
+            tokens = enc.encode(text)
+        except Exception as e:  # pragma: no cover
+            raise AssertionError("tiktoken 编码失败。") from e
+
+        return (len(tokens), len(messages))
+
     # --------------- 历史/回放 ---------------
     @staticmethod
     def _role_label(m) -> str:
