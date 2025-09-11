@@ -11,7 +11,6 @@
 """
 
 from __future__ import annotations
-
 import os
 import sys
 import time
@@ -19,7 +18,7 @@ from dataclasses import dataclass
 from typing import Annotated, Callable, Iterable, Optional
 
 from typing_extensions import TypedDict
-
+from langchain_core.tools import tool
 from langchain.chat_models import init_chat_model
 from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.checkpoint.memory import MemorySaver
@@ -55,7 +54,9 @@ def _ensure_openai_env_once() -> None:
     assert os.environ.get("OPENAI_API_KEY"), "缺少 OPENAI_API_KEY 环境变量。"
     _ENV_OPENAI_CHECKED = True
 
+
 # 说明：严禁在代码中硬编码密钥；请通过环境变量注入：
+
 
 class State(TypedDict):
     """Agent 的图状态。"""
@@ -94,9 +95,7 @@ class SQLCheckpointAgentStreamingPlus:
 
         env_tools = os.environ.get("ENABLE_TOOLS")
         if env_tools is None:
-            self._enable_tools = (
-                bool(os.environ.get("TAVILY_API_KEY")) or config.enable_tools
-            )
+            self._enable_tools = config.enable_tools
         else:
             self._enable_tools = env_tools in {"1", "true", "True"}
 
@@ -119,16 +118,16 @@ class SQLCheckpointAgentStreamingPlus:
             AssertionError: 当环境变量未设置、文件不存在或内容为空时抛出。
         """
         path = os.environ.get("SYS_MSG_FILE")
-        assert (
-            path
-        ), "必须通过环境变量 SYS_MSG_FILE 指定系统提示文件路径。"
+        assert path, "必须通过环境变量 SYS_MSG_FILE 指定系统提示文件路径。"
         abs_path = os.path.abspath(path)
         assert os.path.isfile(abs_path), f"系统提示文件不存在: {abs_path}"
         with open(abs_path, "r", encoding="utf-8") as f:
             content = f.read()
             print(f"[SysInfo] 已加载文件: {abs_path}，长度 {len(content)} 字符。")
-            #打印头尾各50字符,仅输出文本不要格式符号
-            print(f"[SysInfo] Prompt内容预览: {content[:50].replace(chr(10), ' ')} ... {content[-50:].replace(chr(10), ' ')}")
+            # 打印头尾各50字符,仅输出文本不要格式符号
+            print(
+                f"[SysInfo] Prompt内容预览: {content[:50].replace(chr(10), ' ')} ... {content[-50:].replace(chr(10), ' ')}"
+            )
         assert content and content.strip(), "系统提示文件内容为空。"
         return content
 
@@ -148,12 +147,77 @@ class SQLCheckpointAgentStreamingPlus:
                 if os.environ.get("TAVILY_API_KEY"):
                     tools = [TavilySearch(max_results=3)]
 
+                from langchain_community.utilities import OpenWeatherMapAPIWrapper
+
+                if os.environ.get("OPENWEATHERMAP_API_KEY"):
+
+                    @tool
+                    def get_weather(location_en_name: str) -> str:
+                        "Useful for when you need to know the weather"
+                        "of a specific location. Input should be a location english name, "
+                        "like 'Tokyo' or 'Kyoto'."
+                        weather = OpenWeatherMapAPIWrapper()
+                        result = weather.run(location_en_name)
+                        print(f"[Weather Tool Output] {result}")  # 调用时直接打印
+                        return result
+
+                    tools.append(get_weather)
+
+                    """
+                    weather_tool = Tool(
+                        name="weather",
+                        func=weather.run,   # run 方法接收 str 输入，例如地名
+                        description=(
+                            "Useful for when you need to know the weather "
+                            "of a specific location. Input should be a location english name, "
+                            "like 'Tokyo' or 'Kyoto'."
+                        ),
+                    )
+                    """
+
+                from langchain.agents import Tool
+                from langchain_experimental.utilities import PythonREPL
+
+                python_repl = PythonREPL()
+                repl_tool = Tool(
+                    name="python_repl",
+                    description="一个REPL Python shell。使用它来执行python命令。输入应该是一个有效的python命令。如果你想看到一个值的输出，你应该用`print(...)`打印出来。你必须每次先执行完整的import语句，然后才能使用导入的模块。",
+                    func=python_repl.run,
+                )
+
+                tools.append(repl_tool)
+
+                if os.environ.get("SERPAPI_API_KEY") and False:
+                    from langchain_community.tools.google_finance import (
+                        GoogleFinanceQueryRun,
+                    )
+                    from langchain_community.utilities.google_finance import (
+                        GoogleFinanceAPIWrapper,
+                    )
+
+                    finance_google = GoogleFinanceQueryRun(
+                        api_wrapper=GoogleFinanceAPIWrapper()
+                    )
+
+                    finance_tool = Tool(
+                        name="google_finance",
+                        description=(
+                            "A tool for getting stock information and financial news. "
+                            "Input should be a English company ticker symbol, like 'AAPL' or 'MSFT'."
+                        ),
+                        func=finance_google.run,
+                    )
+                    tools.append(finance_tool)
+                # from langchain_community.tools.yahoo_finance_news import YahooFinanceNewsTool
+                # tools.append(YahooFinanceNewsTool())
+
             # 两种绑定：
             # - auto：允许模型自行决定是否调用工具（用于首轮/工具前）
             # - none：禁止工具，促使模型基于工具结果做总结（用于工具后）
             llm_tools_auto = llm.bind_tools(tools) if tools else llm
             llm_tools_none = llm.bind_tools(tools, tool_choice="none") if tools else llm
             # - force：当用户显式要求搜索/检索等，强制调用 tavily_search
+            """
             if tools:
                 llm_tools_force = llm.bind_tools(
                     tools,
@@ -164,6 +228,7 @@ class SQLCheckpointAgentStreamingPlus:
                 )
             else:
                 llm_tools_force = llm
+            """
 
         def chatbot(state: State):
             on_token: Callable[[str], None] = getattr(self, "_on_token", None) or (
@@ -174,6 +239,7 @@ class SQLCheckpointAgentStreamingPlus:
             # 系统提示：使用初始化时缓存的外部文件内容，综合 & 不生搬硬套搜索结果
             try:
                 from langchain_core.messages import SystemMessage
+
                 sys_msg = SystemMessage(content=self._sys_msg_content)
                 messages = [sys_msg] + list(state["messages"])  # 不修改原列表
             except Exception:

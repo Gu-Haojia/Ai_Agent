@@ -294,16 +294,16 @@ class QQBotHandler(BaseHTTPRequestHandler):
                             cls._group_threads = {}
                             cls._env_consistency_checked = True
                             cls.save_thread_store()
-                            print(f"[QQBot] thread store cleared due to env mismatch: {path}")
+                            print(f"[QQBot] Thread store cleared due to env mismatch: {path}")
                         else:
                             cls._group_threads = m
                             cls._env_consistency_checked = True
-                            print(f"[QQBot] loaded group threads from {path}: {len(m)} groups")
+                            print(f"[QQBot] Loaded group threads from {path}: {len(m)} groups")
                     else:
                         cls._group_threads = m
-                        print(f"[QQBot] loaded group threads from {path}: {len(m)} groups (env check skipped)")
+                        print(f"[QQBot] Loaded group threads from {path}: {len(m)} groups (env check skipped)")
         except Exception as e:
-            sys.stderr.write(f"[QQBot] load group threads failed: {e}\n")
+            sys.stderr.write(f"[QQBot] Load group threads failed: {e}\n")
 
     @classmethod
     def save_thread_store(cls) -> None:
@@ -443,13 +443,13 @@ class QQBotHandler(BaseHTTPRequestHandler):
         # 调用 Agent 生成回复（返回最后聚合文本）
         try:
             # 终端打印服务消息
-            print(f"[Chat] Request get: Group {group_id} User {user_id}: {text}")
+            author = _extract_sender_name(event)
+            print(f"[Chat] Request get: Group {group_id} Id {user_id} User {author}: {text}")
             print("[Chat] Generating reply...")
             # 为流式打印添加前缀标记到服务端日志，QQ 群内仅发送最终汇总
             self.agent.set_token_printer(lambda s: sys.stdout.write(s))
             # 轻量方案：在发给 Agent 的文本前加入说话人标识，提升区分度
-            author = _extract_sender_name(event)
-            model_input = f"User:【{user_id}】; Text: {text}"
+            model_input = f"User_id: [{user_id}]; User_name: {author}; Text: {text}"
             answer = self.agent.chat_once_stream(
                 model_input, thread_id=self._thread_id_for(group_id)
             )
@@ -500,11 +500,11 @@ class QQBotHandler(BaseHTTPRequestHandler):
         """处理内部命令。
 
         仅在被 @ 且文本完全命中时触发：
-        - ::cmd                → 返回命令列表
-        - ::switch             → 列出 prompts 目录下可用文件名（不含后缀）
-        - ::switch <name>      → 切换到 prompts/<name>.txt（设置 SYS_MSG_FILE）并重建 Agent
-        - ::clear              → 为当前群新建线程
-        - ::whoami             → 先回当前系统提示词，再基于“你是谁”生成一条消息
+        - /cmd                → 返回命令列表
+        - /switch             → 列出 prompts 目录下可用文件名（不含后缀）
+        - /switch <name>      → 切换到 prompts/<name>.txt（设置 SYS_MSG_FILE）并重建 Agent
+        - /clear              → 为当前群新建线程
+        - /whoami             → 先回当前系统提示词，再基于“你是谁”生成一条消息
 
         Args:
             group_id (int): 群号
@@ -514,8 +514,10 @@ class QQBotHandler(BaseHTTPRequestHandler):
         Returns:
             bool: 是否命中并处理了命令
         """
+
         if not text.startswith("/"):
-            return False
+            if text != "让我忘记一切吧":
+                return False
         parts = text.split()
         cmd = parts[0]
         # 命令白名单校验：设置了 CMD_ALLOWED_USERS 时，仅白名单内用户可执行
@@ -579,7 +581,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
             )
             return True
 
-        if cmd == "/clear" and len(parts) == 1:
+        if cmd in {"/clear", "让我忘记一切吧"} and len(parts) == 1:
             new_tid = f"qq-napcat-{group_id}-{self.agent._config.thread_id}-{int(time.time())}"
             self._group_threads[group_id] = new_tid
             QQBotHandler.save_thread_store()
