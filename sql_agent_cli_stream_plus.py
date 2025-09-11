@@ -69,11 +69,84 @@ from langchain.memory import ConversationSummaryMemory
 from langchain_openai import ChatOpenAI
 
 
-# ---- 更简洁的消息合并器：使用 ConversationSummaryMemory ----
-_llm_for_summary = ChatOpenAI(
-    model=os.environ.get("SUMMARY_MODEL", "gpt-3.5-turbo"), temperature=0
-)
-_summary_mem = ConversationSummaryMemory(llm=_llm_for_summary)
+# ---- 更简洁的消息合并器：使用 ConversationSummaryMemory（惰性初始化） ----
+_summary_mem: ConversationSummaryMemory | None = None
+
+
+def _get_summary_mem() -> ConversationSummaryMemory:
+    """惰性创建用于摘要的记忆体，避免在无 OPENAI_API_KEY 时提前报错。
+
+    Returns:
+        ConversationSummaryMemory: 已初始化的摘要记忆体。
+
+    Raises:
+        AssertionError: 缺少 OPENAI_API_KEY。
+    """
+    global _summary_mem
+    if _summary_mem is None:
+        _ensure_openai_env_once()
+        model = os.environ.get("SUMMARY_MODEL", "gpt-3.5-turbo")
+        llm = ChatOpenAI(model=model, temperature=0)
+        _summary_mem = ConversationSummaryMemory(llm=llm)
+    return _summary_mem
+
+
+def _role_of(m: object) -> str:
+    """归一化获取角色：human/user/ai/assistant/system/tool/unknown。"""
+    if isinstance(m, BaseMessage):
+        # BaseMessage 子类在 .type 中
+        try:
+            t = getattr(m, "type", "")
+            return str(t or "").lower()
+        except Exception:
+            pass
+    # 兼容 dict 与通用对象
+    role = getattr(m, "role", None)
+    if role is None and isinstance(m, dict):
+        role = m.get("role")
+    t = getattr(m, "type", None)
+    if t is None and isinstance(m, dict):
+        t = m.get("type")
+    r = (role or t or "").lower()
+    # tool-like 统一映射
+    if "tool" in r:
+        return "tool"
+    return r or "unknown"
+
+
+def _is_human_like(m: object) -> bool:
+    r = _role_of(m)
+    return isinstance(m, HumanMessage) or r in {"human", "user"}
+
+
+def _is_ai_like(m: object) -> bool:
+    r = _role_of(m)
+    return isinstance(m, AIMessage) or r in {"ai", "assistant"}
+
+
+def _is_system_like(m: object) -> bool:
+    r = _role_of(m)
+    return isinstance(m, SystemMessage) or r == "system"
+
+
+def _to_base_message(m: object) -> BaseMessage:
+    """将任意消息对象转换为 BaseMessage（用于摘要输入）。"""
+    if isinstance(m, BaseMessage):
+        return m
+    # 提取文本
+    content = getattr(m, "content", None)
+    if content is None and isinstance(m, dict):
+        content = m.get("content")
+    text = content if isinstance(content, str) else str(content)
+    r = _role_of(m)
+    if r in {"human", "user"}:
+        return HumanMessage(content=text)
+    if r in {"ai", "assistant"}:
+        return AIMessage(content=text)
+    if r == "system":
+        return SystemMessage(content=text)
+    # 其他（工具等）统一转为 system，保留提示前缀
+    return SystemMessage(content=f"[Tool] {text}")
 
 
 def smart_reducer(prev: List[BaseMessage], new: List[BaseMessage]) -> List[BaseMessage]:
@@ -81,52 +154,68 @@ def smart_reducer(prev: List[BaseMessage], new: List[BaseMessage]) -> List[BaseM
 
     规则：
     - 轮次定义：一轮 = 一个 HumanMessage。
-    - 当轮数 > 3：删除 3 轮之前的其他中间消息（如工具调用/返回），但保留所有 Human/AI/System。
-    - 当轮数 > 10：将前面的消息折叠为摘要，仅保留“摘要 + 最近 3 轮的所有消息（包括工具）”。
+    - 当轮数 > 5：删除 5 轮之前的其他中间消息（如工具调用/返回），但保留所有 Human/AI/System。
+    - 当轮数 > 10：将前面的消息折叠为摘要，仅保留“摘要 + 最近 5 轮的所有消息（包括工具）”。
     """
+    print(
+        f"[Debug] smart_reducer called: prev {len(prev) if prev else 0}, new {len(new) if new else 0}",
+        flush=True,
+    )
     all_msgs: List[BaseMessage] = (prev or []) + (new or [])
+    print(f"[Debug] Total messages before reduction: {len(all_msgs)}", flush=True)
 
-    # 找出所有 Human 的索引（定义轮次）
-    human_indices = [i for i, m in enumerate(all_msgs) if isinstance(m, HumanMessage)]
+    # 找出所有 Human 的索引（定义轮次），需兼容 dict/通用对象
+    human_indices = [i for i, m in enumerate(all_msgs) if _is_human_like(m)]
+    print(f"[Debug] Human indices: {human_indices}", flush=True)
     rounds = len(human_indices)
+    
 
     # 没有 Human，直接返回
     if rounds == 0:
         return all_msgs
 
-    # ---- 删除 3 轮之前的「非 Human/AI/System(摘要)」消息 ----
-    if rounds > 3:
-        cutoff_human_idx = human_indices[-3]  # 最近第 3 个 Human 的索引（最近 3 轮起点）
+    # ---- 删除 5 轮之前的「非 Human/AI/System(摘要)」消息 ----
+    if rounds > 5:
+        cutoff_human_idx = human_indices[
+            -5
+        ]  # 最近第 5 个 Human 的索引（最近 5 轮起点）
         keep: List[BaseMessage] = []
         for i, m in enumerate(all_msgs):
-            if isinstance(m, (HumanMessage, AIMessage, SystemMessage)):
+            if _is_human_like(m) or _is_ai_like(m) or _is_system_like(m):
                 keep.append(m)
             else:
                 # 工具类消息：只保留最近 3 轮内的
                 if i >= cutoff_human_idx:
                     keep.append(m)
-        print(f"[Info] 历史消息已清理，当前轮次 {rounds}，剩余消息 {len(keep)} 条。")
+        print(
+            f"[Info] 历史消息已清理，当前轮次 {rounds}，剩余消息 {len(keep)} 条。",
+            flush=True,
+        )
         all_msgs = keep
 
     # ---- 超过 10 轮时做摘要 ----
     if rounds > 10:
-        cutoff_human_idx = human_indices[-3]  # 最近 3 轮的起点（包含该 Human）
+        cutoff_human_idx = human_indices[-5]  # 最近 5 轮的起点（包含该 Human）
         early = all_msgs[:cutoff_human_idx]
         recent = all_msgs[cutoff_human_idx:]
 
         # 生成摘要（基于 ConversationSummaryMemory）
-        _summary_mem.chat_memory.clear()
-        for m in early:
-            _summary_mem.chat_memory.add_message(m)
-        summary_text = _summary_mem.predict_new_summary(
+        mem = _get_summary_mem()
+        mem.chat_memory.clear()
+        conv_early = [_to_base_message(m) for m in early]
+        for bm in conv_early:
+            mem.chat_memory.add_message(bm)
+        summary_text = mem.predict_new_summary(
             "你是一个资深对话整理助手。请将以下历史对话凝练为简洁摘要，保留：用户核心意图、已给出的结论、关键事实、已承诺的后续事项。避免无关细节与冗余。若已有摘要，则在其基础上更新。",
-            early,
+            conv_early,
         )
-        summary_msg = SystemMessage(content=f"[Summary of earlier conversation]\n{summary_text}")
+        summary_msg = SystemMessage(
+            content=f"[Summary of earlier conversation]\n{summary_text}"
+        )
 
         all_msgs = [summary_msg] + recent
-        print(f"[Info] 历史消息已折叠为摘要，当前轮次 {rounds}，剩余消息 {len(all_msgs)} 条。")
-
+        print(f"[Info] 历史消息已折叠为摘要，剩余消息 {len(all_msgs)} 条。", flush=True)
+    print(f"[Debug] 当前消息轮次 {rounds}，总消息数 {len(all_msgs)} 条。", flush=True)
     return all_msgs
 
 
