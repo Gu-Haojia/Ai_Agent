@@ -64,188 +64,74 @@ from langchain_core.messages import (
     HumanMessage,
     SystemMessage,
 )
+from typing import List
+from langchain.memory import ConversationSummaryMemory
+from langchain_openai import ChatOpenAI
 
 
-# ------------------------- 自定义消息合并与整理 -------------------------
-def _msg_type(m: object) -> str:
-    """返回消息类型标识。
-
-    仅依赖 `type` 或 `role` 属性，保证对普通 dict 也兼容。
-    """
-    return getattr(m, "type", "") or getattr(m, "role", "") or ""
+# ---- 更简洁的消息合并器：使用 ConversationSummaryMemory ----
+_llm_for_summary = ChatOpenAI(model=os.environ.get("SUMMARY_MODEL", "gpt-3.5-turbo"), temperature=0)
+_summary_mem = ConversationSummaryMemory(llm=_llm_for_summary)
 
 
-def _is_ai(m: object) -> bool:
-    t = _msg_type(m).lower()
-    return t in {"ai", "assistant"}
-
-
-def _is_human(m: object) -> bool:
-    t = _msg_type(m).lower()
-    return t in {"human", "user"}
-
-
-def _is_toolish(m: object) -> bool:
-    return "tool" in _msg_type(m).lower()
-
-
-def _is_summary_msg(m: object) -> bool:
-    """判断是否为我们创建的摘要 SystemMessage。
-
-    通过 SystemMessage 且 name == 'conversation_summary' 识别。
-    """
-    return isinstance(m, SystemMessage) and getattr(m, "name", None) == "conversation_summary"
-
-
-def _assign_round_indices(messages: list[object]) -> tuple[list[tuple[object, int]], int]:
-    """为消息分配“轮次索引”。
-
-    规则：从头到尾扫描，遇到 AIMessage 认为完成一轮；
-    在第 r 轮完成前（含该轮 AI），所有消息都标记为 r。
-
-    Returns:
-        (list, int): 每条消息与其所属轮次，总轮次数。
-    """
-    round_idx = 1
-    tagged: list[tuple[object, int]] = []
-    for m in messages:
-        tagged.append((m, round_idx))
-        if _is_ai(m):
-            round_idx += 1
-    total_rounds = round_idx - 1
-    return tagged, total_rounds
-
-
-def _to_base_messages(msgs: list[object]) -> list[BaseMessage]:
-    """将可能混合的消息对象（含 dict）转为 LangChain BaseMessage 列表。
-
-    仅保留可序列化内容；未知结构将转为 SystemMessage 文本描述。
-    """
-    out: list[BaseMessage] = []
-    for m in msgs:
-        if isinstance(m, BaseMessage):
-            out.append(m)
-            continue
-        role = (_msg_type(m) or "").lower()
-        content = getattr(m, "content", None)
-        if content is None and isinstance(m, dict):
-            content = m.get("content")
-        text = content if isinstance(content, str) else str(content)
-        if role in {"human", "user"}:
-            out.append(HumanMessage(content=text))
-        elif role in {"ai", "assistant"}:
-            out.append(AIMessage(content=text))
-        elif "tool" in role:
-            out.append(SystemMessage(content=f"[Tool] {text}"))
-        else:
-            out.append(SystemMessage(content=text))
-    return out
-
-
-def _summarize_earlier(earlier: list[object], existing_summary: str = "") -> str:
-    """对“较早轮次”的消息进行中文摘要。
-
-    使用环境变量 `SUMMARY_MODEL` 指定模型（默认 `openai:gpt-4o-mini`）。
-    需要 OPENAI_API_KEY 存在。
-    """
-    # 仅在需要时进行一次 OpenAI 环境校验
-    _ensure_openai_env_once()
-    model_name = os.environ.get("SUMMARY_MODEL", "openai:gpt-4o-mini")
-    llm = init_chat_model(model_name)
-    msgs = [
-        SystemMessage(
-            content=(
-                "你是一个资深对话整理助手。请将以下历史对话凝练为" \
-                "简洁的中文摘要，保留：用户核心意图、已给出的结论、关键事实、已承诺的后续事项。" \
-                "避免无关细节与冗余。若已有摘要，则在其基础上增量更新。"
-            )
-        )
-    ]
-    if existing_summary and isinstance(existing_summary, str):
-        msgs.append(SystemMessage(content=f"现有摘要：{existing_summary}"))
-    # 附上对话正文（转为基础消息）
-    msgs.extend(_to_base_messages(earlier))
-    res = llm.invoke(msgs)
-    text = getattr(res, "content", "")
-    assert isinstance(text, str) and text.strip(), "摘要生成失败：模型未返回文本内容。"
-    return text.strip()
-
-
-def update_messages_with_summary(prev: list | None, new: list | object) -> list:
-    """自定义 reducer：在追加消息的同时执行清理与摘要折叠。
-
-    触发时机：
-    - 每次字段 `messages` 被更新时调用；
-    - 仅当本次追加包含 AI 回复时，才进行“清理/摘要”逻辑；
-    - 普通（非 AI）追加按原样拼接。
+def smart_reducer(prev: List[BaseMessage], new: List[BaseMessage]) -> List[BaseMessage]:
+    """追加消息时的“清理 + 摘要折叠”逻辑（简洁版）。
 
     规则：
-    - 轮次定义：一轮 = 一个 AIMessage；
-    - 追加 AI 回复时：保留所有 HumanMessage、AIMessage、摘要；
-      删除超过 3 轮之前的“中间消息”（如工具调用/返回等非 human/ai/摘要消息）；
-    - 当轮数 > 10：触发一次整理，将“前面的消息”折叠成摘要，
-      仅保留该摘要 + 最近 3 轮的所有消息（包括工具调用/返回）。
-
-    Args:
-        prev (list|None): 既有消息列表。
-        new (list|object): 新增的消息或消息列表。
-
-    Returns:
-        list: 处理后的新消息列表。
+    - 轮次定义：一轮 = 一个 AIMessage。
+    - 追加 AI 回复时：
+      - 保留所有 HumanMessage、AIMessage、SystemMessage；
+      - 删除 3 轮之前的其他中间消息（如工具调用/返回）。
+    - 当轮数 > 10：
+      - 将前面的消息折叠成摘要（SystemMessage），
+      - 仅保留“摘要 + 最近 3 轮的所有消息（包括工具）”。
     """
-    existed = list(prev or [])
-    appended = list(new if isinstance(new, list) else [new])
-    # 基础追加
-    combined = existed + appended
+    all_msgs: List[BaseMessage] = (prev or []) + (new or [])
 
-    # 若本次未追加 AI，则直接返回“追加结果”。
-    if not any(_is_ai(m) for m in appended):
-        return combined
+    # 找出所有 AI 回复的索引（定义轮次）
+    ai_indices = [i for i, m in enumerate(all_msgs) if isinstance(m, AIMessage)]
+    rounds = len(ai_indices)
 
-    # 统计轮次并为每条消息标注所属轮次
-    tagged, total_rounds = _assign_round_indices(combined)
+    # 没有 AI 回复，直接返回
+    if rounds == 0:
+        return all_msgs
 
-    # 查找现有摘要（若有，取最后一个）
-    existing_summary = ""
-    for m in reversed(combined):
-        if _is_summary_msg(m):
-            existing_summary = getattr(m, "content", "") or ""
-            break
-
-    # 10 轮以内：仅清理“非 human/ai/摘要”的旧中间消息（保留最近 3 轮）
-    if total_rounds <= 10:
-        keep: list[object] = []
-        min_round = max(1, total_rounds - 3 + 1)  # 最近3轮的起始轮
-        for m, r in tagged:
-            if _is_human(m) or _is_ai(m) or _is_summary_msg(m):
+    # ---- 删除 3 轮之前的「非 Human/AI/System(摘要)」消息 ----
+    if rounds > 3:
+        cutoff_ai_idx = ai_indices[-3]  # 最近第3个 AI 的索引
+        keep: List[BaseMessage] = []
+        for i, m in enumerate(all_msgs):
+            if isinstance(m, (HumanMessage, AIMessage, SystemMessage)):
                 keep.append(m)
             else:
-                # 中间消息：仅保留最近3轮
-                if r >= min_round:
+                # 工具类消息：只保留最近 3 轮内的
+                if i >= cutoff_ai_idx:
                     keep.append(m)
-        return keep
+        all_msgs = keep
 
-    # 超过 10 轮：将“前面的消息”折叠为摘要，仅保留摘要 + 最近3轮所有消息
-    cutoff = total_rounds - 3
-    earlier: list[object] = []
-    recent: list[object] = []
-    for m, r in tagged:
-        if r <= cutoff and not _is_summary_msg(m):
-            earlier.append(m)
-        elif r > cutoff:
-            recent.append(m)
-        # 旧摘要不带入（会用新摘要替换）
+    # ---- 超过 10 轮时做摘要 ----
+    if rounds > 10:
+        cutoff_ai_idx = ai_indices[-3]  # 最近 3 轮的起点
+        early = all_msgs[:cutoff_ai_idx]
+        recent = all_msgs[cutoff_ai_idx:]
 
-    # 生成（或增量更新）摘要
-    summary_text = _summarize_earlier(earlier, existing_summary=existing_summary)
-    summary_msg = SystemMessage(content=summary_text, name="conversation_summary")
-    return [summary_msg] + recent
+        # 生成摘要（基于 ConversationSummaryMemory）
+        _summary_mem.chat_memory.clear()
+        for m in early:
+            _summary_mem.chat_memory.add_message(m)
+        # prompt_text 可以为空，early 作为上下文
+        summary_text = _summary_mem.predict_new_summary("", early)
+        summary_msg = SystemMessage(content=f"[Summary of earlier conversation]\n{summary_text}")
+
+        all_msgs = [summary_msg] + recent
+
+    return all_msgs
 
 
 class State(TypedDict):
     """Agent 的图状态。"""
 
-    messages: Annotated[list, update_messages_with_summary]
+    messages: Annotated[List[BaseMessage], smart_reducer]
 
 
 @dataclass
