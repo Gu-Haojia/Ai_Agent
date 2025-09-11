@@ -70,60 +70,62 @@ from langchain_openai import ChatOpenAI
 
 
 # ---- 更简洁的消息合并器：使用 ConversationSummaryMemory ----
-_llm_for_summary = ChatOpenAI(model=os.environ.get("SUMMARY_MODEL", "gpt-3.5-turbo"), temperature=0)
+_llm_for_summary = ChatOpenAI(
+    model=os.environ.get("SUMMARY_MODEL", "gpt-3.5-turbo"), temperature=0
+)
 _summary_mem = ConversationSummaryMemory(llm=_llm_for_summary)
 
 
 def smart_reducer(prev: List[BaseMessage], new: List[BaseMessage]) -> List[BaseMessage]:
-    """追加消息时的“清理 + 摘要折叠”逻辑（简洁版）。
+    """追加消息时的“清理 + 摘要折叠”逻辑（以 HumanMessage 计轮）。
 
     规则：
-    - 轮次定义：一轮 = 一个 AIMessage。
-    - 追加 AI 回复时：
-      - 保留所有 HumanMessage、AIMessage、SystemMessage；
-      - 删除 3 轮之前的其他中间消息（如工具调用/返回）。
-    - 当轮数 > 10：
-      - 将前面的消息折叠成摘要（SystemMessage），
-      - 仅保留“摘要 + 最近 3 轮的所有消息（包括工具）”。
+    - 轮次定义：一轮 = 一个 HumanMessage。
+    - 当轮数 > 3：删除 3 轮之前的其他中间消息（如工具调用/返回），但保留所有 Human/AI/System。
+    - 当轮数 > 10：将前面的消息折叠为摘要，仅保留“摘要 + 最近 3 轮的所有消息（包括工具）”。
     """
     all_msgs: List[BaseMessage] = (prev or []) + (new or [])
 
-    # 找出所有 AI 回复的索引（定义轮次）
-    ai_indices = [i for i, m in enumerate(all_msgs) if isinstance(m, AIMessage)]
-    rounds = len(ai_indices)
+    # 找出所有 Human 的索引（定义轮次）
+    human_indices = [i for i, m in enumerate(all_msgs) if isinstance(m, HumanMessage)]
+    rounds = len(human_indices)
 
-    # 没有 AI 回复，直接返回
+    # 没有 Human，直接返回
     if rounds == 0:
         return all_msgs
 
     # ---- 删除 3 轮之前的「非 Human/AI/System(摘要)」消息 ----
     if rounds > 3:
-        cutoff_ai_idx = ai_indices[-3]  # 最近第3个 AI 的索引
+        cutoff_human_idx = human_indices[-3]  # 最近第 3 个 Human 的索引（最近 3 轮起点）
         keep: List[BaseMessage] = []
         for i, m in enumerate(all_msgs):
             if isinstance(m, (HumanMessage, AIMessage, SystemMessage)):
                 keep.append(m)
             else:
                 # 工具类消息：只保留最近 3 轮内的
-                if i >= cutoff_ai_idx:
+                if i >= cutoff_human_idx:
                     keep.append(m)
+        print(f"[Info] 历史消息已清理，当前轮次 {rounds}，剩余消息 {len(keep)} 条。")
         all_msgs = keep
 
     # ---- 超过 10 轮时做摘要 ----
     if rounds > 10:
-        cutoff_ai_idx = ai_indices[-3]  # 最近 3 轮的起点
-        early = all_msgs[:cutoff_ai_idx]
-        recent = all_msgs[cutoff_ai_idx:]
+        cutoff_human_idx = human_indices[-3]  # 最近 3 轮的起点（包含该 Human）
+        early = all_msgs[:cutoff_human_idx]
+        recent = all_msgs[cutoff_human_idx:]
 
         # 生成摘要（基于 ConversationSummaryMemory）
         _summary_mem.chat_memory.clear()
         for m in early:
             _summary_mem.chat_memory.add_message(m)
-        # prompt_text 可以为空，early 作为上下文
-        summary_text = _summary_mem.predict_new_summary("", early)
+        summary_text = _summary_mem.predict_new_summary(
+            "你是一个资深对话整理助手。请将以下历史对话凝练为简洁摘要，保留：用户核心意图、已给出的结论、关键事实、已承诺的后续事项。避免无关细节与冗余。若已有摘要，则在其基础上更新。",
+            early,
+        )
         summary_msg = SystemMessage(content=f"[Summary of earlier conversation]\n{summary_text}")
 
         all_msgs = [summary_msg] + recent
+        print(f"[Info] 历史消息已折叠为摘要，当前轮次 {rounds}，剩余消息 {len(all_msgs)} 条。")
 
     return all_msgs
 
@@ -272,6 +274,7 @@ class SQLCheckpointAgentStreamingPlus:
                         ValueError: 当提供的时区无效时抛出。
                     """
                     from datetime import datetime
+
                     # 延迟导入，避免在不使用该工具时增加依赖
                     tz_norm = (tz or "local").strip().lower()
                     if tz_norm in {"local", "system"}:
