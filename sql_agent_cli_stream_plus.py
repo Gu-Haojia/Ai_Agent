@@ -59,20 +59,19 @@ def _ensure_openai_env_once() -> None:
 
 
 def _cap20_messages(prev: list | None, new: list | object) -> list:
-    """消息合并器：仅保持最近 20 条。
+    """基于内置 `add_messages` 的长度控制合并器：仅保留最近 20 条。
+
+    先使用 `add_messages(prev, new)` 完成标准的消息合并（与内置追加行为一致），
+    再对结果做截断，返回最后 20 条，避免改变既有消息规范化与合并语义。
 
     Args:
-        prev (list|None): 既有消息列表
-        new (list|object): 新增消息（单条或列表）
+        prev (list|None): 既有消息列表。
+        new (list|object): 新增消息（单条或列表）。
 
     Returns:
-        list: 合并后截断到最后 20 条的消息列表
+        list: 合并后保留最后 20 条的消息列表。
     """
-    prev_list = list(prev or [])
-    if isinstance(new, list):
-        combined = prev_list + new
-    else:
-        combined = prev_list + [new]
+    combined = add_messages(prev or [], new)
     return combined[-20:]
 
 
