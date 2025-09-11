@@ -58,10 +58,28 @@ def _ensure_openai_env_once() -> None:
 # 说明：严禁在代码中硬编码密钥；请通过环境变量注入：
 
 
+def _cap20_messages(prev: list | None, new: list | object) -> list:
+    """基于内置 `add_messages` 的长度控制合并器：仅保留最近 20 条。
+
+    先使用 `add_messages(prev, new)` 完成标准的消息合并（与内置追加行为一致），
+    再对结果做截断，返回最后 20 条，避免改变既有消息规范化与合并语义。
+
+    Args:
+        prev (list|None): 既有消息列表。
+        new (list|object): 新增消息（单条或列表）。
+
+    Returns:
+        list: 合并后保留最后 20 条的消息列表。
+    """
+    combined = add_messages(prev or [], new)
+    #print(f"[Debug] Merged messages count: {len(combined)}")
+    return combined[-20:]
+
+
 class State(TypedDict):
     """Agent 的图状态。"""
 
-    messages: Annotated[list, add_messages]
+    messages: Annotated[list, _cap20_messages]
 
 
 @dataclass
@@ -186,6 +204,59 @@ class SQLCheckpointAgentStreamingPlus:
                 )
 
                 tools.append(repl_tool)
+
+                @tool
+                def datetime_now(tz: str = "local") -> str:
+                    """
+                    获取当前时间、日期与星期信息。
+
+                    Args:
+                        tz (str): 时区名称，例如 "Asia/Shanghai"、"UTC"。传入 "local" 使用系统本地时区，默认 "local"。
+
+                    Returns:
+                        str: 形如 "2025-01-01 08:30:05 | Wednesday/周三 | TZ: CST (UTC+08:00)" 的字符串。
+
+                    Raises:
+                        ValueError: 当提供的时区无效时抛出。
+                    """
+                    from datetime import datetime
+
+                    # 延迟导入，避免在不使用该工具时增加依赖
+                    tz_norm = (tz or "local").strip().lower()
+                    if tz_norm in {"local", "system"}:
+                        dt = datetime.now().astimezone()
+                    else:
+                        try:
+                            from zoneinfo import ZoneInfo  # Python 3.9+
+                        except Exception as e:  # pragma: no cover
+                            raise ValueError("当前运行环境不支持标准库 zoneinfo") from e
+                        try:
+                            dt = datetime.now(ZoneInfo(tz))
+                        except Exception as e:
+                            raise ValueError(f"无效时区: {tz}") from e
+
+                    date_part = dt.strftime("%Y-%m-%d")
+                    time_part = dt.strftime("%H:%M:%S")
+                    weekday_en = dt.strftime("%A")
+                    weekday_map = {
+                        "Monday": "周一",
+                        "Tuesday": "周二",
+                        "Wednesday": "周三",
+                        "Thursday": "周四",
+                        "Friday": "周五",
+                        "Saturday": "周六",
+                        "Sunday": "周日",
+                    }
+                    weekday_zh = weekday_map.get(weekday_en, "")
+                    tzname = dt.tzname() or ""
+                    offset = dt.strftime("%z")  # +0800
+                    if offset and len(offset) == 5:
+                        offset_fmt = offset[:3] + ":" + offset[3:]
+                    else:
+                        offset_fmt = offset
+                    return f"{date_part} {time_part} | {weekday_en}/{weekday_zh} | TZ: {tzname} (UTC{offset_fmt})"
+
+                tools.append(datetime_now)
 
                 if os.environ.get("SERPAPI_API_KEY") and False:
                     from langchain_community.tools.google_finance import (

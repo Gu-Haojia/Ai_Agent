@@ -28,6 +28,7 @@ pip install -r requirements.txt
 必需/可选环境变量：
 
 - `OPENAI_API_KEY`（必需，若使用 OpenAI 模型）
+- `SYS_MSG_FILE`（必需，增强版 `sql_agent_cli_stream_plus.py` 需要，指向 `prompts/*.txt`）
 - `TAVILY_API_KEY`（可选，启用网页搜索工具 Tavily 时建议设置）
 - `LANGGRAPH_PG`（可选，使用 PostgreSQL 持久化检查点时设置）
 - `MODEL_NAME`（可选，默认 `openai:gpt-4o-mini`）
@@ -76,6 +77,7 @@ python sql_agent_cli.py
 - 事件流输出顺序：
   - `Tool: Calling tool [tavily_search]`
   - `Agent: ...（流式输出总结）`
+- 消息长度上限：内部 reducer 仅保留最近 20 条消息，以避免上下文无限增长。
 - 对于敏感或不现实请求（例如“如何与某公众人物结婚”），模型将礼貌地解释现实限制，并提供一般性、合规的建议（而非生搬搜索结果）
 
 ## 示例对话
@@ -132,5 +134,9 @@ brew services stop postgresql
 - `sql_agent_cli_stream_plus.py`：增强流式（多轮工具/强制搜索/强化综合）
 - `sql_agent_cli.py`：基础（非流式）
 
----
+提示：`sql_agent_cli_stream_plus.py` 需要设置 `SYS_MSG_FILE` 指向系统提示词文件，例如：
+```bash
+export SYS_MSG_FILE=$(pwd)/prompts/default.txt
+```
 
+---
