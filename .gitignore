@@ -29,6 +29,7 @@ output.xml
 .env
 .env.*
 .qq_group_threads.json
+.qq_reminder_threads.json
 
 # Local backup (not tracked)
 local_backup/

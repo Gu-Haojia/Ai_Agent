@@ -137,10 +137,12 @@ class _ReminderStore:
         gid = rec.get("group_id")
         uid = rec.get("user_id")
         desc = rec.get("description")
+        ans= rec.get("answer")
         assert isinstance(ts, int) and ts > 0, "ts 必须为正整数时间戳"
         assert isinstance(gid, int) and gid > 0, "group_id 必须为正整数"
         assert isinstance(uid, int) and uid > 0, "user_id 必须为正整数"
         assert isinstance(desc, str) and desc.strip(), "description 不能为空"
+        assert isinstance(ans, str) and ans.strip(), "answer 不能为空"
 
     def add(self, rec: dict) -> None:
         """追加一条提醒记录。"""
@@ -152,6 +154,7 @@ class _ReminderStore:
                 "group_id": int(rec["group_id"]),
                 "user_id": int(rec["user_id"]),
                 "description": str(rec["description"]),
+                "answer": str(rec["answer"]),
             })
             self._write_all(items)
 
@@ -173,12 +176,13 @@ class _ReminderStore:
                         "group_id": int(r["group_id"]),
                         "user_id": int(r["user_id"]),
                         "description": str(r["description"]),
+                        "answer": str(r["answer"]),
                     })
             # 覆盖写入仅保留有效项
             self._write_all(active)
             return active
 
-    def remove_one(self, ts: int, group_id: int, user_id: int, description: str) -> None:
+    def remove_one(self, ts: int, group_id: int, user_id: int, description: str, answer: str) -> None:
         """移除第一条与参数完全匹配的记录（若不存在则忽略）。"""
         with self._LOCK:
             items = self._read_all()
@@ -190,6 +194,7 @@ class _ReminderStore:
                         and int(r.get("group_id")) == int(group_id)
                         and int(r.get("user_id")) == int(user_id)
                         and str(r.get("description")) == str(description)
+                        and str(r.get("answer")) == str(answer)
                     ):
                         idx = i
                         break
@@ -253,6 +258,7 @@ class SQLCheckpointAgentStreamingPlus:
             group_id = int(rec.get("group_id"))
             user_id = int(rec.get("user_id"))
             desc = str(rec.get("description"))
+            ans = str(rec.get("answer"))
             remain = max(1, ts - int(time.time()))
 
             def _fire() -> None:
@@ -261,7 +267,7 @@ class SQLCheckpointAgentStreamingPlus:
 
                     cfg = BotConfig.from_env()
                     _send_group_at_message(
-                        cfg.api_base, group_id, user_id, f"提醒：{desc}", cfg.access_token
+                        cfg.api_base, group_id, user_id, f"提醒：{ans}", cfg.access_token
                     )
                 except Exception as e:
                     sys.stderr.write(f"[TimerStore] 恢复提醒发送失败：{e}\n")
@@ -275,6 +281,7 @@ class SQLCheckpointAgentStreamingPlus:
             t = threading.Timer(remain, _fire)
             t.daemon = True
             t.start()
+            print(f"[TimerStore] 恢复计时器：{remain} 秒后将在群 {group_id} 内提醒 @({user_id})：{desc}", flush=True)
 
         for r in active:
             _schedule_one(r)
@@ -416,7 +423,7 @@ class SQLCheckpointAgentStreamingPlus:
 
                 # 计时器：群内 @ 提醒（异步非阻塞）
                 @tool
-                def set_timer(seconds: int, group_id: int, user_id: int, description: str) -> str:
+                def set_timer(seconds: int, group_id: int, user_id: int, description: str, answer: str) -> str:
                     """
                     设置一个异步计时器，在指定秒数后在当前群内 @ 当前用户并发送符合当前说话风格提醒文本。
 
@@ -424,7 +431,8 @@ class SQLCheckpointAgentStreamingPlus:
                         seconds (int): 延迟秒数（>=1）。
                         group_id (int): 当前Group。
                         user_id (int): 当前User_id。
-                        description (str): 符合当前prompt风格的提醒内容。
+                        description (str): 提供给工具的简要的提醒概括。
+                        answer (str): 符合当前说话风格的提醒内容。
 
                     Returns:
                         str: 是否创建成功的提示信息。
@@ -437,11 +445,12 @@ class SQLCheckpointAgentStreamingPlus:
                     assert isinstance(group_id, int) and group_id > 0, "group_id 必须为正整数"
                     assert isinstance(user_id, int) and user_id > 0, "user_id 必须为正整数"
                     assert isinstance(description, str) and description.strip(), "description 不能为空"
+                    assert isinstance(answer, str) and answer.strip(), "answer 不能为空"
 
                     # 在建立计时器前写入持久化存储（绝对时间戳）
                     ts = int(time.time()) + int(seconds)
                     self._reminder_store.add(
-                        {"ts": ts, "group_id": group_id, "user_id": user_id, "description": description}
+                        {"ts": ts, "group_id": group_id, "user_id": user_id, "description": description, "answer": answer}
                     )
 
                     def _send_group_at_message_later() -> None:
@@ -451,17 +460,18 @@ class SQLCheckpointAgentStreamingPlus:
                             from qq_group_bot import BotConfig, _send_group_at_message
 
                             cfg = BotConfig.from_env()
-                            text = f"[提醒]：{description}"
+                            text = f"[提醒]：{answer}"
                             _send_group_at_message(
                                 cfg.api_base, group_id, user_id, text, cfg.access_token
                             )
+                            print(f"[TimerTool] 计时器触发，已在群 {group_id} 内提醒 @({user_id})：{description}", flush=True)
                         except Exception as e:
                             # 打印到标准错误便于排查，不吞异常
                             sys.stderr.write(f"[TimerTool] 发送提醒失败：{e}\n")
                         finally:
                             # 成功或失败均尝试移除该记录，避免重复
                             try:
-                                self._reminder_store.remove_one(ts, group_id, user_id, description)
+                                self._reminder_store.remove_one(ts, group_id, user_id, description, answer)
                             except Exception as re:
                                 sys.stderr.write(f"[TimerTool] 移除记录失败：{re}\n")
 
