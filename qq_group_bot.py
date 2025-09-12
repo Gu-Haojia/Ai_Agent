@@ -153,6 +153,30 @@ def _send_group_msg(
             raise RuntimeError(f"send_group_msg HTTP {resp.status}")
 
 
+def _send_group_at_message(
+    api_base: str, group_id: int, at_qq: int, text: str, access_token: str = ""
+) -> None:
+    """
+    调用 OneBot HTTP API 在群内发送 @ 提醒消息。
+
+    Args:
+        api_base (str): NapCat/OneBot HTTP API 基地址。
+        group_id (int): 群号。
+        at_qq (int): 被 @ 的 QQ 号。
+        text (str): 文本内容（将放在 @ 之后）。
+        access_token (str): API Token，可为空。
+
+    Raises:
+        RuntimeError: 当 HTTP 响应码非 200 时抛出。
+    """
+    assert isinstance(group_id, int) and group_id > 0, "group_id 必须为正整数"
+    assert isinstance(at_qq, int) and at_qq > 0, "at_qq 必须为正整数"
+    assert isinstance(text, str), "text 必须为字符串"
+    # 复用发送群消息接口，使用 CQ 码进行 @
+    msg = f"[CQ:at,qq={at_qq}] {text}"
+    _send_group_msg(api_base, group_id, msg, access_token)
+
+
 def _parse_message_and_at(event: dict) -> tuple[str, bool]:
     """解析 NapCat 群消息，返回纯文本与是否@机器人。
 
@@ -449,7 +473,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
             # 为流式打印添加前缀标记到服务端日志，QQ 群内仅发送最终汇总
             self.agent.set_token_printer(lambda s: sys.stdout.write(s))
             # 轻量方案：在发给 Agent 的文本前加入说话人标识，提升区分度
-            model_input = f"User_id: [{user_id}]; User_name: {author}; Text: {text}"
+            model_input = f"Group_id: [{group_id}]; User_id: [{user_id}]; User_name: {author}; Text: {text}"
             answer = self.agent.chat_once_stream(
                 model_input, thread_id=self._thread_id_for(group_id)
             )
@@ -623,7 +647,9 @@ class QQBotHandler(BaseHTTPRequestHandler):
             try:
                 tid = self._thread_id_for(group_id)
                 tok, cnt = self.agent.count_tokens(thread_id=tid)
-                msg = f"当前线程消息条数={cnt}，估算 tokens={tok} (cl100k_base)"
+                SINGLE_PRICE=2 # cl100k_base 每 1M tokens 价格，单位美元
+                PRICE=tok/1000000*SINGLE_PRICE
+                msg = f"当前线程消息条数={cnt}，估算 tokens={tok} (cl100k_base)，下次输入费用约为 ${PRICE:.4f}"
             except AssertionError as e:
                 msg = f"统计失败：{e}"
             except Exception as e:

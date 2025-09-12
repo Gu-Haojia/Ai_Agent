@@ -16,6 +16,8 @@ import sys
 import time
 from dataclasses import dataclass
 from typing import Annotated, Callable, Iterable, Optional
+import json
+import threading
 
 from typing_extensions import TypedDict
 from langchain_core.tools import tool
@@ -72,7 +74,7 @@ def _cap20_messages(prev: list | None, new: list | object) -> list:
         list: 合并后保留最后 20 条的消息列表。
     """
     combined = add_messages(prev or [], new)
-    #print(f"[Debug] Merged messages count: {len(combined)}")
+    # print(f"[Debug] Merged messages count: {len(combined)}")
     return combined[-20:]
 
 
@@ -91,6 +93,122 @@ class AgentConfig:
     thread_id: str = "demo-plus"
     use_memory_ckpt: bool = False
     enable_tools: bool = False
+
+
+class _ReminderStore:
+    """
+    简单的提醒持久化存储（JSON 文件）。
+
+    结构：列表，每个元素为字典：
+        {"ts": int, "group_id": int, "user_id": int, "description": str}
+
+    文件路径可通过环境变量 `REMINDER_STORE_FILE` 覆盖，默认 `.qq_reminders.json`。
+    所有操作具备进程内线程安全（基于 `threading.Lock`）。
+    """
+
+    _LOCK = threading.Lock()
+
+    def __init__(self, path: str) -> None:
+        assert isinstance(path, str) and path.strip(), "持久化文件路径无效"
+        self._path = os.path.abspath(path)
+
+    def _read_all(self) -> list[dict]:
+        """读取全部记录；不存在返回空列表，格式异常抛出断言。"""
+        if not os.path.isfile(self._path):
+            return []
+        with open(self._path, "r", encoding="utf-8") as f:
+            raw = f.read()
+        if not raw.strip():
+            return []
+        data = json.loads(raw)
+        assert isinstance(data, list), "提醒存储文件格式应为列表"
+        return data
+
+    def _write_all(self, items: list[dict]) -> None:
+        """原子写入全部记录。"""
+        tmp = self._path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(items, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, self._path)
+
+    @staticmethod
+    def _validate(rec: dict) -> None:
+        ts = rec.get("ts")
+        gid = rec.get("group_id")
+        uid = rec.get("user_id")
+        desc = rec.get("description")
+        ans = rec.get("answer")
+        assert isinstance(ts, int) and ts > 0, "ts 必须为正整数时间戳"
+        assert isinstance(gid, int) and gid > 0, "group_id 必须为正整数"
+        assert isinstance(uid, int) and uid > 0, "user_id 必须为正整数"
+        assert isinstance(desc, str) and desc.strip(), "description 不能为空"
+        assert isinstance(ans, str) and ans.strip(), "answer 不能为空"
+
+    def add(self, rec: dict) -> None:
+        """追加一条提醒记录。"""
+        self._validate(rec)
+        with self._LOCK:
+            items = self._read_all()
+            items.append(
+                {
+                    "ts": int(rec["ts"]),
+                    "group_id": int(rec["group_id"]),
+                    "user_id": int(rec["user_id"]),
+                    "description": str(rec["description"]),
+                    "answer": str(rec["answer"]),
+                }
+            )
+            self._write_all(items)
+
+    def prune_and_get_active(self, now_ts: int) -> list[dict]:
+        """清理过期项并返回未过期记录（ts > now_ts）。"""
+        assert isinstance(now_ts, int) and now_ts >= 0
+        with self._LOCK:
+            items = self._read_all()
+            active: list[dict] = []
+            for r in items:
+                try:
+                    self._validate(r)
+                except AssertionError:
+                    # 跳过非法项
+                    continue
+                if int(r["ts"]) > now_ts:
+                    active.append(
+                        {
+                            "ts": int(r["ts"]),
+                            "group_id": int(r["group_id"]),
+                            "user_id": int(r["user_id"]),
+                            "description": str(r["description"]),
+                            "answer": str(r["answer"]),
+                        }
+                    )
+            # 覆盖写入仅保留有效项
+            self._write_all(active)
+            return active
+
+    def remove_one(
+        self, ts: int, group_id: int, user_id: int, description: str, answer: str
+    ) -> None:
+        """移除第一条与参数完全匹配的记录（若不存在则忽略）。"""
+        with self._LOCK:
+            items = self._read_all()
+            idx = -1
+            for i, r in enumerate(items):
+                try:
+                    if (
+                        int(r.get("ts")) == int(ts)
+                        and int(r.get("group_id")) == int(group_id)
+                        and int(r.get("user_id")) == int(user_id)
+                        and str(r.get("description")) == str(description)
+                        and str(r.get("answer")) == str(answer)
+                    ):
+                        idx = i
+                        break
+                except Exception:
+                    continue
+            if idx >= 0:
+                items.pop(idx)
+                self._write_all(items)
 
 
 class SQLCheckpointAgentStreamingPlus:
@@ -119,9 +237,68 @@ class SQLCheckpointAgentStreamingPlus:
 
         # 预先读取并缓存系统提示内容（从外部文件），避免每轮重复IO
         self._sys_msg_content: str = self._load_sys_msg_content()
+        # 提醒存储：用于计时器持久化
+        self._reminder_store = _ReminderStore(
+            os.environ.get("REMINDER_STORE_FILE", ".qq_reminders.json")
+        )
 
         self._graph = self._build_graph()
         self._printed_in_round: bool = False
+        # Agent 启动时恢复并调度尚未过期的提醒
+        self._restore_timers_from_store()
+
+    def _restore_timers_from_store(self) -> None:
+        """
+        从持久化存储加载未过期的提醒并建立计时器；
+        同时清理已过期项（ts <= now）。
+
+        Raises:
+            AssertionError: 当存储文件不可读或数据格式异常时抛出。
+        """
+        now_ts = int(time.time())
+        active = self._reminder_store.prune_and_get_active(now_ts)
+        if not active:
+            return
+
+        def _schedule_one(rec: dict) -> None:
+            ts = int(rec.get("ts"))
+            group_id = int(rec.get("group_id"))
+            user_id = int(rec.get("user_id"))
+            desc = str(rec.get("description"))
+            ans = str(rec.get("answer"))
+            remain = max(1, ts - int(time.time()))
+
+            def _fire() -> None:
+                try:
+                    from qq_group_bot import BotConfig, _send_group_at_message
+
+                    cfg = BotConfig.from_env()
+                    _send_group_at_message(
+                        cfg.api_base,
+                        group_id,
+                        user_id,
+                        f"提醒：{ans}",
+                        cfg.access_token,
+                    )
+                except Exception as e:
+                    sys.stderr.write(f"[TimerStore] 恢复提醒发送失败：{e}\n")
+                finally:
+                    # 发送后移除该记录，避免重复
+                    try:
+                        self._reminder_store.remove_one(ts, group_id, user_id, desc, ans)
+                    except Exception as re:
+                        sys.stderr.write(f"[TimerStore] 移除记录失败：{re}\n")
+
+            t = threading.Timer(remain, _fire)
+            t.daemon = True
+            t.start()
+            print(
+                f"[TimerStore] 恢复计时器：{remain} 秒后将在群 {group_id} 内提醒 @({user_id})：{desc}",
+                flush=True,
+            )
+
+        for r in active:
+            _schedule_one(r)
 
     def _load_sys_msg_content(self) -> str:
         """读取系统提示词内容。
@@ -257,6 +434,132 @@ class SQLCheckpointAgentStreamingPlus:
                     return f"{date_part} {time_part} | {weekday_en}/{weekday_zh} | TZ: {tzname} (UTC{offset_fmt})"
 
                 tools.append(datetime_now)
+
+                # 计时器：群内 @ 提醒（异步非阻塞）
+                @tool
+                def set_timer(
+                    seconds: int,
+                    group_id: int,
+                    user_id: int,
+                    description: str,
+                    answer: str,
+                ) -> str:
+                    """
+                    设置一个异步计时器，在指定秒数后在当前群内 @ 当前用户并发送符合当前说话风格提醒文本。默认时间基准：北京时间.
+                    如果收到绝对时间，请用repl_tool计算出距离现在的秒数后传入。
+
+                    Args:
+                        seconds (int): 延迟秒数（>=1）。
+                        group_id (int): 当前Group。
+                        user_id (int): 当前User_id。
+                        description (str): 提供给工具的简要的提醒概括。
+                        answer (str): 符合当前说话风格的提醒内容。
+
+                    Returns:
+                        str: 是否创建成功的提示信息。
+
+                    Raises:
+                        AssertionError: 当参数不合法时抛出。
+                    """
+                    # 参数校验（显式断言，禁止模糊降级）
+                    assert (
+                        isinstance(seconds, int) and seconds >= 1
+                    ), "seconds 必须为 >=1 的整数"
+                    assert (
+                        isinstance(group_id, int) and group_id > 0
+                    ), "group_id 必须为正整数"
+                    assert (
+                        isinstance(user_id, int) and user_id > 0
+                    ), "user_id 必须为正整数"
+                    assert (
+                        isinstance(description, str) and description.strip()
+                    ), "description 不能为空"
+                    assert isinstance(answer, str) and answer.strip(), "answer 不能为空"
+
+                    # 在建立计时器前写入持久化存储（绝对时间戳）
+                    ts = int(time.time()) + int(seconds)
+                    self._reminder_store.add(
+                        {
+                            "ts": ts,
+                            "group_id": group_id,
+                            "user_id": user_id,
+                            "description": description,
+                            "answer": answer,
+                        }
+                    )
+
+                    def _send_group_at_message_later() -> None:
+                        """到时后发送 @ 提醒（后台线程执行）。"""
+                        try:
+                            # 延迟导入以避免循环依赖；从 qq_bot 复用发送实现与配置解析
+                            from qq_group_bot import BotConfig, _send_group_at_message
+
+                            cfg = BotConfig.from_env()
+                            text = f"[提醒]：{answer}"
+                            _send_group_at_message(
+                                cfg.api_base, group_id, user_id, text, cfg.access_token
+                            )
+                            print(
+                                f"[TimerTool] 计时器触发，已在群 {group_id} 内提醒 @({user_id})：{description}",
+                                flush=True,
+                            )
+                        except Exception as e:
+                            # 打印到标准错误便于排查，不吞异常
+                            sys.stderr.write(f"[TimerTool] 发送提醒失败：{e}\n")
+                        finally:
+                            # 成功或失败均尝试移除该记录，避免重复
+                            try:
+                                self._reminder_store.remove_one(
+                                    ts, group_id, user_id, description, answer
+                                )
+                            except Exception as re:
+                                sys.stderr.write(f"[TimerTool] 移除记录失败：{re}\n")
+
+                    t = threading.Timer(seconds, _send_group_at_message_later)
+                    t.daemon = True  # 后台线程，不阻塞主流程
+                    t.start()
+                    print(
+                        f"[TimerTool] 已创建计时器：{seconds} 秒后将在群 {group_id} 内提醒 @({user_id})：{description}",
+                        flush=True,
+                    )
+                    return f"已创建计时器：{seconds} 秒后将在群 {group_id} 内提醒 @({user_id})：{description}"
+
+                tools.append(set_timer)
+
+                # 汇率Tool
+                @tool
+                def currency_tool(
+                    num: float, from_currency: str, to_currency: str
+                ) -> str:
+                    """
+                    汇率转换工具。
+
+                    Args:
+                        num (float): 数值，支持整数与小数。
+                        from_currency (str): 源货币代码，例如 "USD"、"CNY"。
+                        to_currency (str): 目标货币代码，例如 "CNY"、"USD"。
+
+                    Returns:
+                        str: 转换结果字符串，例如 "100 USD = 645.23 CNY"。
+
+                    Raises:
+                        ValueError: 当参数不合法或转换失败时抛出。
+                    """
+                    # 使用exchangerate-api.com的免费接口
+                    import requests
+
+                    url = f"https://v6.exchangerate-api.com/v6/YOUR-API-KEY/pair/{from_currency}/{to_currency}/{num}"
+                    response = requests.get(url)
+                    if response.status_code == 200:
+                        data = response.json()
+                        if data.get("result") == "success":
+                            return f"{num} {from_currency} = {data['conversion_rate']} {to_currency}"
+                        else:
+                            raise ValueError(f"汇率转换失败: {data.get('error-type')}")
+                    else:
+                        raise ValueError(f"汇率转换失败: {response.status_code}")
+
+                tools.append(currency_tool)
 
                 if os.environ.get("SERPAPI_API_KEY") and False:
                     from langchain_community.tools.google_finance import (
@@ -534,14 +837,14 @@ class SQLCheckpointAgentStreamingPlus:
         """
         cfg = {"configurable": {"thread_id": thread_id or self._config.thread_id}}
         states = list(self._graph.get_state_history(cfg))
-       #print(f"[Debug] Retrieved {len(states)} states for thread '{cfg['configurable']['thread_id']}'",flush=True)
-        #print(f"[Debug] states: {states}",flush=True)
+        # print(f"[Debug] Retrieved {len(states)} states for thread '{cfg['configurable']['thread_id']}'",flush=True)
+        # print(f"[Debug] states: {states}",flush=True)
         if not states:
             return []
         last = states[0]
-        #print(f"[Debug] Latest {last}",flush=True)
+        # print(f"[Debug] Latest {last}",flush=True)
         msgs: list = list(last.values.get("messages", []))
-        #print(f"[Debug] Latest state has {len(msgs)} messages",flush=True)
+        # print(f"[Debug] Latest state has {len(msgs)} messages",flush=True)
         return msgs
 
     def count_tokens(self, thread_id: Optional[str] = None) -> tuple[int, int]:
