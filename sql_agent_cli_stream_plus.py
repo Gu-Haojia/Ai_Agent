@@ -27,6 +27,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
+from langchain_core.messages import ToolMessage
 
 # ---- 环境校验：仅在首次需要时检查，避免重复消耗 ----
 _ENV_COMMON_CHECKED: bool = False
@@ -74,7 +75,13 @@ def _cap20_messages(prev: list | None, new: list | object) -> list:
         list: 合并后保留最后 20 条的消息列表。
     """
     combined = add_messages(prev or [], new)
-    # print(f"[Debug] Merged messages count: {len(combined)}")
+    start_msg = combined[-20] if len(combined) >= 20 else None
+    # print(isinstance(start_msg, ToolMessage), flush=True)
+    if isinstance(start_msg, ToolMessage):
+        # print(f"[Debug] Length of combined messages: {len(combined[-5:])}", flush=True)
+        return combined[-19:]
+    # print(f"[Debug] Merged messages: {combined}", flush=True)
+    # print(f"[Debug] Length of combined messages: {len(combined[-6:])}", flush=True)
     return combined[-20:]
 
 
@@ -277,7 +284,7 @@ class SQLCheckpointAgentStreamingPlus:
                         cfg.api_base,
                         group_id,
                         user_id,
-                        f"提醒：{ans}",
+                        f"[提醒]：{ans}",
                         cfg.access_token,
                     )
                 except Exception as e:
@@ -285,7 +292,9 @@ class SQLCheckpointAgentStreamingPlus:
                 finally:
                     # 发送后移除该记录，避免重复
                     try:
-                        self._reminder_store.remove_one(ts, group_id, user_id, desc, ans)
+                        self._reminder_store.remove_one(
+                            ts, group_id, user_id, desc, ans
+                        )
                     except Exception as re:
                         sys.stderr.write(f"[TimerStore] 移除记录失败：{re}\n")
 
@@ -376,7 +385,7 @@ class SQLCheckpointAgentStreamingPlus:
                 python_repl = PythonREPL()
                 repl_tool = Tool(
                     name="python_repl",
-                    description="一个REPL Python shell。使用它来执行python命令。输入应该是一个有效的python命令。如果你想看到一个值的输出，你应该用`print(...)`打印出来。你必须每次先执行完整的import语句，然后才能使用导入的模块。",
+                    description="一个REPL Python shell。使用它来执行python命令以及你所有的数学计算需求。输入应该是一个有效的python命令。如果你想看到一个值的输出，你应该用`print(...)`打印出来。你必须每次先执行完整的import语句，然后才能使用导入的模块。",
                     func=python_repl.run,
                 )
 
@@ -559,7 +568,8 @@ class SQLCheckpointAgentStreamingPlus:
                     else:
                         raise ValueError(f"汇率转换失败: {response.status_code}")
 
-                tools.append(currency_tool)
+                if False:  # 先关闭，避免误用
+                    tools.append(currency_tool)
 
                 if os.environ.get("SERPAPI_API_KEY") and False:
                     from langchain_community.tools.google_finance import (
@@ -614,7 +624,8 @@ class SQLCheckpointAgentStreamingPlus:
             try:
                 from langchain_core.messages import SystemMessage
 
-                sys_msg = SystemMessage(content=self._sys_msg_content)
+                append_msg = "你的数学计算必须repl_tool完成，不能直接生成结果。set_timer没有相对时间时，必须用repl_tool计算出距离现在的秒数后传入。"
+                sys_msg = SystemMessage(content=append_msg + self._sys_msg_content)
                 messages = [sys_msg] + list(state["messages"])  # 不修改原列表
             except Exception:
                 messages = state["messages"]
