@@ -647,7 +647,9 @@ class QQBotHandler(BaseHTTPRequestHandler):
             try:
                 tid = self._thread_id_for(group_id)
                 tok, cnt = self.agent.count_tokens(thread_id=tid)
-                msg = f"当前线程消息条数={cnt}，估算 tokens={tok} (cl100k_base)"
+                SINGLE_PRICE=2 # cl100k_base 每 1M tokens 价格，单位美元
+                PRICE=tok/1000000*SINGLE_PRICE
+                msg = f"当前线程消息条数={cnt}，估算 tokens={tok} (cl100k_base)，下次输入费用约为 ${PRICE:.4f}"
             except AssertionError as e:
                 msg = f"统计失败：{e}"
             except Exception as e:
