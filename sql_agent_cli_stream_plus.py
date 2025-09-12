@@ -264,13 +264,13 @@ class SQLCheckpointAgentStreamingPlus:
                 @tool
                 def set_timer(seconds: int, group_id: int, user_id: int, description: str) -> str:
                     """
-                    设置一个异步计时器，在指定秒数后在当前群内 @ 当前用户并发送提醒文本。
+                    设置一个异步计时器，在指定秒数后在当前群内 @ 当前用户并发送符合当前说话风格提醒文本。
 
                     Args:
                         seconds (int): 延迟秒数（>=1）。
                         group_id (int): 当前Group。
                         user_id (int): 当前User_id。
-                        description (str): 提醒内容描述。
+                        description (str): 符合当前prompt风格的提醒内容。
 
                     Returns:
                         str: 是否创建成功的提示信息。
@@ -291,7 +291,7 @@ class SQLCheckpointAgentStreamingPlus:
                             from qq_group_bot import BotConfig, _send_group_at_message
 
                             cfg = BotConfig.from_env()
-                            text = f"提醒：{description}"
+                            text = f"[提醒]：{description}"
                             _send_group_at_message(
                                 cfg.api_base, group_id, user_id, text, cfg.access_token
                             )
