@@ -120,8 +120,29 @@ class SQLCheckpointAgentStreamingPlus:
         # 预先读取并缓存系统提示内容（从外部文件），避免每轮重复IO
         self._sys_msg_content: str = self._load_sys_msg_content()
 
+        # 外部上下文（由调用方注入，例如 QQ 群上下文），供工具使用
+        # 键包含：group_id(int)、api_base(str)、access_token(str)
+        self._external_ctx: dict[str, object] = {}
+
         self._graph = self._build_graph()
         self._printed_in_round: bool = False
+
+    def set_external_context(self, group_id: int, api_base: str, access_token: str) -> None:
+        """
+        设置外部上下文（例如 QQ 群对话环境）。
+
+        Args:
+            group_id (int): 群号
+            api_base (str): OneBot/NapCat HTTP API 基地址
+            access_token (str): API 访问 Token，可为空
+        """
+        assert isinstance(group_id, int) and group_id > 0, "group_id 必须为正整数"
+        assert isinstance(api_base, str) and api_base.strip(), "api_base 不能为空"
+        self._external_ctx = {
+            "group_id": group_id,
+            "api_base": api_base.rstrip("/"),
+            "access_token": access_token or "",
+        }
 
     def _load_sys_msg_content(self) -> str:
         """读取系统提示词内容。
@@ -285,6 +306,69 @@ class SQLCheckpointAgentStreamingPlus:
             # 两种绑定：
             # - auto：允许模型自行决定是否调用工具（用于首轮/工具前）
             # - none：禁止工具，促使模型基于工具结果做总结（用于工具后）
+            # 自定义工具：计时器（QQ 群提醒）
+            if self._enable_tools:
+                import threading
+                import json as _json
+                from urllib.parse import urljoin as _urljoin
+                from urllib.request import Request as _Request, urlopen as _urlopen
+
+                @tool
+                def set_timer(seconds: int, user_id: int, description: str) -> str:
+                    """
+                    设置一个异步计时器，在指定秒数后向当前群内对该用户发送 @ 提醒。
+
+                    Args:
+                        seconds (int): 延迟秒数（>=1）
+                        user_id (int): 需要 @ 的 QQ 号
+                        description (str): 提醒内容描述
+
+                    Returns:
+                        str: 是否创建成功的提示信息
+
+                    Raises:
+                        AssertionError: 参数或外部上下文无效时抛出
+                    """
+                    # 参数校验（显式断言，不做模糊降级）
+                    assert isinstance(seconds, int) and seconds >= 1, "seconds 必须为 >=1 的整数"
+                    assert isinstance(user_id, int) and user_id > 0, "user_id 必须为正整数"
+                    assert isinstance(description, str) and description.strip(), "description 不能为空"
+
+                    # 读取外部上下文（由调用方在会话开始时注入）
+                    ctx = getattr(self, "_external_ctx", {}) or {}
+                    gid = ctx.get("group_id")
+                    api_base = ctx.get("api_base")
+                    token = ctx.get("access_token", "")
+                    assert isinstance(gid, int) and gid > 0, "外部上下文缺少有效的 group_id"
+                    assert isinstance(api_base, str) and api_base, "外部上下文缺少 api_base"
+
+                    def _send_group_at_message() -> None:
+                        """到时后发送 @ 提醒（后台线程执行）。"""
+                        try:
+                            url = _urljoin(api_base + "/", "send_group_msg")
+                            text = f"[CQ:at,qq={user_id}] 提醒：{description}"
+                            payload = {"group_id": gid, "message": text}
+                            headers = {"Content-Type": "application/json"}
+                            if token:
+                                headers["Authorization"] = f"Bearer {token}"
+                            req = _Request(
+                                url, data=_json.dumps(payload).encode("utf-8"), headers=headers
+                            )
+                            with _urlopen(req, timeout=15) as resp:
+                                # 若失败抛异常，由 except 捕获打印
+                                if resp.status != 200:
+                                    raise RuntimeError(f"send_group_msg HTTP {resp.status}")
+                        except Exception as e:
+                            # 不吞异常信息，打印到标准错误，便于定位
+                            sys.stderr.write(f"[TimerTool] 发送提醒失败：{e}\n")
+
+                    t = threading.Timer(seconds, _send_group_at_message)
+                    t.daemon = True  # 后台线程，不阻塞主进程
+                    t.start()
+                    return f"已创建计时器：{seconds} 秒后将提醒 @({user_id})：{description}"
+
+                tools.append(set_timer)
+
             llm_tools_auto = llm.bind_tools(tools) if tools else llm
             llm_tools_none = llm.bind_tools(tools, tool_choice="none") if tools else llm
             # - force：当用户显式要求搜索/检索等，强制调用 tavily_search

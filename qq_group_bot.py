@@ -448,6 +448,15 @@ class QQBotHandler(BaseHTTPRequestHandler):
             print("[Chat] Generating reply...")
             # 为流式打印添加前缀标记到服务端日志，QQ 群内仅发送最终汇总
             self.agent.set_token_printer(lambda s: sys.stdout.write(s))
+            # 注入当前会话上下文，供工具（如计时器）使用
+            try:
+                self.agent.set_external_context(
+                    group_id=group_id,
+                    api_base=self.bot_cfg.api_base,
+                    access_token=self.bot_cfg.access_token,
+                )
+            except Exception as _ctx_e:
+                sys.stderr.write(f"[QQBot] set_external_context 失败：{_ctx_e}\n")
             # 轻量方案：在发给 Agent 的文本前加入说话人标识，提升区分度
             model_input = f"User_id: [{user_id}]; User_name: {author}; Text: {text}"
             answer = self.agent.chat_once_stream(
