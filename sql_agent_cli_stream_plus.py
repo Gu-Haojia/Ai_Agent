@@ -446,6 +446,7 @@ class SQLCheckpointAgentStreamingPlus:
                 ) -> str:
                     """
                     设置一个异步计时器，在指定秒数后在当前群内 @ 当前用户并发送符合当前说话风格提醒文本。默认时间基准：北京时间.
+                    如果收到绝对时间，请用repl_tool计算出距离现在的秒数后传入。
 
                     Args:
                         seconds (int): 延迟秒数（>=1）。
