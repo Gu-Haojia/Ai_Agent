@@ -74,7 +74,7 @@ def _cap20_messages(prev: list | None, new: list | object) -> list:
         list: 合并后保留最后 20 条的消息列表。
     """
     combined = add_messages(prev or [], new)
-    #print(f"[Debug] Merged messages count: {len(combined)}")
+    # print(f"[Debug] Merged messages count: {len(combined)}")
     return combined[-20:]
 
 
@@ -137,7 +137,7 @@ class _ReminderStore:
         gid = rec.get("group_id")
         uid = rec.get("user_id")
         desc = rec.get("description")
-        ans= rec.get("answer")
+        ans = rec.get("answer")
         assert isinstance(ts, int) and ts > 0, "ts 必须为正整数时间戳"
         assert isinstance(gid, int) and gid > 0, "group_id 必须为正整数"
         assert isinstance(uid, int) and uid > 0, "user_id 必须为正整数"
@@ -149,13 +149,15 @@ class _ReminderStore:
         self._validate(rec)
         with self._LOCK:
             items = self._read_all()
-            items.append({
-                "ts": int(rec["ts"]),
-                "group_id": int(rec["group_id"]),
-                "user_id": int(rec["user_id"]),
-                "description": str(rec["description"]),
-                "answer": str(rec["answer"]),
-            })
+            items.append(
+                {
+                    "ts": int(rec["ts"]),
+                    "group_id": int(rec["group_id"]),
+                    "user_id": int(rec["user_id"]),
+                    "description": str(rec["description"]),
+                    "answer": str(rec["answer"]),
+                }
+            )
             self._write_all(items)
 
     def prune_and_get_active(self, now_ts: int) -> list[dict]:
@@ -171,18 +173,22 @@ class _ReminderStore:
                     # 跳过非法项
                     continue
                 if int(r["ts"]) > now_ts:
-                    active.append({
-                        "ts": int(r["ts"]),
-                        "group_id": int(r["group_id"]),
-                        "user_id": int(r["user_id"]),
-                        "description": str(r["description"]),
-                        "answer": str(r["answer"]),
-                    })
+                    active.append(
+                        {
+                            "ts": int(r["ts"]),
+                            "group_id": int(r["group_id"]),
+                            "user_id": int(r["user_id"]),
+                            "description": str(r["description"]),
+                            "answer": str(r["answer"]),
+                        }
+                    )
             # 覆盖写入仅保留有效项
             self._write_all(active)
             return active
 
-    def remove_one(self, ts: int, group_id: int, user_id: int, description: str, answer: str) -> None:
+    def remove_one(
+        self, ts: int, group_id: int, user_id: int, description: str, answer: str
+    ) -> None:
         """移除第一条与参数完全匹配的记录（若不存在则忽略）。"""
         with self._LOCK:
             items = self._read_all()
@@ -203,6 +209,7 @@ class _ReminderStore:
             if idx >= 0:
                 items.pop(idx)
                 self._write_all(items)
+
 
 class SQLCheckpointAgentStreamingPlus:
     """多轮工具 + 强化综合 的流式 Agent。"""
@@ -267,21 +274,28 @@ class SQLCheckpointAgentStreamingPlus:
 
                     cfg = BotConfig.from_env()
                     _send_group_at_message(
-                        cfg.api_base, group_id, user_id, f"提醒：{ans}", cfg.access_token
+                        cfg.api_base,
+                        group_id,
+                        user_id,
+                        f"提醒：{ans}",
+                        cfg.access_token,
                     )
                 except Exception as e:
                     sys.stderr.write(f"[TimerStore] 恢复提醒发送失败：{e}\n")
                 finally:
                     # 发送后移除该记录，避免重复
                     try:
-                        self._reminder_store.remove_one(ts, group_id, user_id, desc)
+                        self._reminder_store.remove_one(ts, group_id, user_id, desc, ans)
                     except Exception as re:
                         sys.stderr.write(f"[TimerStore] 移除记录失败：{re}\n")
 
             t = threading.Timer(remain, _fire)
             t.daemon = True
             t.start()
-            print(f"[TimerStore] 恢复计时器：{remain} 秒后将在群 {group_id} 内提醒 @({user_id})：{desc}", flush=True)
+            print(
+                f"[TimerStore] 恢复计时器：{remain} 秒后将在群 {group_id} 内提醒 @({user_id})：{desc}",
+                flush=True,
+            )
 
         for r in active:
             _schedule_one(r)
@@ -423,9 +437,15 @@ class SQLCheckpointAgentStreamingPlus:
 
                 # 计时器：群内 @ 提醒（异步非阻塞）
                 @tool
-                def set_timer(seconds: int, group_id: int, user_id: int, description: str, answer: str) -> str:
+                def set_timer(
+                    seconds: int,
+                    group_id: int,
+                    user_id: int,
+                    description: str,
+                    answer: str,
+                ) -> str:
                     """
-                    设置一个异步计时器，在指定秒数后在当前群内 @ 当前用户并发送符合当前说话风格提醒文本。
+                    设置一个异步计时器，在指定秒数后在当前群内 @ 当前用户并发送符合当前说话风格提醒文本。默认时间基准：北京时间.
 
                     Args:
                         seconds (int): 延迟秒数（>=1）。
@@ -441,16 +461,30 @@ class SQLCheckpointAgentStreamingPlus:
                         AssertionError: 当参数不合法时抛出。
                     """
                     # 参数校验（显式断言，禁止模糊降级）
-                    assert isinstance(seconds, int) and seconds >= 1, "seconds 必须为 >=1 的整数"
-                    assert isinstance(group_id, int) and group_id > 0, "group_id 必须为正整数"
-                    assert isinstance(user_id, int) and user_id > 0, "user_id 必须为正整数"
-                    assert isinstance(description, str) and description.strip(), "description 不能为空"
+                    assert (
+                        isinstance(seconds, int) and seconds >= 1
+                    ), "seconds 必须为 >=1 的整数"
+                    assert (
+                        isinstance(group_id, int) and group_id > 0
+                    ), "group_id 必须为正整数"
+                    assert (
+                        isinstance(user_id, int) and user_id > 0
+                    ), "user_id 必须为正整数"
+                    assert (
+                        isinstance(description, str) and description.strip()
+                    ), "description 不能为空"
                     assert isinstance(answer, str) and answer.strip(), "answer 不能为空"
 
                     # 在建立计时器前写入持久化存储（绝对时间戳）
                     ts = int(time.time()) + int(seconds)
                     self._reminder_store.add(
-                        {"ts": ts, "group_id": group_id, "user_id": user_id, "description": description, "answer": answer}
+                        {
+                            "ts": ts,
+                            "group_id": group_id,
+                            "user_id": user_id,
+                            "description": description,
+                            "answer": answer,
+                        }
                     )
 
                     def _send_group_at_message_later() -> None:
@@ -464,26 +498,67 @@ class SQLCheckpointAgentStreamingPlus:
                             _send_group_at_message(
                                 cfg.api_base, group_id, user_id, text, cfg.access_token
                             )
-                            print(f"[TimerTool] 计时器触发，已在群 {group_id} 内提醒 @({user_id})：{description}", flush=True)
+                            print(
+                                f"[TimerTool] 计时器触发，已在群 {group_id} 内提醒 @({user_id})：{description}",
+                                flush=True,
+                            )
                         except Exception as e:
                             # 打印到标准错误便于排查，不吞异常
                             sys.stderr.write(f"[TimerTool] 发送提醒失败：{e}\n")
                         finally:
                             # 成功或失败均尝试移除该记录，避免重复
                             try:
-                                self._reminder_store.remove_one(ts, group_id, user_id, description, answer)
+                                self._reminder_store.remove_one(
+                                    ts, group_id, user_id, description, answer
+                                )
                             except Exception as re:
                                 sys.stderr.write(f"[TimerTool] 移除记录失败：{re}\n")
 
                     t = threading.Timer(seconds, _send_group_at_message_later)
                     t.daemon = True  # 后台线程，不阻塞主流程
                     t.start()
-                    print(f"[TimerTool] 已创建计时器：{seconds} 秒后将在群 {group_id} 内提醒 @({user_id})：{description}", flush=True)
-                    return (
-                        f"已创建计时器：{seconds} 秒后将在群 {group_id} 内提醒 @({user_id})：{description}"
+                    print(
+                        f"[TimerTool] 已创建计时器：{seconds} 秒后将在群 {group_id} 内提醒 @({user_id})：{description}",
+                        flush=True,
                     )
+                    return f"已创建计时器：{seconds} 秒后将在群 {group_id} 内提醒 @({user_id})：{description}"
 
                 tools.append(set_timer)
+
+                # 汇率Tool
+                @tool
+                def currency_tool(
+                    num: float, from_currency: str, to_currency: str
+                ) -> str:
+                    """
+                    汇率转换工具。
+
+                    Args:
+                        num (float): 数值，支持整数与小数。
+                        from_currency (str): 源货币代码，例如 "USD"、"CNY"。
+                        to_currency (str): 目标货币代码，例如 "CNY"、"USD"。
+
+                    Returns:
+                        str: 转换结果字符串，例如 "100 USD = 645.23 CNY"。
+
+                    Raises:
+                        ValueError: 当参数不合法或转换失败时抛出。
+                    """
+                    # 使用exchangerate-api.com的免费接口
+                    import requests
+
+                    url = f"https://v6.exchangerate-api.com/v6/YOUR-API-KEY/pair/{from_currency}/{to_currency}/{num}"
+                    response = requests.get(url)
+                    if response.status_code == 200:
+                        data = response.json()
+                        if data.get("result") == "success":
+                            return f"{num} {from_currency} = {data['conversion_rate']} {to_currency}"
+                        else:
+                            raise ValueError(f"汇率转换失败: {data.get('error-type')}")
+                    else:
+                        raise ValueError(f"汇率转换失败: {response.status_code}")
+
+                tools.append(currency_tool)
 
                 if os.environ.get("SERPAPI_API_KEY") and False:
                     from langchain_community.tools.google_finance import (
@@ -761,14 +836,14 @@ class SQLCheckpointAgentStreamingPlus:
         """
         cfg = {"configurable": {"thread_id": thread_id or self._config.thread_id}}
         states = list(self._graph.get_state_history(cfg))
-       #print(f"[Debug] Retrieved {len(states)} states for thread '{cfg['configurable']['thread_id']}'",flush=True)
-        #print(f"[Debug] states: {states}",flush=True)
+        # print(f"[Debug] Retrieved {len(states)} states for thread '{cfg['configurable']['thread_id']}'",flush=True)
+        # print(f"[Debug] states: {states}",flush=True)
         if not states:
             return []
         last = states[0]
-        #print(f"[Debug] Latest {last}",flush=True)
+        # print(f"[Debug] Latest {last}",flush=True)
         msgs: list = list(last.values.get("messages", []))
-        #print(f"[Debug] Latest state has {len(msgs)} messages",flush=True)
+        # print(f"[Debug] Latest state has {len(msgs)} messages",flush=True)
         return msgs
 
     def count_tokens(self, thread_id: Optional[str] = None) -> tuple[int, int]:
