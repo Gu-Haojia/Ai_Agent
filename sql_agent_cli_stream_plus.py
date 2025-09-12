@@ -264,12 +264,12 @@ class SQLCheckpointAgentStreamingPlus:
                 @tool
                 def set_timer(seconds: int, group_id: int, user_id: int, description: str) -> str:
                     """
-                    设置一个异步计时器，在指定秒数后在指定群内 @ 指定用户并发送提醒文本。
+                    设置一个异步计时器，在指定秒数后在当前群内 @ 当前用户并发送提醒文本。
 
                     Args:
                         seconds (int): 延迟秒数（>=1）。
-                        group_id (int): 目标群号。
-                        user_id (int): 被 @ 的用户 QQ 号。
+                        group_id (int): 当前Group。
+                        user_id (int): 当前User_id。
                         description (str): 提醒内容描述。
 
                     Returns:
@@ -302,6 +302,7 @@ class SQLCheckpointAgentStreamingPlus:
                     t = threading.Timer(seconds, _send_group_at_message_later)
                     t.daemon = True  # 后台线程，不阻塞主流程
                     t.start()
+                    print(f"[TimerTool] 已创建计时器：{seconds} 秒后将在群 {group_id} 内提醒 @({user_id})：{description}", flush=True)
                     return (
                         f"已创建计时器：{seconds} 秒后将在群 {group_id} 内提醒 @({user_id})：{description}"
                     )

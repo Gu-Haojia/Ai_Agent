@@ -473,7 +473,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
             # 为流式打印添加前缀标记到服务端日志，QQ 群内仅发送最终汇总
             self.agent.set_token_printer(lambda s: sys.stdout.write(s))
             # 轻量方案：在发给 Agent 的文本前加入说话人标识，提升区分度
-            model_input = f"User_id: [{user_id}]; User_name: {author}; Text: {text}"
+            model_input = f"Group_id: [{group_id}]; User_id: [{user_id}]; User_name: {author}; Text: {text}"
             answer = self.agent.chat_once_stream(
                 model_input, thread_id=self._thread_id_for(group_id)
             )
