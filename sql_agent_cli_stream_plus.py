@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import Annotated, Callable, Iterable, Optional
 import json
 import threading
+import requests
 
 from typing_extensions import TypedDict
 from langchain_core.tools import tool
@@ -555,7 +556,6 @@ class SQLCheckpointAgentStreamingPlus:
                         ValueError: 当参数不合法或转换失败时抛出。
                     """
                     # 使用exchangerate-api.com的免费接口
-                    import requests
 
                     url = f"https://v6.exchangerate-api.com/v6/YOUR-API-KEY/pair/{from_currency}/{to_currency}/{num}"
                     response = requests.get(url)
@@ -567,6 +567,41 @@ class SQLCheckpointAgentStreamingPlus:
                             raise ValueError(f"汇率转换失败: {data.get('error-type')}")
                     else:
                         raise ValueError(f"汇率转换失败: {response.status_code}")
+
+                
+                @tool
+                def nbnhhsh(text: str) -> str:
+                    """
+                    查询输入文本中的数字或字母缩写释义。
+
+                    Args:
+                        text: 包含要查询的缩写的数字或字母字符串，可以是完整句子，函数会自动提取缩写。eg. "yyds", "17900".
+                    Returns:
+                        返回缩写及其对应的释义（若未收录则提示 "暂未收录"）。
+                    """
+                    # 提取缩写
+                    import re
+                    match_text = ",".join(re.findall(r"[a-z0-9]+", text, flags=re.I))
+                    if not match_text:
+                        return f"输入文本「{text}」不包含缩写词。"
+
+                    url = "https://lab.magiconch.com/api/nbnhhsh/guess"
+                    resp = requests.post(url, json={"text": match_text}, timeout=5)
+
+                    if resp.status_code != 200:
+                        return f"API 调用失败: {resp.status_code}"
+
+                    data = resp.json()
+                    output_lines = []
+                    for item in data:
+                        name = item.get("name", "")
+                        trans = item.get("trans", []) or ["暂未收录"]
+                        for t in trans:
+                            output_lines.append(f"{name} = {t}")
+
+                    return "\n".join(output_lines) if output_lines else "未找到释义"
+                tools.append(nbnhhsh)
+
 
                 if False:  # 先关闭，避免误用
                     tools.append(currency_tool)
