@@ -24,7 +24,9 @@ from typing_extensions import TypedDict
 from langchain_core.tools import tool
 from langchain.chat_models import init_chat_model
 from langgraph.checkpoint.postgres import PostgresSaver
+from langgraph.store.postgres import PostgresStore
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.store.memory import InMemoryStore
 from langgraph.graph import START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
@@ -807,16 +809,20 @@ class SQLCheckpointAgentStreamingPlus:
 
         if self._config.use_memory_ckpt:
             self._saver = MemorySaver()
-            return builder.compile(checkpointer=self._saver)
+            self._store = InMemoryStore()
+            return builder.compile(checkpointer=self._saver, store=self._store)
 
         try:
             self._saver_cm = PostgresSaver.from_conn_string(self._config.pg_conn)
             self._saver = self._saver_cm.__enter__()
             self._saver.setup()
+            self._store_cm = PostgresStore.from_conn_string(self._config.pg_conn)
+            self._store = self._store_cm.__enter__()
+            self._store.setup()
         except Exception as exc:
-            raise RuntimeError(f"PostgresSaver 初始化失败：{exc}")
+            raise RuntimeError(f"Postgres 初始化失败：{exc}")
 
-        return builder.compile(checkpointer=self._saver)
+        return builder.compile(checkpointer=self._saver, store=self._store)
 
     # --------------- 外部 API ---------------
     def set_token_printer(self, fn: Callable[[str], None]) -> None:
@@ -849,10 +855,10 @@ class SQLCheckpointAgentStreamingPlus:
                     continue
                 m = ev["messages"][-1]
                 label = self._role_label(m)
-                if label == "Tool" and not tool_notified:
+                if label == "Tool": #and not tool_notified:
                     name = getattr(m, "name", None) or "tool"
                     print(f"Tool: Calling tool [{name}]")
-                    tool_notified = True
+                    #tool_notified = True
                 if label == "Agent":
                     txt = getattr(m, "content", "")
                     if isinstance(txt, str) and txt:
@@ -868,6 +874,21 @@ class SQLCheckpointAgentStreamingPlus:
         return last_text
 
     # --------------- 统计/工具 ---------------
+    def del_latest_messages(self, thread_id: Optional[str] = None) -> None:
+        """
+        删除指定线程的最新检查点消息列表。
+
+        Args:
+            thread_id (Optional[str]): 线程 ID，默认读取当前配置中的线程。
+
+        Raises:
+            AssertionError: 当内部图或检查点访问异常时抛出。
+        """
+
+
+
+        
+
     def get_latest_messages(self, thread_id: Optional[str] = None) -> list:
         """
         获取指定线程的最新检查点消息列表。

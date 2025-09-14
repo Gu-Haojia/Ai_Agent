@@ -216,6 +216,7 @@ def _parse_message_and_at(event: dict) -> tuple[str, bool]:
         at_me = f"[CQ:at,qq={self_id}]" in raw
     return (raw, at_me)
 
+
 def _extract_sender_name(event: dict) -> str:
     """从事件中提取发送者名称（不额外请求 API）。
 
@@ -297,11 +298,12 @@ class QQBotHandler(BaseHTTPRequestHandler):
                             m[int(k)] = str(v)
                     # 一致性检查：仅在本次运行的第一次做
                     if not cls._env_consistency_checked:
+
                         def _env_part_from_full(gid: int, tid: str) -> str:
                             prefix = f"qq-napcat-{gid}-"
                             if not tid.startswith(prefix):
                                 return ""
-                            tail = tid[len(prefix):]
+                            tail = tid[len(prefix) :]
                             # 若末段为纯数字（时间戳），则去掉末段
                             parts = tail.split("-")
                             if parts and parts[-1].isdigit():
@@ -318,14 +320,20 @@ class QQBotHandler(BaseHTTPRequestHandler):
                             cls._group_threads = {}
                             cls._env_consistency_checked = True
                             cls.save_thread_store()
-                            print(f"[QQBot] Thread store cleared due to env mismatch: {path}")
+                            print(
+                                f"[QQBot] Thread store cleared due to env mismatch: {path}"
+                            )
                         else:
                             cls._group_threads = m
                             cls._env_consistency_checked = True
-                            print(f"[QQBot] Loaded group threads from {path}: {len(m)} groups")
+                            print(
+                                f"[QQBot] Loaded group threads from {path}: {len(m)} groups"
+                            )
                     else:
                         cls._group_threads = m
-                        print(f"[QQBot] Loaded group threads from {path}: {len(m)} groups (env check skipped)")
+                        print(
+                            f"[QQBot] Loaded group threads from {path}: {len(m)} groups (env check skipped)"
+                        )
         except Exception as e:
             sys.stderr.write(f"[QQBot] Load group threads failed: {e}\n")
 
@@ -468,7 +476,9 @@ class QQBotHandler(BaseHTTPRequestHandler):
         try:
             # 终端打印服务消息
             author = _extract_sender_name(event)
-            print(f"[Chat] Request get: Group {group_id} Id {user_id} User {author}: {text}")
+            print(
+                f"[Chat] Request get: Group {group_id} Id {user_id} User {author}: {text}"
+            )
             print("[Chat] Generating reply...")
             # 为流式打印添加前缀标记到服务端日志，QQ 群内仅发送最终汇总
             self.agent.set_token_printer(lambda s: sys.stdout.write(s))
@@ -490,7 +500,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
         # 发送回群
         try:
             # 轻量方案：使用 CQ at 前缀 @ 该用户，便于区分接收者
-            #at_prefix = f"[CQ:at,qq={user_id}] "
+            # at_prefix = f"[CQ:at,qq={user_id}] "
             _send_group_msg(
                 self.bot_cfg.api_base, group_id, answer, self.bot_cfg.access_token
             )
@@ -515,7 +525,9 @@ class QQBotHandler(BaseHTTPRequestHandler):
         """
         if group_id in self._group_threads:
             return self._group_threads[group_id]
-        new_tid = f"qq-napcat-{group_id}-{self.agent._config.thread_id}-{int(time.time())}"
+        new_tid = (
+            f"qq-napcat-{group_id}-{self.agent._config.thread_id}-{int(time.time())}"
+        )
         self._group_threads[group_id] = new_tid
         QQBotHandler.save_thread_store()
         return new_tid
@@ -563,7 +575,8 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 "3) /switch <name> — 切换到 <name> 并重建 Agent\n"
                 "4) /clear — 为当前群新建对话线程\n"
                 "5) /whoami — 你是？\n"
-                "6) /token — 输出当前 messages 的 token 数"
+                "6) /token — 输出当前 messages 的 token 数\n"
+                "7) /forget - 清除上下文"
             )
             _send_group_msg(
                 self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
@@ -615,6 +628,18 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
             )
             return True
+        
+        if cmd == "/forget" and len(parts) == 1:
+            tid = self._thread_id_for(group_id)
+            try:
+                self.agent.del_latest_messages(thread_id=tid)
+                msg = "已清除当前线程的上下文记忆。"
+            except Exception as e:
+                msg = f"清除失败（内部错误）：{e}"
+            _send_group_msg(
+                self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
+            )
+            return True
 
         if cmd == "/whoami" and len(parts) == 1:
             # 1) 读取当前系统提示文件名（不泄露全文）
@@ -641,14 +666,14 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 self.bot_cfg.api_base, group_id, combined, self.bot_cfg.access_token
             )
             return True
-        
+
         if cmd == "/token" and len(parts) == 1:
             # 统计当前群对应线程的消息 token 数
             try:
                 tid = self._thread_id_for(group_id)
                 tok, cnt = self.agent.count_tokens(thread_id=tid)
-                SINGLE_PRICE=2 # cl100k_base 每 1M tokens 价格，单位美元
-                PRICE=tok/1000000*SINGLE_PRICE
+                SINGLE_PRICE = 2  # cl100k_base 每 1M tokens 价格，单位美元
+                PRICE = tok / 1000000 * SINGLE_PRICE
                 msg = f"当前线程消息条数={cnt}，估算 tokens={tok} (cl100k_base)，下次输入费用约为 ${PRICE:.4f}"
             except AssertionError as e:
                 msg = f"统计失败：{e}"
@@ -658,7 +683,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
             )
             return True
-        
+
         return False
 
 
@@ -682,7 +707,9 @@ def main() -> None:
         ".venv"
     ), "必须先激活虚拟环境 (.venv)。"
 
-    print('--------------------------------------------------------------------------------------------------------')
+    print(
+        "--------------------------------------------------------------------------------------------------------"
+    )
     bot_cfg = BotConfig.from_env()
     agent = _build_agent_from_env()
 
@@ -699,7 +726,9 @@ def main() -> None:
     )
     print("[QQBot] Allowed command users:", bot_cfg.cmd_allowed_users or "ALL")
     print("[QQBot] Bot now started, press Ctrl+C to stop.")
-    print('--------------------------------------------------------------------------------------------------------')
+    print(
+        "--------------------------------------------------------------------------------------------------------"
+    )
     try:
         server.serve_forever(poll_interval=0.5)
     except KeyboardInterrupt:
