@@ -884,10 +884,37 @@ class SQLCheckpointAgentStreamingPlus:
         Raises:
             AssertionError: 当内部图或检查点访问异常时抛出。
         """
+        # 前置断言：图已构建
+        assert hasattr(self, "_graph") and self._graph is not None, "图未初始化。"
 
+        # 读取该线程的最新检查点（get_state_history 通常是最近在前）
+        cfg_thread = {"configurable": {"thread_id": thread_id or self._config.thread_id}}
+        try:
+            states = list(self._graph.get_state_history(cfg_thread))
+        except Exception as e:  # pragma: no cover
+            raise AssertionError(f"读取检查点历史失败：{e}") from e
 
+        # 基准 config：有历史则以“最新检查点”的 config 作为基准；否则以线程配置为基准
+        base_cfg = states[0].config if states else cfg_thread
 
-        
+        # 使用 LangGraph 的删除语义：提交一个 RemoveMessage(id='__remove_all__')
+        # 由于本类的 reducer 为 _cap20_messages（内部基于 add_messages），
+        # 这会将消息列表清空并生成一个新的检查点，兼容内存/数据库两种 checkpointer。
+        try:
+            from langchain_core.messages import RemoveMessage
+            from langgraph.graph.message import REMOVE_ALL_MESSAGES
+        except Exception as e:  # pragma: no cover
+            raise AssertionError("缺少依赖：请确保已安装 langchain-core 与 langgraph。") from e
+
+        try:
+            # 指定 as_node=START，避免触发 chatbot 上的 tools_condition 条件边读取 messages
+            self._graph.update_state(
+                base_cfg,
+                {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES)]},
+                as_node=START,
+            )
+        except Exception as e:  # pragma: no cover
+            raise AssertionError(f"清空最新消息失败：{e}") from e
 
     def get_latest_messages(self, thread_id: Optional[str] = None) -> list:
         """
