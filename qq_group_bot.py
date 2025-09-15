@@ -279,6 +279,10 @@ class QQBotHandler(BaseHTTPRequestHandler):
     _group_threads: dict[int, str] = {}
     _thread_store_file: str = ""
     _env_consistency_checked: bool = False  # 本次运行仅检查一次
+    # 群 -> 持久记忆命名空间 映射，与线程隔离相似
+    _group_namespaces: dict[int, str] = {}
+    _ns_store_file: str = ""
+    _env_ns_checked: bool = False
 
     @classmethod
     def setup_thread_store(cls, path: str, current_env_tid: str) -> None:
@@ -356,6 +360,81 @@ class QQBotHandler(BaseHTTPRequestHandler):
             os.replace(tmp, cls._thread_store_file)
         except Exception as e:
             sys.stderr.write(f"[QQBot] save group threads failed: {e}\n")
+
+    @classmethod
+    def setup_namespace_store(cls, path: str, current_env_store_id: str) -> None:
+        """
+        设置并加载群记忆命名空间映射配置；首次执行时做环境一致性检查。
+
+        规则：当发现任何保存的 namespace 与当前 STORE_ID 前缀不一致时，清空并覆盖保存文件。
+
+        Args:
+            path (str): 配置文件路径
+            current_env_store_id (str): 当前环境变量提供的持久记忆 store_id
+        """
+        cls._ns_store_file = path
+        try:
+            if os.path.isfile(path):
+                with open(path, "r", encoding="utf-8") as f:
+                    raw = f.read()
+                data = {} if not (raw and raw.strip()) else json.loads(raw)
+                if isinstance(data, dict):
+                    m: dict[int, str] = {}
+                    for k, v in data.items():
+                        if str(k).isdigit() and isinstance(v, (str, int)):
+                            m[int(k)] = str(v)
+                    if not cls._env_ns_checked:
+
+                        def _env_part_from_ns(gid: int, ns: str) -> str:
+                            prefix = f"qq-store-{gid}-"
+                            if not ns.startswith(prefix):
+                                return ""
+                            tail = ns[len(prefix) :]
+                            parts = tail.split("-")
+                            if parts and parts[-1].isdigit():
+                                return "-".join(parts[:-1])
+                            return tail
+
+                        mismatch = False
+                        for gid, ns in m.items():
+                            env_part = _env_part_from_ns(gid, ns)
+                            if env_part and env_part != current_env_store_id:
+                                mismatch = True
+                                break
+                        if mismatch:
+                            cls._group_namespaces = {}
+                            cls._env_ns_checked = True
+                            cls.save_namespace_store()
+                            print(
+                                f"[QQBot] Namespace store cleared due to env mismatch: {path}"
+                            )
+                        else:
+                            cls._group_namespaces = m
+                            cls._env_ns_checked = True
+                            print(
+                                f"[QQBot] Loaded group namespaces from {path}: {len(m)} groups"
+                            )
+                    else:
+                        cls._group_namespaces = m
+                        print(
+                            f"[QQBot] Loaded group namespaces from {path}: {len(m)} groups (env check skipped)"
+                        )
+        except Exception as e:
+            sys.stderr.write(f"[QQBot] Load group namespaces failed: {e}\n")
+
+    @classmethod
+    def save_namespace_store(cls) -> None:
+        """保存 `_group_namespaces` 到配置文件（若已设置路径）。"""
+        if not cls._ns_store_file:
+            return
+        try:
+            body = {str(k): str(v) for k, v in cls._group_namespaces.items()}
+            tmp = cls._ns_store_file + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(body, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, cls._ns_store_file)
+        except Exception as e:
+            sys.stderr.write(f"[QQBot] save group namespaces failed: {e}\n")
 
     def _send_json(self, code: int, obj: dict) -> None:
         data = json.dumps(obj, ensure_ascii=False).encode("utf-8")
@@ -493,6 +572,10 @@ class QQBotHandler(BaseHTTPRequestHandler):
             print("[Chat] Generating reply...")
             # 为流式打印添加前缀标记到服务端日志，QQ 群内仅发送最终汇总
             self.agent.set_token_printer(lambda s: sys.stdout.write(s))
+            # 设置当前群的持久记忆命名空间（langmem 工具使用）
+            ns = self._namespace_for(group_id)
+            self.agent.set_memory_namespace(ns)
+            os.environ["LANGMEM_NAMESPACE"] = ns
             # 轻量方案：在发给 Agent 的文本前加入说话人标识，提升区分度
             model_input = f"Group_id: [{group_id}]; User_id: [{user_id}]; User_name: {author}; Text: {text}"
             answer = self.agent.chat_once_stream(
@@ -543,6 +626,24 @@ class QQBotHandler(BaseHTTPRequestHandler):
         QQBotHandler.save_thread_store()
         return new_tid
 
+    def _namespace_for(self, group_id: int) -> str:
+        """返回当前群使用的持久记忆命名空间；若缺失则创建并保存。
+
+        Args:
+            group_id (int): 群号
+
+        Returns:
+            str: 命名空间
+        """
+        if group_id in self._group_namespaces:
+            return self._group_namespaces[group_id]
+        new_ns = (
+            f"qq-store-{group_id}-{self.agent._config.store_id}-{int(time.time())}"
+        )
+        self._group_namespaces[group_id] = new_ns
+        QQBotHandler.save_namespace_store()
+        return new_ns
+
     def _handle_commands(self, group_id: int, user_id: int, text: str) -> bool:
         """处理内部命令。
 
@@ -586,10 +687,11 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 "1) /cmd — 显示命令列表\n"
                 "2) /switch — 列出可用 prompts\n"
                 "3) /switch <name> — 切换到 <name> 并重建 Agent\n"
-                "4) /clear — 为当前群新建对话线程\n"
+                "4) /clear — 为当前群新建对话线程和长期记忆\n"
                 "5) /whoami — 你是？\n"
                 "6) /token — 输出当前 messages 的 token 数\n"
-                "7) /forget - 清除上下文"
+                "7) /forget - 清除上下文\n"
+                "8) /rmdata - 仅新建当前群的长期记忆命名空间"
             )
             _send_group_msg(
                 self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
@@ -636,7 +738,22 @@ class QQBotHandler(BaseHTTPRequestHandler):
             new_tid = f"qq-napcat-{group_id}-{self.agent._config.thread_id}-{int(time.time())}"
             self._group_threads[group_id] = new_tid
             QQBotHandler.save_thread_store()
-            msg = f"已为当前群新建线程：{new_tid}"
+            # 同时新建长期记忆命名空间
+            new_ns = f"qq-store-{group_id}-{self.agent._config.store_id}-{int(time.time())}"
+            self._group_namespaces[group_id] = new_ns
+            QQBotHandler.save_namespace_store()
+            msg = f"已为当前群新建线程：{new_tid}\n已新建长期记忆命名空间：{new_ns}"
+            _send_group_msg(
+                self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
+            )
+            return True
+
+        if cmd == "/rmdata" and len(parts) == 1:
+            # 仅新建长期记忆命名空间
+            new_ns = f"qq-store-{group_id}-{self.agent._config.store_id}-{int(time.time())}"
+            self._group_namespaces[group_id] = new_ns
+            QQBotHandler.save_namespace_store()
+            msg = f"已新建长期记忆命名空间：{new_ns}"
             _send_group_msg(
                 self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
             )
@@ -705,9 +822,15 @@ def _build_agent_from_env() -> SQLCheckpointAgentStreamingPlus:
     model = os.environ.get("MODEL_NAME", "openai:gpt-4o-mini")
     pg = os.environ.get("LANGGRAPH_PG", "")
     thread = os.environ.get("THREAD_ID", "qq-napcat-demo")
+    store_id = os.environ.get("STORE_ID", "").strip()
+    assert store_id, "必须通过环境变量 STORE_ID 提供持久记忆的 store_id。"
     use_memory = os.environ.get("DRY_RUN") == "1" or not bool(pg)
     cfg = AgentConfig(
-        model_name=model, pg_conn=pg, thread_id=thread, use_memory_ckpt=use_memory
+        model_name=model,
+        pg_conn=pg,
+        thread_id=thread,
+        use_memory_ckpt=use_memory,
+        store_id=store_id,
     )
     agent = SQLCheckpointAgentStreamingPlus(cfg)
     return agent
@@ -729,13 +852,16 @@ def main() -> None:
     # 启动时加载群线程映射配置（仅保存/加载 _group_threads 字典）
     thread_store = os.environ.get("THREAD_STORE_FILE", ".qq_group_threads.json")
     QQBotHandler.setup_thread_store(thread_store, agent._config.thread_id)
+    # 启动时加载群持久记忆命名空间映射配置
+    ns_store = os.environ.get("MEMORY_STORE_FILE", ".qq_group_memnames.json")
+    QQBotHandler.setup_namespace_store(ns_store, agent._config.store_id)
 
     QQBotHandler.bot_cfg = bot_cfg
     QQBotHandler.agent = agent
 
     server = ThreadingHTTPServer((bot_cfg.host, bot_cfg.port), QQBotHandler)
     print(
-        f"[QQBot] Listening http://{bot_cfg.host}:{bot_cfg.port} api={bot_cfg.api_base} groups={bot_cfg.allowed_groups or 'ALL'} blacklist={bot_cfg.blacklist_groups or 'NONE'} thread={agent._config.thread_id} model={agent._config.model_name} dry_run={'YES' if agent._config.use_memory_ckpt else 'NO'} store={thread_store}"
+        f"[QQBot] Listening http://{bot_cfg.host}:{bot_cfg.port} api={bot_cfg.api_base} groups={bot_cfg.allowed_groups or 'ALL'} blacklist={bot_cfg.blacklist_groups or 'NONE'} thread={agent._config.thread_id} model={agent._config.model_name} dry_run={'YES' if agent._config.use_memory_ckpt else 'NO'} store={thread_store} mem_store={ns_store} store_id={agent._config.store_id}"
     )
     print("[QQBot] Allowed command users:", bot_cfg.cmd_allowed_users or "ALL")
     print("[QQBot] Bot now started, press Ctrl+C to stop.")
