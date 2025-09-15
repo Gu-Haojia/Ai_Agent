@@ -63,6 +63,28 @@ def _ensure_openai_env_once() -> None:
 
 # 说明：严禁在代码中硬编码密钥；请通过环境变量注入：
 
+def _ensure_typing_notrequired() -> None:
+    """
+    在 Python 3.11 以下环境中为 `typing` 注入 `NotRequired`，
+    以兼容依赖包（如 langmem）在导入时直接访问 `typing.NotRequired` 的场景。
+
+    说明：
+    - Python 3.11 起 `typing.NotRequired` 才在标准库提供；
+    - 对于 3.10 及以下，尝试从 `typing_extensions` 导入并注入到 `typing`。
+    - 若注入失败，不抛出异常，让上层导入逻辑自行处理（我们仍然优先推荐升级到 3.11+）。
+    """
+    import sys as _sys
+    if _sys.version_info >= (3, 11):
+        return
+    try:
+        import typing as _typing
+        if not hasattr(_typing, "NotRequired"):
+            from typing_extensions import NotRequired as _NR  # type: ignore
+            setattr(_typing, "NotRequired", _NR)
+    except Exception:
+        # 不中断流程，保持后续导入自行决定是否失败
+        pass
+
 
 def _cap20_messages(prev: list | None, new: list | object) -> list:
     """基于内置 `add_messages` 的长度控制合并器：仅保留最近 20 条。
@@ -557,14 +579,17 @@ class SQLCheckpointAgentStreamingPlus:
 
                 # 持久记忆：langmem 工具（依官方 API 使用命名空间 + runtime config）
                 try:
+                    # 兼容 Python 3.10：部分 langmem 版本在导入时依赖 typing.NotRequired
+                    _ensure_typing_notrequired()
                     from langmem import create_manage_memory_tool, create_search_memory_tool  # type: ignore
 
                     # 命名空间使用占位符，运行时通过 config["configurable"]["langgraph_user_id"] 注入
                     ns_tpl = ("memories", "{langgraph_user_id}")
                     tools.append(create_manage_memory_tool(namespace=ns_tpl))
                     tools.append(create_search_memory_tool(namespace=ns_tpl))
-                except Exception:
+                except Exception as e:
                     # 未安装或失败时跳过，不影响其它工具
+                    print(f"[Warn] langmem 工具加载失败，跳过。错误信息：{e}", flush=True)
                     pass
 
                 # 汇率Tool
