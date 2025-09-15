@@ -85,6 +85,7 @@ class BotConfig:
     secret: str = ""
     access_token: str = ""
     allowed_groups: tuple[int, ...] = ()
+    blacklist_groups: tuple[int, ...] = ()
     cmd_allowed_users: tuple[int, ...] = ()  # 命令白名单用户（为空表示放行）
 
     @staticmethod
@@ -100,6 +101,10 @@ class BotConfig:
         groups: tuple[int, ...] = ()
         if groups_env:
             groups = tuple(int(x) for x in groups_env.split(",") if x.strip().isdigit())
+        blacklist_env = os.environ.get("BLACKLIST_GROUPS", "").strip()
+        blacklist: tuple[int, ...] = ()
+        if blacklist_env:
+            blacklist = tuple(int(x) for x in blacklist_env.split(",") if x.strip().isdigit())
         # 命令白名单（逗号分隔 QQ 号），为空表示放行
         cmd_env = os.environ.get("CMD_ALLOWED_USERS", "").strip()
         cmd_allowed: tuple[int, ...] = ()
@@ -114,6 +119,7 @@ class BotConfig:
             secret=secret,
             access_token=access_token,
             allowed_groups=groups,
+            blacklist_groups=blacklist,
             cmd_allowed_users=cmd_allowed,
         )
         # 基础校验
@@ -461,6 +467,11 @@ class QQBotHandler(BaseHTTPRequestHandler):
             self._send_no_content()
             return
 
+        # 群黑名单
+        if self.bot_cfg.blacklist_groups and group_id in self.bot_cfg.blacklist_groups:
+            self._send_no_content()
+            return
+
         # 仅在被 @ 机器人时响应
         if not at_me:
             self._send_no_content()
@@ -722,7 +733,7 @@ def main() -> None:
 
     server = ThreadingHTTPServer((bot_cfg.host, bot_cfg.port), QQBotHandler)
     print(
-        f"[QQBot] Listening http://{bot_cfg.host}:{bot_cfg.port} api={bot_cfg.api_base} groups={bot_cfg.allowed_groups or 'ALL'} thread={agent._config.thread_id} model={agent._config.model_name} dry_run={'YES' if agent._config.use_memory_ckpt else 'NO'} store={thread_store}"
+        f"[QQBot] Listening http://{bot_cfg.host}:{bot_cfg.port} api={bot_cfg.api_base} groups={bot_cfg.allowed_groups or 'ALL'} blacklist={bot_cfg.blacklist_groups or 'NONE'} thread={agent._config.thread_id} model={agent._config.model_name} dry_run={'YES' if agent._config.use_memory_ckpt else 'NO'} store={thread_store}"
     )
     print("[QQBot] Allowed command users:", bot_cfg.cmd_allowed_users or "ALL")
     print("[QQBot] Bot now started, press Ctrl+C to stop.")
