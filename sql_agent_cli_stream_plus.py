@@ -555,100 +555,16 @@ class SQLCheckpointAgentStreamingPlus:
 
                 tools.append(set_timer)
 
-                # 持久记忆：langmem 工具（如可用）
+                # 持久记忆：langmem 工具（依官方 API 使用命名空间 + runtime config）
                 try:
-                    # 仅在安装了 langmem 时接入；未安装则跳过
-                    from langmem import (
-                        create_manage_memory_tool,
-                        create_search_memory_tool,
-                    )  # type: ignore
+                    from langmem import create_manage_memory_tool, create_search_memory_tool  # type: ignore
 
-                    manage_tool = create_manage_memory_tool()
-                    search_tool = create_search_memory_tool()
-
-                    # 为了在工具调用时绑定到当前会话 namespace，这里做一层轻包装：
-                    # 一些实现会从环境变量中读取默认命名空间，这里在调用前设置。
-                    @tool
-                    def memory_manage(op: str, payload: dict | None = None) -> str:
-                        """
-                        使用 langmem 管理持久记忆（创建/更新/删除等），自动注入当前命名空间。
-
-                        Args:
-                            op (str): 操作类型，例如 "add"、"update"、"delete" 等（依 langmem 定义）。
-                            payload (dict|None): 操作所需的数据负载。
-
-                        Returns:
-                            str: 操作结果字符串（JSON/文本），由底层工具返回。
-
-                        Raises:
-                            AssertionError: 当工具调用异常或 namespace 未设置时抛出。
-                        """
-                        ns = getattr(self, "_memory_namespace", "").strip()
-                        assert ns, "持久记忆命名空间未设置。"
-                        # 优先通过函数签名显式传递 namespace；若不支持则退化到环境变量
-                        import inspect
-
-                        fn = getattr(manage_tool, "func", None) or getattr(
-                            manage_tool, "invoke", None
-                        )
-                        if fn is None:
-                            raise AssertionError("langmem manage 工具不可用")
-
-                        try:
-                            sig = inspect.signature(fn)
-                            if "namespace" in sig.parameters:
-                                return manage_tool.invoke(
-                                    {"op": op, "payload": payload, "namespace": ns}
-                                )
-                            else:
-                                os.environ["LANGMEM_NAMESPACE"] = ns
-                                # LangChain 工具通常支持 invoke(dict)
-                                return manage_tool.invoke({"op": op, "payload": payload})
-                        except Exception as e:  # pragma: no cover
-                            raise AssertionError(f"langmem manage 调用失败：{e}") from e
-
-                    @tool
-                    def memory_search(query: str, top_k: int = 5) -> str:
-                        """
-                        使用 langmem 在当前命名空间内进行记忆检索。
-
-                        Args:
-                            query (str): 检索查询语句。
-                            top_k (int): 返回条数上限，默认 5。
-
-                        Returns:
-                            str: 检索结果字符串（JSON/文本），由底层工具返回。
-
-                        Raises:
-                            AssertionError: 当工具调用异常或 namespace 未设置时抛出。
-                        """
-                        ns = getattr(self, "_memory_namespace", "").strip()
-                        assert ns, "持久记忆命名空间未设置。"
-                        import inspect
-
-                        fn = getattr(search_tool, "func", None) or getattr(
-                            search_tool, "invoke", None
-                        )
-                        if fn is None:
-                            raise AssertionError("langmem search 工具不可用")
-                        try:
-                            sig = inspect.signature(fn)
-                            if "namespace" in sig.parameters:
-                                return search_tool.invoke(
-                                    {"query": query, "top_k": int(top_k), "namespace": ns}
-                                )
-                            else:
-                                os.environ["LANGMEM_NAMESPACE"] = ns
-                                return search_tool.invoke(
-                                    {"query": query, "top_k": int(top_k)}
-                                )
-                        except Exception as e:  # pragma: no cover
-                            raise AssertionError(f"langmem search 调用失败：{e}") from e
-
-                    tools.append(memory_manage)
-                    tools.append(memory_search)
+                    # 命名空间使用占位符，运行时通过 config["configurable"]["langgraph_user_id"] 注入
+                    ns_tpl = ("memories", "{langgraph_user_id}")
+                    tools.append(create_manage_memory_tool(namespace=ns_tpl))
+                    tools.append(create_search_memory_tool(namespace=ns_tpl))
                 except Exception:
-                    # 未安装或创建失败时跳过，不影响其它工具
+                    # 未安装或失败时跳过，不影响其它工具
                     pass
 
                 # 汇率Tool
@@ -955,6 +871,10 @@ class SQLCheckpointAgentStreamingPlus:
         self._printed_in_round = False
         self._agent_header_printed = False
         cfg = {"configurable": {"thread_id": thread_id or self._config.thread_id}}
+        # 为 langmem 工具提供命名空间占位符值
+        ns = getattr(self, "_memory_namespace", "").strip()
+        if ns:
+            cfg["configurable"]["langgraph_user_id"] = ns
         last_text = ""
         tool_notified = False
 

@@ -575,7 +575,6 @@ class QQBotHandler(BaseHTTPRequestHandler):
             # 设置当前群的持久记忆命名空间（langmem 工具使用）
             ns = self._namespace_for(group_id)
             self.agent.set_memory_namespace(ns)
-            os.environ["LANGMEM_NAMESPACE"] = ns
             # 轻量方案：在发给 Agent 的文本前加入说话人标识，提升区分度
             model_input = f"Group_id: [{group_id}]; User_id: [{user_id}]; User_name: {author}; Text: {text}"
             answer = self.agent.chat_once_stream(
