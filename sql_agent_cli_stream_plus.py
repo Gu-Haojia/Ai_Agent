@@ -838,14 +838,31 @@ class SQLCheckpointAgentStreamingPlus:
 
         if self._config.use_memory_ckpt:
             self._saver = MemorySaver()
-            self._store = InMemoryStore()
+            # 为 langmem 启用内存向量索引（可通过环境变量覆盖）
+            embed_model = os.environ.get("MEM_EMBED_MODEL", "openai:text-embedding-3-small")
+            try:
+                embed_dims = int(os.environ.get("MEM_EMBED_DIMS", "1536"))
+            except Exception:
+                embed_dims = 1536
+            self._store = InMemoryStore(index={"dims": embed_dims, "embed": embed_model})
             return builder.compile(checkpointer=self._saver, store=self._store)
 
         try:
             self._saver_cm = PostgresSaver.from_conn_string(self._config.pg_conn)
             self._saver = self._saver_cm.__enter__()
             self._saver.setup()
-            self._store_cm = PostgresStore.from_conn_string(self._config.pg_conn)
+            # 为 Postgres store 配置向量索引（若 API 不支持 index 参数则回退为默认构造）
+            embed_model = os.environ.get("MEM_EMBED_MODEL", "openai:text-embedding-3-small")
+            try:
+                embed_dims = int(os.environ.get("MEM_EMBED_DIMS", "1536"))
+            except Exception:
+                embed_dims = 1536
+            try:
+                self._store_cm = PostgresStore.from_conn_string(
+                    self._config.pg_conn, index={"dims": embed_dims, "embed": embed_model}
+                )
+            except TypeError:
+                self._store_cm = PostgresStore.from_conn_string(self._config.pg_conn)
             self._store = self._store_cm.__enter__()
             self._store.setup()
         except Exception as exc:
