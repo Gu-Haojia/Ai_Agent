@@ -552,6 +552,8 @@ class QQBotHandler(BaseHTTPRequestHandler):
         - /switch <name>      → 切换到 prompts/<name>.txt（设置 SYS_MSG_FILE）并重建 Agent
         - /clear              → 为当前群新建线程
         - /whoami             → 先回当前系统提示词，再基于“你是谁”生成一条消息
+        - /token              → 统计当前群对应线程的消息 token 数
+        - /forget             → 清除当前线程的上下文记忆
 
         Args:
             group_id (int): 群号
