@@ -9,6 +9,7 @@ __pycache__/
 # Virtual env
 .venv/
 venv/
+.venv311/
 
 # OS / Editors
 .DS_Store
@@ -30,6 +31,7 @@ output.xml
 .env.*
 .qq_group_threads.json
 .qq_reminder_threads.json
+.qq_group_memnames.json
 
 # Local backup (not tracked)
 local_backup/

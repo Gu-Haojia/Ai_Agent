@@ -103,6 +103,8 @@ class AgentConfig:
     thread_id: str = "demo-plus"
     use_memory_ckpt: bool = False
     enable_tools: bool = False
+    # 用于持久记忆（langmem）命名空间的 store 隔离标识，由环境变量 STORE_ID 注入
+    store_id: str = ""
 
 
 class _ReminderStore:
@@ -254,8 +256,23 @@ class SQLCheckpointAgentStreamingPlus:
 
         self._graph = self._build_graph()
         self._printed_in_round: bool = False
+        # 当前持久记忆命名空间（供 langmem 工具使用）；由外部在请求前设置
+        self._memory_namespace: str = ""
         # Agent 启动时恢复并调度尚未过期的提醒
         self._restore_timers_from_store()
+
+    def set_memory_namespace(self, namespace: str) -> None:
+        """
+        设置当前会话关联的持久记忆命名空间。
+
+        Args:
+            namespace (str): 命名空间字符串，应确保全局唯一且可追踪。
+
+        Raises:
+            AssertionError: 当 namespace 非法时抛出。
+        """
+        assert isinstance(namespace, str) and namespace.strip(), "namespace 不能为空"
+        self._memory_namespace = namespace.strip()
 
     def _restore_timers_from_store(self) -> None:
         """
@@ -538,6 +555,19 @@ class SQLCheckpointAgentStreamingPlus:
 
                 tools.append(set_timer)
 
+                # 持久记忆：langmem 工具（依官方 API 使用命名空间 + runtime config）
+                try:
+                    from langmem import create_manage_memory_tool, create_search_memory_tool  # type: ignore
+
+                    # 命名空间使用占位符，运行时通过 config["configurable"]["langgraph_user_id"] 注入
+                    ns_tpl = ("memories", "{langgraph_user_id}")
+                    tools.append(create_manage_memory_tool(namespace=ns_tpl))
+                    tools.append(create_search_memory_tool(namespace=ns_tpl))
+                except Exception as e:
+                    # 未安装或失败时跳过，不影响其它工具
+                    print(f"[Warn] langmem 工具加载失败，跳过。错误信息：{e}", flush=True)
+                    pass
+
                 # 汇率Tool
                 @tool
                 def currency_tool(
@@ -661,7 +691,7 @@ class SQLCheckpointAgentStreamingPlus:
             try:
                 from langchain_core.messages import SystemMessage
 
-                append_msg = "你的数学计算必须repl_tool完成，不能直接生成结果。set_timer没有相对时间时，必须用repl_tool计算出距离现在的秒数后传入。"
+                append_msg = "You are a long-term assistant who remembers everything important the user says. You are expected to proactively store and retrieve relevant memory. You should search memory before searching the internet. 你的数学计算必须repl_tool完成，不能直接生成结果。set_timer没有相对时间时，必须用repl_tool计算出距离现在的秒数后传入。"
                 sys_msg = SystemMessage(content=append_msg + self._sys_msg_content)
                 messages = [sys_msg] + list(state["messages"])  # 不修改原列表
             except Exception:
@@ -809,14 +839,31 @@ class SQLCheckpointAgentStreamingPlus:
 
         if self._config.use_memory_ckpt:
             self._saver = MemorySaver()
-            self._store = InMemoryStore()
+            # 为 langmem 启用内存向量索引（可通过环境变量覆盖）
+            embed_model = os.environ.get("MEM_EMBED_MODEL", "openai:text-embedding-3-small")
+            try:
+                embed_dims = int(os.environ.get("MEM_EMBED_DIMS", "1536"))
+            except Exception:
+                embed_dims = 1536
+            self._store = InMemoryStore(index={"dims": embed_dims, "embed": embed_model})
             return builder.compile(checkpointer=self._saver, store=self._store)
 
         try:
             self._saver_cm = PostgresSaver.from_conn_string(self._config.pg_conn)
             self._saver = self._saver_cm.__enter__()
             self._saver.setup()
-            self._store_cm = PostgresStore.from_conn_string(self._config.pg_conn)
+            # 为 Postgres store 配置向量索引（若 API 不支持 index 参数则回退为默认构造）
+            embed_model = os.environ.get("MEM_EMBED_MODEL", "openai:text-embedding-3-small")
+            try:
+                embed_dims = int(os.environ.get("MEM_EMBED_DIMS", "1536"))
+            except Exception:
+                embed_dims = 1536
+            try:
+                self._store_cm = PostgresStore.from_conn_string(
+                    self._config.pg_conn, index={"dims": embed_dims, "embed": embed_model}
+                )
+            except TypeError:
+                self._store_cm = PostgresStore.from_conn_string(self._config.pg_conn)
             self._store = self._store_cm.__enter__()
             self._store.setup()
         except Exception as exc:
@@ -842,6 +889,10 @@ class SQLCheckpointAgentStreamingPlus:
         self._printed_in_round = False
         self._agent_header_printed = False
         cfg = {"configurable": {"thread_id": thread_id or self._config.thread_id}}
+        # 为 langmem 工具提供命名空间占位符值
+        ns = getattr(self, "_memory_namespace", "").strip()
+        if ns:
+            cfg["configurable"]["langgraph_user_id"] = ns
         last_text = ""
         tool_notified = False
 
@@ -1072,7 +1123,8 @@ def _read_env_config() -> AgentConfig:
     model = os.environ.get("MODEL_NAME", "openai:gpt-4o-mini")
     pg = os.environ.get("LANGGRAPH_PG", "")
     thread = os.environ.get("THREAD_ID", "demo-plus")
-    return AgentConfig(model_name=model, pg_conn=pg, thread_id=thread)
+    store_id = os.environ.get("STORE_ID", "")
+    return AgentConfig(model_name=model, pg_conn=pg, thread_id=thread, store_id=store_id)
 
 
 def _print_help() -> None:
