@@ -310,7 +310,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
                     if not cls._env_consistency_checked:
 
                         def _env_part_from_full(gid: int, tid: str) -> str:
-                            prefix = f"qq-napcat-{gid}-"
+                            prefix = f"thread-{gid}-"
                             if not tid.startswith(prefix):
                                 return ""
                             tail = tid[len(prefix) :]
@@ -386,7 +386,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
                     if not cls._env_ns_checked:
 
                         def _env_part_from_ns(gid: int, ns: str) -> str:
-                            prefix = f"qq-store-{gid}-"
+                            prefix = f"store-{gid}-"
                             if not ns.startswith(prefix):
                                 return ""
                             tail = ns[len(prefix) :]
@@ -619,7 +619,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
         if group_id in self._group_threads:
             return self._group_threads[group_id]
         new_tid = (
-            f"qq-napcat-{group_id}-{self.agent._config.thread_id}-{int(time.time())}"
+            f"thread-{group_id}-{self.agent._config.thread_id}-{int(time.time())}"
         )
         self._group_threads[group_id] = new_tid
         QQBotHandler.save_thread_store()
@@ -637,7 +637,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
         if group_id in self._group_namespaces:
             return self._group_namespaces[group_id]
         new_ns = (
-            f"qq-store-{group_id}-{self.agent._config.store_id}-{int(time.time())}"
+            f"store-{group_id}-{self.agent._config.store_id}-{int(time.time())}"
         )
         self._group_namespaces[group_id] = new_ns
         QQBotHandler.save_namespace_store()
@@ -734,11 +734,11 @@ class QQBotHandler(BaseHTTPRequestHandler):
             return True
 
         if cmd in {"/clear", "让我忘记一切吧"} and len(parts) == 1:
-            new_tid = f"qq-napcat-{group_id}-{self.agent._config.thread_id}-{int(time.time())}"
+            new_tid = f"thread-{group_id}-{self.agent._config.thread_id}-{int(time.time())}"
             self._group_threads[group_id] = new_tid
             QQBotHandler.save_thread_store()
             # 同时新建长期记忆命名空间
-            new_ns = f"qq-store-{group_id}-{self.agent._config.store_id}-{int(time.time())}"
+            new_ns = f"store-{group_id}-{self.agent._config.store_id}-{int(time.time())}"
             self._group_namespaces[group_id] = new_ns
             QQBotHandler.save_namespace_store()
             msg = f"已为当前群新建线程：{new_tid}\n已新建长期记忆命名空间：{new_ns}"
@@ -749,7 +749,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
 
         if cmd == "/rmdata" and len(parts) == 1:
             # 仅新建长期记忆命名空间
-            new_ns = f"qq-store-{group_id}-{self.agent._config.store_id}-{int(time.time())}"
+            new_ns = f"store-{group_id}-{self.agent._config.store_id}-{int(time.time())}"
             self._group_namespaces[group_id] = new_ns
             QQBotHandler.save_namespace_store()
             msg = f"已新建长期记忆命名空间：{new_ns}"
@@ -860,7 +860,7 @@ def main() -> None:
 
     server = ThreadingHTTPServer((bot_cfg.host, bot_cfg.port), QQBotHandler)
     print(
-        f"[QQBot] Listening http://{bot_cfg.host}:{bot_cfg.port} api={bot_cfg.api_base} groups={bot_cfg.allowed_groups or 'ALL'} blacklist={bot_cfg.blacklist_groups or 'NONE'} thread={agent._config.thread_id} model={agent._config.model_name} dry_run={'YES' if agent._config.use_memory_ckpt else 'NO'} store={thread_store} mem_store={ns_store} store_id={agent._config.store_id}"
+        f"[QQBot] Listening http://{bot_cfg.host}:{bot_cfg.port} api={bot_cfg.api_base} whitelist={bot_cfg.allowed_groups or 'ALL'} blacklist={bot_cfg.blacklist_groups or 'NONE'} model={agent._config.model_name} dry_run={'YES' if agent._config.use_memory_ckpt else 'NO'} thread_id={agent._config.thread_id} thread_store={thread_store} mem_id={agent._config.store_id} mem_store={ns_store}"
     )
     print("[QQBot] Allowed command users:", bot_cfg.cmd_allowed_users or "ALL")
     print("[QQBot] Bot now started, press Ctrl+C to stop.")

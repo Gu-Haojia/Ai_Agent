@@ -691,7 +691,7 @@ class SQLCheckpointAgentStreamingPlus:
             try:
                 from langchain_core.messages import SystemMessage
 
-                append_msg = "你的数学计算必须repl_tool完成，不能直接生成结果。set_timer没有相对时间时，必须用repl_tool计算出距离现在的秒数后传入。"
+                append_msg = "You are a long-term assistant who remembers everything important the user says. You are expected to proactively store and retrieve relevant memory. You should search memory before searching the internet. 你的数学计算必须repl_tool完成，不能直接生成结果。set_timer没有相对时间时，必须用repl_tool计算出距离现在的秒数后传入。"
                 sys_msg = SystemMessage(content=append_msg + self._sys_msg_content)
                 messages = [sys_msg] + list(state["messages"])  # 不修改原列表
             except Exception:
