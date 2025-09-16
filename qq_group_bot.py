@@ -682,15 +682,16 @@ class QQBotHandler(BaseHTTPRequestHandler):
 
         if cmd == "/cmd" and len(parts) == 1:
             msg = (
+                "高性能AI萝卜子-小妃那 Ver. 2.0\n"
                 "可用命令:\n"
-                "1) /cmd — 显示命令列表\n"
-                "2) /switch — 列出可用 prompts\n"
-                "3) /switch <name> — 切换到 <name> 并重建 Agent\n"
-                "4) /clear — 为当前群新建对话线程和长期记忆\n"
+                "1) /cmd — 命令列表\n"
+                "2) /switch — 可用 prompts\n"
+                "3) /switch <name> — 切换到 <name> prompt\n"
+                "4) /clear — 清除当前群聊全部记忆\n"
                 "5) /whoami — 你是？\n"
-                "6) /token — 输出当前 messages 的 token 数\n"
-                "7) /forget - 清除上下文\n"
-                "8) /rmdata - 仅新建当前群的长期记忆命名空间"
+                "6) /token — 输出当前 token 数\n"
+                "7) /forget - 清除上下文记忆\n"
+                "8) /rmdata - 清除长期记忆"
             )
             _send_group_msg(
                 self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
@@ -723,7 +724,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
             try:
                 new_agent = _build_agent_from_env()
                 QQBotHandler.agent = new_agent
-                msg = f"已切换到 {name} 并重建 Agent。需要清除记忆请使用/clear 命令。"
+                msg = f"已切换到 {name} 并重建 Agent。需要清除记忆请使用/forget 命令。"
             except AssertionError as e:
                 msg = f"切换失败：{e}"
             except Exception as e:
