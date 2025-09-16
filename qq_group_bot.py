@@ -104,7 +104,9 @@ class BotConfig:
         blacklist_env = os.environ.get("BLACKLIST_GROUPS", "").strip()
         blacklist: tuple[int, ...] = ()
         if blacklist_env:
-            blacklist = tuple(int(x) for x in blacklist_env.split(",") if x.strip().isdigit())
+            blacklist = tuple(
+                int(x) for x in blacklist_env.split(",") if x.strip().isdigit()
+            )
         # 命令白名单（逗号分隔 QQ 号），为空表示放行
         cmd_env = os.environ.get("CMD_ALLOWED_USERS", "").strip()
         cmd_allowed: tuple[int, ...] = ()
@@ -577,6 +579,9 @@ class QQBotHandler(BaseHTTPRequestHandler):
             self.agent.set_memory_namespace(ns)
             # 轻量方案：在发给 Agent 的文本前加入说话人标识，提升区分度
             model_input = f"Group_id: [{group_id}]; User_id: [{user_id}]; User_name: {author}; Text: {text}"
+            # 模拟随机延迟（1-4秒）
+            time.sleep(1 + (os.urandom(1)[0] % 4))
+            # 发送请求并等待最终结果
             answer = self.agent.chat_once_stream(
                 model_input, thread_id=self._thread_id_for(group_id)
             )
@@ -618,9 +623,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
         """
         if group_id in self._group_threads:
             return self._group_threads[group_id]
-        new_tid = (
-            f"thread-{group_id}-{self.agent._config.thread_id}-{int(time.time())}"
-        )
+        new_tid = f"thread-{group_id}-{self.agent._config.thread_id}-{int(time.time())}"
         self._group_threads[group_id] = new_tid
         QQBotHandler.save_thread_store()
         return new_tid
@@ -636,9 +639,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
         """
         if group_id in self._group_namespaces:
             return self._group_namespaces[group_id]
-        new_ns = (
-            f"store-{group_id}-{self.agent._config.store_id}-{int(time.time())}"
-        )
+        new_ns = f"store-{group_id}-{self.agent._config.store_id}-{int(time.time())}"
         self._group_namespaces[group_id] = new_ns
         QQBotHandler.save_namespace_store()
         return new_ns
@@ -735,11 +736,15 @@ class QQBotHandler(BaseHTTPRequestHandler):
             return True
 
         if cmd in {"/clear", "让我忘记一切吧"} and len(parts) == 1:
-            new_tid = f"thread-{group_id}-{self.agent._config.thread_id}-{int(time.time())}"
+            new_tid = (
+                f"thread-{group_id}-{self.agent._config.thread_id}-{int(time.time())}"
+            )
             self._group_threads[group_id] = new_tid
             QQBotHandler.save_thread_store()
             # 同时新建长期记忆命名空间
-            new_ns = f"store-{group_id}-{self.agent._config.store_id}-{int(time.time())}"
+            new_ns = (
+                f"store-{group_id}-{self.agent._config.store_id}-{int(time.time())}"
+            )
             self._group_namespaces[group_id] = new_ns
             QQBotHandler.save_namespace_store()
             msg = f"已为当前群新建线程：{new_tid}\n已新建长期记忆命名空间：{new_ns}"
@@ -750,7 +755,9 @@ class QQBotHandler(BaseHTTPRequestHandler):
 
         if cmd == "/rmdata" and len(parts) == 1:
             # 仅新建长期记忆命名空间
-            new_ns = f"store-{group_id}-{self.agent._config.store_id}-{int(time.time())}"
+            new_ns = (
+                f"store-{group_id}-{self.agent._config.store_id}-{int(time.time())}"
+            )
             self._group_namespaces[group_id] = new_ns
             QQBotHandler.save_namespace_store()
             msg = f"已新建长期记忆命名空间：{new_ns}"
@@ -758,7 +765,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
             )
             return True
-        
+
         if cmd == "/forget" and len(parts) == 1:
             tid = self._thread_id_for(group_id)
             try:
