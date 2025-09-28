@@ -580,7 +580,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
             # 轻量方案：在发给 Agent 的文本前加入说话人标识，提升区分度
             model_input = f"Group_id: [{group_id}]; User_id: [{user_id}]; User_name: {author}; Text: {text}"
             # 模拟随机延迟（1-4秒）
-            time.sleep(1 + (os.urandom(1)[0] % 4))
+            #time.sleep(1 + (os.urandom(1)[0] % 4))
             # 发送请求并等待最终结果
             answer = self.agent.chat_once_stream(
                 model_input, thread_id=self._thread_id_for(group_id)
