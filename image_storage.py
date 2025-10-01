@@ -73,6 +73,14 @@ class ImageStorageManager:
         self._generated_dir.mkdir(parents=True, exist_ok=True)
         self._image_model = image_model or os.environ.get("IMAGE_MODEL_NAME", "gpt-image-1")
         self._lock = threading.Lock()
+        self._http_headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            ),
+            "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        }
 
     @staticmethod
     def _infer_mime(data: bytes, fallback: Optional[str]) -> str:
@@ -141,7 +149,7 @@ class ImageStorageManager:
             RuntimeError: 当网络请求失败或返回内容为空时抛出。
         """
         assert url and url.startswith("http"), "仅支持通过 HTTP(S) 下载图像"
-        resp = requests.get(url, timeout=15)
+        resp = requests.get(url, timeout=15, headers=self._http_headers)
         if resp.status_code != 200:
             raise RuntimeError(f"下载图像失败，HTTP {resp.status_code}")
         data = resp.content

@@ -762,6 +762,8 @@ class QQBotHandler(BaseHTTPRequestHandler):
         image_tags = re.findall(r"\[IMAGE\](.+?)\[/IMAGE\]", answer, flags=re.IGNORECASE)
         if image_tags:
             manager = self._require_image_storage()
+            failed_urls: list[str] = []
+            downloaded = False
             for url in image_tags:
                 url_norm = url.strip()
                 if not url_norm:
@@ -769,9 +771,18 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 try:
                     saved = manager.save_remote_image(url_norm)
                     image_paths.append(saved.path)
+                    downloaded = True
                 except Exception as err:
+                    failed_urls.append(url_norm)
                     sys.stderr.write(f"[Chat] 下载回复图片失败: {url_norm} -> {err}\n")
-            answer = re.sub(r"\[IMAGE\].+?\[/IMAGE\]", "", answer, flags=re.IGNORECASE).strip()
+            cleaned = re.sub(r"\[IMAGE\].+?\[/IMAGE\]", "", answer, flags=re.IGNORECASE).strip()
+            if failed_urls and downloaded:
+                note = "（部分图片下载失败，已忽略无法访问的链接）"
+                answer = f"{cleaned}\n{note}" if cleaned else note
+            elif failed_urls and not downloaded and not image_paths:
+                answer = cleaned or "（未能下载图片，请稍后重试）"
+            else:
+                answer = cleaned or ("（图片已发送）" if downloaded else cleaned)
 
         # 发送回群
         try:
