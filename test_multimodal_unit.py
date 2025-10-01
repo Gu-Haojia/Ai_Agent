@@ -92,6 +92,21 @@ class MultimodalUnitTest(unittest.TestCase):
             self.assertTrue(stored.path.exists())
             self.assertTrue(stored.base64_data)
 
+    def test_generate_url_candidates_prefers_twitter_orig(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            manager = ImageStorageManager(tmp_dir)
+            url = "https://pbs.twimg.com/profile_images/12345/test_400x400.jpg"
+            candidates = manager._generate_url_candidates(url)
+            self.assertTrue(any("name=orig" in c for c in candidates[:3]))
+            self.assertEqual(candidates[-1], url)
+
+    def test_generate_url_candidates_strip_imageview(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            manager = ImageStorageManager(tmp_dir)
+            url = "https://example.com/image.png?imageView=1&thumbnail=400x400"
+            candidates = manager._generate_url_candidates(url)
+            self.assertTrue(any("imageView" not in c and "thumbnail" not in c for c in candidates[:-1]))
+
 
 if __name__ == "__main__":
     unittest.main()

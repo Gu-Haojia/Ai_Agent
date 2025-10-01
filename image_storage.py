@@ -15,6 +15,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import requests
 
@@ -133,6 +134,61 @@ class ImageStorageManager:
             path.write_bytes(data)
         return path
 
+    def _generate_url_candidates(self, url: str) -> list[str]:
+        """根据已知规则生成优先尝试的下载地址列表。"""
+        parsed = urlparse(url)
+        netloc = (parsed.netloc or "").lower()
+        path = parsed.path or ""
+        query = parsed.query or ""
+        candidates: list[str] = []
+
+        # Twitter / X：优先尝试原始尺寸
+        if "pbs.twimg.com" in netloc and path:
+            trimmed_path = path
+            replaced = False
+            for suffix in [
+                "_400x400",
+                "_200x200",
+                "_133x133",
+                "_96x96",
+                "_bigger",
+                "_normal",
+                "_mini",
+            ]:
+                if suffix in trimmed_path:
+                    trimmed_path = trimmed_path.replace(suffix, "")
+                    replaced = True
+            if replaced:
+                base = parsed._replace(path=trimmed_path, query="")
+                candidates.append(urlunparse(base._replace(query="format=jpg&name=orig")))
+                candidates.append(urlunparse(base._replace(query="name=orig")))
+                candidates.append(urlunparse(base._replace(query="name=large")))
+
+        # 去除常见缩略图参数
+        if query:
+            original_pairs = parse_qsl(query, keep_blank_values=True)
+            filtered_pairs = [
+                (k, v)
+                for k, v in original_pairs
+                if k not in {"imageView", "thumbnail", "w", "h", "width", "height", "quality"}
+            ]
+            if filtered_pairs != original_pairs:
+                filtered_url = urlunparse(
+                    parsed._replace(query=urlencode(filtered_pairs, doseq=True))
+                )
+                candidates.append(filtered_url)
+            candidates.append(urlunparse(parsed._replace(query="")))
+
+        candidates.append(url)
+
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for item in candidates:
+            if item and item not in seen:
+                ordered.append(item)
+                seen.add(item)
+        return ordered
+
     def save_remote_image(self, url: str, filename_hint: Optional[str] = None) -> StoredImage:
         """
         下载并保存远程图像。
@@ -149,14 +205,37 @@ class ImageStorageManager:
             RuntimeError: 当网络请求失败或返回内容为空时抛出。
         """
         assert url and url.startswith("http"), "仅支持通过 HTTP(S) 下载图像"
-        resp = requests.get(url, timeout=15, headers=self._http_headers)
-        if resp.status_code != 200:
-            raise RuntimeError(f"下载图像失败，HTTP {resp.status_code}")
-        data = resp.content
+        last_error = ""
+        data = b""
+        mime = ""
+        chosen_url = ""
+        for candidate in self._generate_url_candidates(url):
+            try:
+                resp = requests.get(candidate, timeout=15, headers=self._http_headers)
+            except Exception as exc:
+                last_error = str(exc)
+                continue
+            if resp.status_code != 200:
+                last_error = f"HTTP {resp.status_code}"
+                continue
+            if not resp.content:
+                last_error = "空响应"
+                continue
+            content_type = resp.headers.get("Content-Type") or ""
+            try:
+                mime = self._infer_mime(resp.content, content_type.split(";")[0] if content_type else None)
+            except AssertionError as err:
+                last_error = str(err)
+                continue
+            data = resp.content
+            chosen_url = candidate
+            break
+
         if not data:
-            raise RuntimeError("下载到的图像为空")
-        content_type = resp.headers.get("Content-Type") or ""
-        mime = self._infer_mime(data, content_type.split(";")[0] if content_type else None)
+            raise RuntimeError(f"下载图像失败：{last_error or '未知原因'}")
+
+        if not filename_hint:
+            filename_hint = os.path.basename(urlparse(chosen_url).path)
         suffix = {
             "image/jpeg": ".jpg",
             "image/png": ".png",
