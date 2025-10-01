@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from image_storage import ImageStorageManager, StoredImage, GeneratedImage
+from image_storage import ImageStorageManager, StoredImage
 
 try:
     from qq_group_bot import QQBotHandler, _extract_cq_images, _parse_message_and_at
@@ -70,10 +70,7 @@ class MultimodalUnitTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             image_path = Path(tmp_dir) / "gen.png"
             image_path.write_bytes(b"img")
-            generated = [
-                GeneratedImage(path=image_path, mime_type="image/png", prompt="p"),
-            ]
-            message = QQBotHandler._compose_group_message("hello", generated)
+            message = QQBotHandler._compose_group_message("hello", [image_path])
             self.assertIn("[CQ:image,file=file://", message)
             self.assertTrue(message.startswith("hello"))
 

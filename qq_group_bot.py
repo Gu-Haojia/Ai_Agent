@@ -35,8 +35,10 @@ from __future__ import annotations
 import hmac
 import json
 import os
+import re
 import sys
 import time
+from pathlib import Path
 from dataclasses import dataclass
 from hashlib import sha1
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -408,22 +410,23 @@ class QQBotHandler(BaseHTTPRequestHandler):
         return content
 
     @staticmethod
-    def _compose_group_message(answer: str, images: Sequence[GeneratedImage]) -> str:
+    def _compose_group_message(answer: str, image_paths: Sequence[Path]) -> str:
         """
         组合带有 CQ 图片的群聊消息。
 
         Args:
             answer (str): 文本回复。
-            images (Sequence[GeneratedImage]): 生成图片列表。
+            image_paths (Sequence[Path]): 需要发送的本地图片路径列表。
 
         Returns:
             str: 可直接发送的 CQ 消息字符串。
         """
         parts: list[str] = []
-        if answer.strip():
-            parts.append(answer.strip())
-        for item in images:
-            parts.append(f"[CQ:image,file=file://{item.path}]")
+        text = answer.strip()
+        if text:
+            parts.append(text)
+        for img_path in image_paths:
+            parts.append(f"[CQ:image,file=file://{img_path}]")
         return "\n".join(parts)
 
     @classmethod
@@ -754,11 +757,27 @@ class QQBotHandler(BaseHTTPRequestHandler):
             answer = f"（内部错误）{e}"
             generated_images = []
 
+        image_paths: list[Path] = [img.path for img in generated_images]
+        # 解析 Agent 回复中的 [IMAGE]url[/IMAGE] 标签，转换为本地图片
+        image_tags = re.findall(r"\[IMAGE\](.+?)\[/IMAGE\]", answer, flags=re.IGNORECASE)
+        if image_tags:
+            manager = self._require_image_storage()
+            for url in image_tags:
+                url_norm = url.strip()
+                if not url_norm:
+                    continue
+                try:
+                    saved = manager.save_remote_image(url_norm)
+                    image_paths.append(saved.path)
+                except Exception as err:
+                    sys.stderr.write(f"[Chat] 下载回复图片失败: {url_norm} -> {err}\n")
+            answer = re.sub(r"\[IMAGE\].+?\[/IMAGE\]", "", answer, flags=re.IGNORECASE).strip()
+
         # 发送回群
         try:
             # 轻量方案：使用 CQ at 前缀 @ 该用户，便于区分接收者
             # at_prefix = f"[CQ:at,qq={user_id}] "
-            message_body = self._compose_group_message(answer, generated_images)
+            message_body = self._compose_group_message(answer, image_paths)
             _send_group_msg(
                 self.bot_cfg.api_base,
                 group_id,
