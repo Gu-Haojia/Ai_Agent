@@ -170,20 +170,20 @@ def _cap20_messages(prev: list | None, new: list | object) -> list:
     """
     combined = add_messages(prev or [], new)
     if len(combined) < 30:
-        #print(f"\n\n[Debug] Merged messages: {combined}", flush=True)
-        #print(f"\n\n[Debug] Length of combined messages: {len(combined)}", flush=True)
+        # print(f"\n\n[Debug] Merged messages: {combined}", flush=True)
+        # print(f"\n\n[Debug] Length of combined messages: {len(combined)}", flush=True)
         return combined
     start_msg = combined[-30] if len(combined) >= 30 else None
     # print(isinstance(start_msg, ToolMessage), flush=True)
     if isinstance(start_msg, HumanMessage):
-        #print(f"\n\n[Debug] Merged messages: {combined[-20:]}", flush=True)
-        #print(f"\n\n[Debug] Length of combined messages: {len(combined[-20:])}", flush=True)
+        # print(f"\n\n[Debug] Merged messages: {combined[-20:]}", flush=True)
+        # print(f"\n\n[Debug] Length of combined messages: {len(combined[-20:])}", flush=True)
         return combined[-30:]
     # 向后找到下一条 HumanMessage
     for i in range(len(combined) - 31, -1, -1):
         if isinstance(combined[i], HumanMessage):
-            #print(f"\n\n[Debug] Merged messages: {combined[i:]}", flush=True)
-            #print(f"\n\n[Debug] Length of combined messages: {len(combined[i:])}", flush=True)
+            # print(f"\n\n[Debug] Merged messages: {combined[i:]}", flush=True)
+            # print(f"\n\n[Debug] Length of combined messages: {len(combined[i:])}", flush=True)
             return combined[i:]
     return []
 
@@ -238,9 +238,13 @@ class RapidAPIHotelSearchClient:
             "X-RapidAPI-Key": self._api_key,
             "X-RapidAPI-Host": self._api_host,
         }
-        response = requests.get(url, headers=headers, params=params, timeout=self.timeout)
+        response = requests.get(
+            url, headers=headers, params=params, timeout=self.timeout
+        )
         if response.status_code == 401:
-            raise ValueError("RapidAPI 鉴权失败：请确认 RAPIDAPI_KEY 是否正确且已订阅相关 API。")
+            raise ValueError(
+                "RapidAPI 鉴权失败：请确认 RAPIDAPI_KEY 是否正确且已订阅相关 API。"
+            )
         if response.status_code == 403:
             raise ValueError(
                 "RapidAPI 拒绝访问：请检查是否完成 API 订阅、是否启用了请求 IP，或是否触发配额限制。"
@@ -269,7 +273,9 @@ class RapidAPIHotelSearchClient:
         """
 
         assert isinstance(city, str) and city.strip(), "city 必须为非空字符串"
-        assert isinstance(limit, int) and 1 <= limit <= 10, "limit 必须为 1 到 10 的整数"
+        assert (
+            isinstance(limit, int) and 1 <= limit <= 10
+        ), "limit 必须为 1 到 10 的整数"
 
         payload = self._get(
             "/hotels/list",
@@ -616,7 +622,7 @@ class SQLCheckpointAgentStreamingPlus:
             llm_tools_auto = llm
             llm_tools_none = llm
         else:
-            llm = init_chat_model(model_name,thinking_budget=-1)
+            llm = init_chat_model(model_name, thinking_budget=-1)
             tools = []
             if self._enable_tools:
                 from langchain_tavily import TavilySearch
@@ -877,7 +883,7 @@ class SQLCheckpointAgentStreamingPlus:
                     lines: list[str] = []
                     for idx, item in enumerate(results, start=1):
                         name = item["name"]
-                        #去除name的*号
+                        # 去除name的*号
                         name = name.replace("*", "")
                         rating = item["rating"]
                         price = item["price"]
@@ -887,6 +893,8 @@ class SQLCheckpointAgentStreamingPlus:
                         )
                     print(f"[Hotel Tool] 查询结果：\n" + "\n".join(lines), flush=True)
                     return "\n".join(lines)
+
+                tools.append(hotel_search)
 
                 @tool
                 def nbnhhsh(text: str) -> str:
@@ -921,7 +929,6 @@ class SQLCheckpointAgentStreamingPlus:
 
                     return "\n".join(output_lines) if output_lines else "未找到释义"
 
-                tools.append(hotel_search)
                 tools.append(nbnhhsh)
 
                 if False:  # 先关闭，避免误用
