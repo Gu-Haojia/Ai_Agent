@@ -42,7 +42,7 @@ import time
 from dataclasses import dataclass
 from hashlib import sha1
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Optional, Sequence
+from typing import Optional, Sequence, Union
 from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 
@@ -142,19 +142,22 @@ def _verify_signature(secret: str, body: bytes, signature: str) -> bool:
     return hmac.compare_digest("sha1=" + mac, signature)
 
 
+MessagePayload = Union[str, Sequence[dict[str, dict[str, str]]]]
+
+
 def _send_group_msg(
-    api_base: str, group_id: int, text: str, access_token: str = ""
+    api_base: str, group_id: int, message: MessagePayload, access_token: str = ""
 ) -> None:
     """调用 OneBot HTTP API 发送群消息（NapCat 兼容）。
 
     Args:
         api_base (str): NapCat HTTP API 基地址。
         group_id (int): 群号。
-        text (str): 文本内容。
+        message (MessagePayload): 文本或消息段列表。
         access_token (str): API Token，可为空。
     """
     url = urljoin(api_base + "/", "send_group_msg")
-    payload = {"group_id": group_id, "message": text}
+    payload = {"group_id": group_id, "message": message}
     headers = {"Content-Type": "application/json"}
     if access_token:
         headers["Authorization"] = f"Bearer {access_token}"
@@ -410,23 +413,44 @@ class QQBotHandler(BaseHTTPRequestHandler):
         return content
 
     @staticmethod
-    def _compose_group_message(answer: str, image_segments: Sequence[str]) -> str:
+    def _compose_group_message(
+        answer: str, image_payloads: Sequence[tuple[str, str]]
+    ) -> list[dict[str, dict[str, str]]]:
         """
-        组合带有 CQ 图片的群聊消息。
+        组合带有 CQ 图片的群聊消息段。
 
         Args:
             answer (str): 文本回复。
-            image_segments (Sequence[str]): 已构造的 CQ 图片段列表。
+            image_payloads (Sequence[tuple[str, str]]): (base64, mime) 对，应使用 base64:// 发送。
 
         Returns:
-            str: 可直接发送的 CQ 消息字符串。
+            list[dict[str, dict[str, str]]]: OneBot 段结构列表。
         """
-        parts: list[str] = []
+        segments: list[dict[str, dict[str, str]]] = []
         text = answer.strip()
         if text:
-            parts.append(text)
-        parts.extend(segment for segment in image_segments if segment)
-        return "\n".join(parts) if parts else "（未生成回复）"
+            segments.append({"type": "text", "data": {"text": text}})
+        for idx, (b64, mime) in enumerate(image_payloads, 1):
+            suffix = {
+                "image/png": ".png",
+                "image/jpeg": ".jpg",
+                "image/gif": ".gif",
+                "image/webp": ".webp",
+            }.get(mime, ".jpg")
+            name = f"img_{int(time.time())}_{idx}{suffix}"
+            segments.append(
+                {
+                    "type": "image",
+                    "data": {
+                        "file": f"base64://{b64}",
+                        "name": name,
+                        "cache": "0",
+                    },
+                }
+            )
+        if not segments:
+            segments.append({"type": "text", "data": {"text": "（未生成回复）"}})
+        return segments
 
     @classmethod
     def setup_thread_store(cls, path: str, current_env_tid: str) -> None:
@@ -756,11 +780,11 @@ class QQBotHandler(BaseHTTPRequestHandler):
             answer = f"（内部错误）{e}"
             generated_images = []
 
-        image_segments: list[str] = []
+        image_payloads: list[tuple[str, str]] = []
         for img in generated_images:
             try:
                 data_b64 = base64.b64encode(img.path.read_bytes()).decode("ascii")
-                image_segments.append(f"[CQ:image,file=base64://{data_b64}]")
+                image_payloads.append((data_b64, img.mime_type))
             except Exception as err:
                 sys.stderr.write(f"[Chat] 读取生成图片失败: {img.path} -> {err}\n")
         # 解析 Agent 回复中的 [IMAGE]url[/IMAGE] 标签，转换为本地图片
@@ -775,9 +799,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
                     continue
                 try:
                     saved = manager.save_remote_image(url_norm)
-                    image_segments.append(
-                        f"[CQ:image,file=base64://{saved.base64_data}]"
-                    )
+                    image_payloads.append((saved.base64_data, saved.mime_type))
                     downloaded = True
                 except Exception as err:
                     failed_urls.append(url_norm)
@@ -786,7 +808,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
             if failed_urls and downloaded:
                 note = "（部分图片下载失败，已忽略无法访问的链接）"
                 answer = f"{cleaned}\n{note}" if cleaned else note
-            elif failed_urls and not downloaded and not image_segments:
+            elif failed_urls and not downloaded and not image_payloads:
                 answer = cleaned or "（未能下载图片，请稍后重试）"
             else:
                 answer = cleaned or ("（图片已发送）" if downloaded else cleaned)
@@ -795,7 +817,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
         try:
             # 轻量方案：使用 CQ at 前缀 @ 该用户，便于区分接收者
             # at_prefix = f"[CQ:at,qq={user_id}] "
-            message_body = self._compose_group_message(answer, image_segments)
+            message_body = self._compose_group_message(answer, image_payloads)
             _send_group_msg(
                 self.bot_cfg.api_base,
                 group_id,
