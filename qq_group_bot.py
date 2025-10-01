@@ -845,6 +845,10 @@ class QQBotHandler(BaseHTTPRequestHandler):
             elif failed_urls and not success and not image_payloads:
                 answer = answer or "（未能下载图片，请稍后重试）"
 
+        if answer:
+            lines = [line for line in answer.splitlines() if line.strip()]
+            answer = "\n".join(lines)
+
         # 发送回群
         try:
             # 轻量方案：使用 CQ at 前缀 @ 该用户，便于区分接收者
