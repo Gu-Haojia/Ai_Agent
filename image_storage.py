@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import base64
+import mimetypes
 import os
 import threading
 import uuid
@@ -155,10 +156,15 @@ class ImageStorageManager:
             "image/webp": ".webp",
         }.get(mime)
         if not suffix:
-            if filename_hint and "." in filename_hint:
+            if mime and mime.startswith("image/"):
+                guessed = mimetypes.guess_extension(mime, strict=False)
+                if guessed:
+                    suffix = guessed
+            if not suffix and filename_hint and "." in filename_hint:
                 suffix = "." + filename_hint.rsplit(".", 1)[-1]
-            else:
-                raise AssertionError("无法确定图像扩展名")
+            if not suffix:
+                # 默认兜底为 jpg，保证写盘成功
+                suffix = ".jpg"
         path = self._write_bytes(self._incoming_dir, data, suffix)
         b64 = base64.b64encode(data).decode("ascii")
         return StoredImage(path=path, mime_type=mime, base64_data=b64)
