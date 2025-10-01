@@ -70,9 +70,8 @@ class MultimodalUnitTest(unittest.TestCase):
         message = QQBotHandler._compose_group_message(
             "hello", [("ZGF0YQ==", "image/png")]
         )
-        self.assertEqual(message[0]["type"], "text")
-        self.assertEqual(message[1]["type"], "image")
-        self.assertTrue(message[1]["data"]["file"].startswith("base64://"))
+        self.assertIn("hello", message)
+        self.assertIn("[CQ:image,file=base64://", message)
 
     def test_save_generated_image(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

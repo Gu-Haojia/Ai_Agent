@@ -415,42 +415,27 @@ class QQBotHandler(BaseHTTPRequestHandler):
     @staticmethod
     def _compose_group_message(
         answer: str, image_payloads: Sequence[tuple[str, str]]
-    ) -> list[dict[str, dict[str, str]]]:
-        """
-        组合带有 CQ 图片的群聊消息段。
-
-        Args:
-            answer (str): 文本回复。
-            image_payloads (Sequence[tuple[str, str]]): (base64, mime) 对，应使用 base64:// 发送。
-
-        Returns:
-            list[dict[str, dict[str, str]]]: OneBot 段结构列表。
-        """
-        segments: list[dict[str, dict[str, str]]] = []
+    ) -> str:
+        """组合文本与图片 CQ 码，图片使用 base64 内联。"""
+        parts: list[str] = []
         text = answer.strip()
         if text:
-            segments.append({"type": "text", "data": {"text": text}})
+            parts.append(text)
+        ts = int(time.time())
         for idx, (b64, mime) in enumerate(image_payloads, 1):
             suffix = {
-                "image/png": ".png",
-                "image/jpeg": ".jpg",
-                "image/gif": ".gif",
-                "image/webp": ".webp",
-            }.get(mime, ".jpg")
-            name = f"img_{int(time.time())}_{idx}{suffix}"
-            segments.append(
-                {
-                    "type": "image",
-                    "data": {
-                        "file": f"base64://{b64}",
-                        "name": name,
-                        "cache": "0",
-                    },
-                }
+                "image/png": "png",
+                "image/jpeg": "jpg",
+                "image/gif": "gif",
+                "image/webp": "webp",
+            }.get(mime, "jpg")
+            name = f"img_{ts}_{idx}.{suffix}"
+            parts.append(
+                f"[CQ:image,file=base64://{b64},name={name},cache=0]"
             )
-        if not segments:
-            segments.append({"type": "text", "data": {"text": "（未生成回复）"}})
-        return segments
+        if not parts:
+            return "（未生成回复）"
+        return "\n".join(parts)
 
     @classmethod
     def setup_thread_store(cls, path: str, current_env_tid: str) -> None:
