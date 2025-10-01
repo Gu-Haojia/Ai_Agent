@@ -15,7 +15,7 @@ import os
 import sys
 import time
 from dataclasses import dataclass
-from typing import Annotated, Callable, Iterable, Optional
+from typing import Annotated, Callable, Iterable, Optional, Sequence, Union, Any
 import json
 import threading
 import requests
@@ -31,6 +31,7 @@ from langgraph.graph import START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 from langchain_core.messages import ToolMessage, HumanMessage, SystemMessage
+from image_storage import GeneratedImage, ImageStorageManager
 
 # ---- 环境校验：仅在首次需要时检查，避免重复消耗 ----
 _ENV_COMMON_CHECKED: bool = False
@@ -512,6 +513,8 @@ class SQLCheckpointAgentStreamingPlus:
         self._reminder_store = _ReminderStore(
             os.environ.get("REMINDER_STORE_FILE", ".qq_reminders.json")
         )
+        self._image_manager: Optional[ImageStorageManager] = None
+        self._generated_images: list[GeneratedImage] = []
 
         self._graph = self._build_graph()
         self._printed_in_round: bool = False
@@ -532,6 +535,44 @@ class SQLCheckpointAgentStreamingPlus:
         """
         assert isinstance(namespace, str) and namespace.strip(), "namespace 不能为空"
         self._memory_namespace = namespace.strip()
+
+    def set_image_manager(self, manager: ImageStorageManager) -> None:
+        """
+        设置图像存储管理器，供多模态与生成工具使用。
+
+        Args:
+            manager (ImageStorageManager): 已初始化的图像管理器实例。
+
+        Raises:
+            AssertionError: 当传入对象类型不匹配时抛出。
+        """
+        assert isinstance(manager, ImageStorageManager), "manager 类型无效"
+        self._image_manager = manager
+
+    def consume_generated_images(self) -> list[GeneratedImage]:
+        """
+        读取并清空最近一次会话生成的图像列表。
+
+        Returns:
+            list[GeneratedImage]: 生成图像集合，按生成顺序排列。
+        """
+        images = list(self._generated_images)
+        self._generated_images = []
+        return images
+
+    def _require_image_manager(self) -> ImageStorageManager:
+        """
+        获取已配置的图像管理器。
+
+        Returns:
+            ImageStorageManager: 图像存储管理器实例。
+
+        Raises:
+            AssertionError: 当图像管理器尚未设置时抛出。
+        """
+        if not isinstance(self._image_manager, ImageStorageManager):
+            raise AssertionError("图像管理器尚未配置")
+        return self._image_manager
 
     def _restore_timers_from_store(self) -> None:
         """
@@ -958,24 +999,58 @@ class SQLCheckpointAgentStreamingPlus:
                 # from langchain_community.tools.yahoo_finance_news import YahooFinanceNewsTool
                 # tools.append(YahooFinanceNewsTool())
 
-            # 两种绑定：
-            # - auto：允许模型自行决定是否调用工具（用于首轮/工具前）
-            # - none：禁止工具，促使模型基于工具结果做总结（用于工具后）
-            llm_tools_auto = llm.bind_tools(tools) if tools else llm
-            llm_tools_none = llm.bind_tools(tools, tool_choice="none") if tools else llm
-            # - force：当用户显式要求搜索/检索等，强制调用 tavily_search
+        @tool
+        def generate_local_image(prompt: str, size: str = "1024x1024") -> str:
             """
-            if tools:
-                llm_tools_force = llm.bind_tools(
-                    tools,
-                    tool_choice={
-                        "type": "function",
-                        "function": {"name": "tavily_search"},
-                    },
-                )
-            else:
-                llm_tools_force = llm
+            生成图像并返回本地文件路径，供下游发送真实图片。
+
+            Args:
+                prompt (str): 图像描述，须包含主体、场景与风格信息。
+                size (str): 输出尺寸，支持 256x256、512x512、1024x1024。
+
+            Returns:
+                str: JSON 字符串，包含 path、mime_type、prompt。
+
+            Raises:
+                AssertionError: 当提示为空、尺寸非法或缺少图像管理器时抛出。
+                RuntimeError: 当图像生成失败时抛出。
             """
+            prompt_text = prompt.strip()
+            assert prompt_text, "prompt 不能为空"
+            size_norm = size.strip().lower()
+            allowed = {"256x256", "512x512", "1024x1024"}
+            assert size_norm in allowed, f"size 必须为 {allowed} 之一"
+            _ensure_openai_env_once()
+            manager = self._require_image_manager()
+            image = manager.generate_image_via_openai(prompt_text, size_norm)
+            self._generated_images.append(image)
+            payload = {
+                "path": str(image.path),
+                "mime_type": image.mime_type,
+                "prompt": prompt_text,
+            }
+            return json.dumps(payload, ensure_ascii=False)
+
+        tools.append(generate_local_image)
+
+        # 两种绑定：
+        # - auto：允许模型自行决定是否调用工具（用于首轮/工具前）
+        # - none：禁止工具，促使模型基于工具结果做总结（用于工具后）
+        llm_tools_auto = llm.bind_tools(tools) if tools else llm
+        llm_tools_none = llm.bind_tools(tools, tool_choice="none") if tools else llm
+        # - force：当用户显式要求搜索/检索等，强制调用 tavily_search
+        """
+        if tools:
+            llm_tools_force = llm.bind_tools(
+                tools,
+                tool_choice={
+                    "type": "function",
+                    "function": {"name": "tavily_search"},
+                },
+            )
+        else:
+            llm_tools_force = llm
+        """
 
         def chatbot(state: State):
             on_token: Callable[[str], None] = getattr(self, "_on_token", None) or (
@@ -1195,10 +1270,29 @@ class SQLCheckpointAgentStreamingPlus:
 
         self._on_token = _wrapped
 
-    def chat_once_stream(self, user_input: str, thread_id: Optional[str] = None) -> str:
+    def chat_once_stream(
+        self,
+        user_input: Union[str, Sequence[dict[str, Any]], HumanMessage],
+        thread_id: Optional[str] = None,
+    ) -> str:
+        """
+        同步执行一次对话轮次，支持多模态输入并返回最终文本。
+
+        Args:
+            user_input (Union[str, Sequence[dict[str, Any]], HumanMessage]):
+                用户输入内容，可为纯文本、LangChain HumanMessage，或多模态内容列表。
+            thread_id (Optional[str]): LangGraph 线程 ID，默认使用配置中的线程。
+
+        Returns:
+            str: 聚合后的最终文本回复。
+
+        Raises:
+            AssertionError: 当输入类型不受支持时抛出。
+        """
         # 每轮初始化
         self._printed_in_round = False
         self._agent_header_printed = False
+        self._generated_images = []
         cfg = {"configurable": {"thread_id": thread_id or self._config.thread_id}}
         # 为 langmem 工具提供命名空间占位符值
         ns = getattr(self, "_memory_namespace", "").strip()
@@ -1207,9 +1301,25 @@ class SQLCheckpointAgentStreamingPlus:
         last_text = ""
         tool_notified = False
 
+        if isinstance(user_input, HumanMessage):
+            payload = {"messages": [user_input]}
+        elif isinstance(user_input, str):
+            payload = {"messages": [{"role": "user", "content": user_input}]}
+        elif isinstance(user_input, Sequence):
+            payload = {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": list(user_input),
+                    }
+                ]
+            }
+        else:
+            raise AssertionError("user_input 类型不受支持")
+
         try:
             for ev in self._graph.stream(
-                {"messages": [{"role": "user", "content": user_input}]},
+                payload,
                 cfg,
                 stream_mode="values",
             ):

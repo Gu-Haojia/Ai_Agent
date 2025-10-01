@@ -40,7 +40,7 @@ import time
 from dataclasses import dataclass
 from hashlib import sha1
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Optional
+from typing import Optional, Sequence
 from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 
@@ -73,6 +73,7 @@ from sql_agent_cli_stream_plus import (
     AgentConfig,
     SQLCheckpointAgentStreamingPlus,
 )
+from image_storage import GeneratedImage, ImageStorageManager, StoredImage
 
 
 @dataclass
@@ -185,18 +186,72 @@ def _send_group_at_message(
     _send_group_msg(api_base, group_id, msg, access_token)
 
 
-def _parse_message_and_at(event: dict) -> tuple[str, bool]:
-    """解析 NapCat 群消息，返回纯文本与是否@机器人。
+@dataclass(frozen=True)
+class ImageSegmentInfo:
+    """消息段中的图片信息。"""
 
-    NapCat 的消息可为两种格式：
-    - String（CQ 码）；
-    - Array（段落列表，如 {"type":"text"|"at"|...}）。
+    url: Optional[str]
+    file_id: Optional[str]
+    filename: Optional[str]
+
+
+@dataclass(frozen=True)
+class ParsedMessage:
+    """标准化的消息解析结果。"""
+
+    text: str
+    at_me: bool
+    images: tuple[ImageSegmentInfo, ...]
+
+
+def _extract_cq_images(raw: str) -> tuple[ImageSegmentInfo, ...]:
+    """
+    从原始 CQ 文本中解析图像段。
+
+    Args:
+        raw (str): 原始消息字符串。
+
+    Returns:
+        tuple[ImageSegmentInfo, ...]: 解析出的图像段列表。
+    """
+    images: list[ImageSegmentInfo] = []
+    idx = 0
+    length = len(raw)
+    while idx < length:
+        start = raw.find("[CQ:image", idx)
+        if start == -1:
+            break
+        end = raw.find("]", start)
+        if end == -1:
+            break
+        body = raw[start + 1 : end]
+        parts = body.split(",")
+        data: dict[str, str] = {}
+        for segment in parts[1:]:
+            if "=" not in segment:
+                continue
+            key, value = segment.split("=", 1)
+            data[key.strip()] = value.strip()
+        images.append(
+            ImageSegmentInfo(
+                url=data.get("url"),
+                file_id=data.get("file") or data.get("file_id"),
+                filename=data.get("file") or data.get("name"),
+            )
+        )
+        idx = end + 1
+    return tuple(images)
+
+
+def _parse_message_and_at(event: dict) -> ParsedMessage:
+    """
+    解析 NapCat 群消息，返回文本、@ 状态与图像段。
 
     Args:
         event (dict): OneBot v11 事件。
 
     Returns:
-        tuple[str, bool]: (纯文本, 是否@机器人)。
+        ParsedMessage: 标准化后的消息内容。
     """
     self_id = str(event.get("self_id") or "")
 
@@ -204,6 +259,7 @@ def _parse_message_and_at(event: dict) -> tuple[str, bool]:
     if isinstance(msg, list):
         texts: list[str] = []
         at_me = False
+        images: list[ImageSegmentInfo] = []
         for seg in msg:
             try:
                 typ = seg.get("type")
@@ -216,13 +272,25 @@ def _parse_message_and_at(event: dict) -> tuple[str, bool]:
                 qq = str(data.get("qq", ""))
                 if self_id and qq == self_id:
                     at_me = True
-        return ("".join(texts).strip(), at_me)
+            elif typ == "image":
+                url = data.get("url")
+                file_id = data.get("file") or data.get("file_id")
+                filename = data.get("name") or data.get("file")
+                images.append(
+                    ImageSegmentInfo(
+                        url=str(url) if url else None,
+                        file_id=str(file_id) if file_id else None,
+                        filename=str(filename) if filename else None,
+                    )
+                )
+        return ParsedMessage("".join(texts).strip(), at_me, tuple(images))
 
     raw = str(event.get("raw_message") or msg or "").strip()
     at_me = False
     if self_id and "[CQ:at,qq=" in raw:
         at_me = f"[CQ:at,qq={self_id}]" in raw
-    return (raw, at_me)
+    images = _extract_cq_images(raw) if raw else ()
+    return ParsedMessage(raw, at_me, images)
 
 
 def _extract_sender_name(event: dict) -> str:
@@ -277,6 +345,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
     # 共享对象（由主程序注入）
     bot_cfg: BotConfig
     agent: SQLCheckpointAgentStreamingPlus
+    image_storage: Optional[ImageStorageManager] = None
     # 群 -> 线程ID 映射，用于 /clear 后为群对话分配新线程
     _group_threads: dict[int, str] = {}
     _thread_store_file: str = ""
@@ -285,6 +354,77 @@ class QQBotHandler(BaseHTTPRequestHandler):
     _group_namespaces: dict[int, str] = {}
     _ns_store_file: str = ""
     _env_ns_checked: bool = False
+
+    @classmethod
+    def _require_image_storage(cls) -> ImageStorageManager:
+        """
+        获取已初始化的图像存储管理器。
+
+        Returns:
+            ImageStorageManager: 全局共享的图像存储管理器。
+
+        Raises:
+            AssertionError: 当未注入图像存储实例时抛出。
+        """
+        if not isinstance(cls.image_storage, ImageStorageManager):
+            raise AssertionError("图像存储管理器尚未配置")
+        return cls.image_storage
+
+    @staticmethod
+    def _build_multimodal_content(
+        model_input: str, images: Sequence[StoredImage]
+    ) -> list[dict[str, object]]:
+        """
+        构造多模态消息内容列表。
+
+        Args:
+            model_input (str): 拼接后的文本输入。
+            images (Sequence[StoredImage]): 已保存的图像集合。
+
+        Returns:
+            list[dict[str, object]]: 可直接传递给多模态模型的内容结构。
+        """
+        content: list[dict[str, object]] = [{"type": "text", "text": model_input}]
+        if images:
+            content.append(
+                {
+                    "type": "text",
+                    "text": f"用户同时附带了 {len(images)} 张图片，请结合视觉分析并不要回传原始图片。",
+                }
+            )
+        for idx, stored in enumerate(images, 1):
+            content.append(
+                {
+                    "type": "text",
+                    "text": f"第 {idx} 张图像已经以内嵌 data URL 形式提供。",
+                }
+            )
+            content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": stored.data_url()},
+                }
+            )
+        return content
+
+    @staticmethod
+    def _compose_group_message(answer: str, images: Sequence[GeneratedImage]) -> str:
+        """
+        组合带有 CQ 图片的群聊消息。
+
+        Args:
+            answer (str): 文本回复。
+            images (Sequence[GeneratedImage]): 生成图片列表。
+
+        Returns:
+            str: 可直接发送的 CQ 消息字符串。
+        """
+        parts: list[str] = []
+        if answer.strip():
+            parts.append(answer.strip())
+        for item in images:
+            parts.append(f"[CQ:image,file=file://{item.path}]")
+        return "\n".join(parts)
 
     @classmethod
     def setup_thread_store(cls, path: str, current_env_tid: str) -> None:
@@ -537,9 +677,9 @@ class QQBotHandler(BaseHTTPRequestHandler):
 
         group_id = int(event.get("group_id", 0))
         user_id = int(event.get("user_id", 0))
-        text, at_me = _parse_message_and_at(event)
+        parsed = _parse_message_and_at(event)
 
-        if not text:
+        if not parsed.text and not parsed.images:
             self._send_no_content()
             return
 
@@ -554,12 +694,12 @@ class QQBotHandler(BaseHTTPRequestHandler):
             return
 
         # 仅在被 @ 机器人时响应
-        if not at_me:
+        if not parsed.at_me:
             self._send_no_content()
             return
 
         # 内部命令：当文本完全命中命令格式时优先处理，并直接在群内回复
-        t = text.strip()
+        t = parsed.text.strip()
         if self._handle_commands(group_id, user_id, t):
             self._send_no_content()
             return
@@ -569,7 +709,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
             # 终端打印服务消息
             author = _extract_sender_name(event)
             print(
-                f"[Chat] Request get: Group {group_id} Id {user_id} User {author}: {text}"
+                f"[Chat] Request get: Group {group_id} Id {user_id} User {author}: {parsed.text}"
             )
             print("[Chat] Generating reply...")
             # 为流式打印添加前缀标记到服务端日志，QQ 群内仅发送最终汇总
@@ -578,29 +718,52 @@ class QQBotHandler(BaseHTTPRequestHandler):
             ns = self._namespace_for(group_id)
             self.agent.set_memory_namespace(ns)
             # 轻量方案：在发给 Agent 的文本前加入说话人标识，提升区分度
-            model_input = f"Group_id: [{group_id}]; User_id: [{user_id}]; User_name: {author}; Text: {text}"
-            # 模拟随机延迟（1-4秒）
-            #time.sleep(1 + (os.urandom(1)[0] % 4))
-            # 发送请求并等待最终结果
+            user_text = parsed.text if parsed.text else "（用户未提供文本，仅包含图片）"
+            model_input = (
+                f"Group_id: [{group_id}]; User_id: [{user_id}]; User_name: {author}; Text: {user_text}"
+            )
+            stored_images: list[StoredImage] = []
+            if parsed.images:
+                storage = self._require_image_storage()
+                for seg in parsed.images:
+                    assert (
+                        seg.url
+                    ), "当前仅支持通过 URL 获取的图片消息"
+                    stored_images.append(
+                        storage.save_remote_image(seg.url, seg.filename)
+                    )
+            payload = (
+                self._build_multimodal_content(model_input, stored_images)
+                if stored_images
+                else model_input
+            )
             answer = self.agent.chat_once_stream(
-                model_input, thread_id=self._thread_id_for(group_id)
+                payload, thread_id=self._thread_id_for(group_id)
             )
             answer = (answer or "").strip()
             if not answer:
                 answer = "（未生成回复）"
+            generated_images = self.agent.consume_generated_images()
         except KeyboardInterrupt:
             answer = "（生成已中断）"
+            generated_images = []
         except AssertionError as e:
             answer = f"（配置错误）{e}"
+            generated_images = []
         except Exception as e:
             answer = f"（内部错误）{e}"
+            generated_images = []
 
         # 发送回群
         try:
             # 轻量方案：使用 CQ at 前缀 @ 该用户，便于区分接收者
             # at_prefix = f"[CQ:at,qq={user_id}] "
+            message_body = self._compose_group_message(answer, generated_images)
             _send_group_msg(
-                self.bot_cfg.api_base, group_id, answer, self.bot_cfg.access_token
+                self.bot_cfg.api_base,
+                group_id,
+                message_body,
+                self.bot_cfg.access_token,
             )
         except Exception as e:
             # 回应失败也返回 204，避免 NapCat 将响应体解析为快速操作
@@ -855,6 +1018,12 @@ def main() -> None:
     )
     bot_cfg = BotConfig.from_env()
     agent = _build_agent_from_env()
+    image_dir = os.environ.get(
+        "QQ_IMAGE_DIR",
+        os.path.join(os.getcwd(), "local_backup", "qq_images"),
+    )
+    image_manager = ImageStorageManager(image_dir)
+    agent.set_image_manager(image_manager)
 
     # 启动时加载群线程映射配置（仅保存/加载 _group_threads 字典）
     thread_store = os.environ.get("THREAD_STORE_FILE", ".qq_group_threads.json")
@@ -865,6 +1034,7 @@ def main() -> None:
 
     QQBotHandler.bot_cfg = bot_cfg
     QQBotHandler.agent = agent
+    QQBotHandler.image_storage = image_manager
 
     server = ThreadingHTTPServer((bot_cfg.host, bot_cfg.port), QQBotHandler)
     print(
