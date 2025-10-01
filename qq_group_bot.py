@@ -798,6 +798,45 @@ class QQBotHandler(BaseHTTPRequestHandler):
             else:
                 answer = cleaned or ("（图片已发送）" if downloaded else cleaned)
 
+        # 解析 Agent 回复中的 CQ 图片段并下载本地
+        cq_pattern = re.compile(r"\[CQ:image,([^\]]+)\]")
+        cq_matches = list(cq_pattern.finditer(answer))
+        if cq_matches:
+            manager = self._require_image_storage()
+            failed_urls: list[str] = []
+            success = False
+            for match in cq_matches:
+                data_str = match.group(1)
+                params = {}
+                for part in data_str.split(","):
+                    if "=" in part:
+                        k, v = part.split("=", 1)
+                        params[k.strip()] = v.strip()
+                file_val = params.get("file") or ""
+                if not file_val:
+                    continue
+                if file_val.startswith("base64://"):
+                    image_payloads.append((file_val[len("base64://") :], "image/jpeg"))
+                    success = True
+                    continue
+                if file_val.startswith("http"):
+                    try:
+                        saved = manager.save_remote_image(file_val)
+                        image_payloads.append((saved.base64_data, saved.mime_type))
+                        success = True
+                    except Exception as err:
+                        failed_urls.append(file_val)
+                        sys.stderr.write(
+                            f"[Chat] 下载CQ图片失败: {file_val} -> {err}\n"
+                        )
+            if cq_matches:
+                answer = cq_pattern.sub("", answer).strip()
+            if failed_urls and success:
+                note = "（部分图片下载失败，已忽略无法访问的 CQ 图片链接）"
+                answer = f"{answer}\n{note}" if answer else note
+            elif failed_urls and not success and not image_payloads:
+                answer = answer or "（未能下载图片，请稍后重试）"
+
         # 发送回群
         try:
             # 轻量方案：使用 CQ at 前缀 @ 该用户，便于区分接收者
