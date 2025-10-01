@@ -67,12 +67,11 @@ class MultimodalUnitTest(unittest.TestCase):
 
     @unittest.skipUnless(_QQ_MODULE_AVAILABLE, "缺少 langgraph 依赖，跳过 QQ 解析逻辑测试")
     def test_compose_group_message_appends_cq_codes(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            image_path = Path(tmp_dir) / "gen.png"
-            image_path.write_bytes(b"img")
-            message = QQBotHandler._compose_group_message("hello", [image_path])
-            self.assertIn("[CQ:image,file=file://", message)
-            self.assertTrue(message.startswith("hello"))
+        message = QQBotHandler._compose_group_message(
+            "hello", ["[CQ:image,file=base64://ZGF0YQ==]"]
+        )
+        self.assertIn("[CQ:image,file=base64://", message)
+        self.assertTrue(message.startswith("hello"))
 
     def test_save_generated_image(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
