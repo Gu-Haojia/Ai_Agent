@@ -816,8 +816,16 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 if not file_val:
                     continue
                 if file_val.startswith("base64://"):
-                    image_payloads.append((file_val[len("base64://") :], "image/jpeg"))
-                    success = True
+                    raw_b64 = file_val[len("base64://") :]
+                    try:
+                        stored = manager.save_base64_image(raw_b64)
+                        image_payloads.append((stored.base64_data, stored.mime_type))
+                        success = True
+                    except Exception as err:
+                        failed_urls.append("base64-data")
+                        sys.stderr.write(
+                            f"[Chat] 保存CQ Base64图片失败: {err}\n"
+                        )
                     continue
                 if file_val.startswith("http"):
                     try:

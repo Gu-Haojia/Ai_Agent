@@ -205,6 +205,34 @@ class ImageStorageManager:
         path = self._write_bytes(self._generated_dir, data, suffix)
         return GeneratedImage(path=path, mime_type=mime_type, prompt=prompt)
 
+    def save_base64_image(
+        self, b64_data: str, mime_type: str = "image/jpeg"
+    ) -> StoredImage:
+        """
+        将 Base64 图像写入 incoming 目录，并返回存储信息。
+
+        Args:
+            b64_data (str): Base64 编码内容。
+            mime_type (str): 图像 MIME 类型，默认 "image/jpeg"。
+
+        Returns:
+            StoredImage: 保存后的图像信息。
+
+        Raises:
+            AssertionError: 当 Base64 数据为空时抛出。
+        """
+        assert b64_data, "Base64 数据不能为空"
+        data = base64.b64decode(b64_data)
+        suffix = {
+            "image/png": ".png",
+            "image/jpeg": ".jpg",
+            "image/gif": ".gif",
+            "image/webp": ".webp",
+        }.get(mime_type, ".jpg")
+        path = self._write_bytes(self._incoming_dir, data, suffix)
+        encoded = base64.b64encode(data).decode("ascii")
+        return StoredImage(path=path, mime_type=mime_type, base64_data=encoded)
+
     def generate_image_via_openai(self, prompt: str, size: str = "1024x1024") -> GeneratedImage:
         """
         使用 OpenAI Images API 生成图像并保存。

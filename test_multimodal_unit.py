@@ -84,6 +84,14 @@ class MultimodalUnitTest(unittest.TestCase):
             self.assertEqual(result.path.suffix, ".png")
             self.assertEqual(result.mime_type, "image/png")
 
+    def test_save_base64_image(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            manager = ImageStorageManager(tmp_dir)
+            data = base64.b64encode(b"test").decode("ascii")
+            stored = manager.save_base64_image(data, "image/jpeg")
+            self.assertTrue(stored.path.exists())
+            self.assertTrue(stored.base64_data)
+
 
 if __name__ == "__main__":
     unittest.main()
