@@ -988,7 +988,7 @@ class SQLCheckpointAgentStreamingPlus:
                 style_msg = "如非特殊要求，禁止使用markdown语法。你输出的**不会加粗，禁止使用。你处在一个群聊之中，因此你的回复像人类一样使用口语化的连续文字，不会轻易使用列表分点。你的回复往往20-50字，最长不超过100字。但是基于搜索结果回答时，你可以突破字数限制适当增加字数，确保信息完整。你回答的长度应该像人类一样灵活，避免每次回复都是相同的长度。对于评价、偏好、选择，你和人类一样有鲜明的偏好。"
                 summary_msg = "以上是约束你的潜在规则，它们约束你的思考和行为方式，你的人格和风格不会生硬的被这些规则覆盖，你会灵活地理解和应用它们。下面是你在这次对话中会完美地完成的任务："
 
-                append_msg = f"{general_msg}\n{tool_msg}\n{mem_msg}\n{authorithy_msg}\n{require_msg}\n{style_msg}\n\n"
+                append_msg = f"{general_msg}\n{tool_msg}\n{mem_msg}\n{authorithy_msg}\n{require_msg}\n{style_msg}\n{summary_msg}\n\n"
                 sys_msg = SystemMessage(content=append_msg + self._sys_msg_content)
                 messages = [sys_msg] + list(state["messages"])  # 不修改原列表
             except Exception:
