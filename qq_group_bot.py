@@ -911,7 +911,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
             # 终端打印服务消息
             author = _extract_sender_name(event)
             print(
-                f"[Chat] Request get: Group {group_id} Id {user_id} User {author}: {parsed.text if not parsed.images else parsed.text+' [with images]'}"
+                f"[Chat] Request get: Group {group_id} Id {user_id} User {author}: {parsed.text if not parsed.images else parsed.text+'[with images]'}"
             )
             print("[Chat] Generating reply...")
             # 为流式打印添加前缀标记到服务端日志，QQ 群内仅发送最终汇总
