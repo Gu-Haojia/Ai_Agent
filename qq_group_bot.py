@@ -896,7 +896,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
         # 仅在被 @ 机器人时响应
         if not parsed.at_me:
             author = _extract_sender_name(event)
-            self._log_ignore_request(group_id, user_id, author, parsed.text if not parsed.images else parsed.text+" [with images]")
+            self._log_ignore_request(group_id, user_id, author, parsed.text if not parsed.images else parsed.text+"[with images]")
             self._send_no_content()
             return
 
@@ -1073,7 +1073,19 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 answer = answer or "（未能下载图片，请稍后重试）"
 
         if answer:
-            lines = [line for line in answer.splitlines() if line.strip()]
+            lines = []
+            prev_blank = False
+            for line in answer.splitlines():
+                if line.strip():  # 非空行
+                    lines.append(line)
+                    prev_blank = False
+                else:  # 空行
+                    if not prev_blank:  # 上一行不是空行，保留一个
+                        lines.append("")
+                    prev_blank = True
+            # 去掉结尾的空行
+            while lines and lines[-1] == "":
+                lines.pop()
             answer = "\n".join(lines)
 
         # 发送回群
