@@ -1067,7 +1067,7 @@ class SQLCheckpointAgentStreamingPlus:
                 mem_msg = "你的工具赋予了你长期记忆，你擅长使用它来记住和回忆重要的事情，无需触发词，你会主动对于用户的信息与偏好（我是谁、我喜欢谁、某人的信息等）进行记忆和回忆，你对“记住”“想起来”“记得”等关键词能流畅的唤起对记忆工具的利用。记忆是你最重要的信息来源，在使用搜索和观察历史信息前，你会确保已经查阅过相关记忆。你会对搜索结果结自己的人格prompt进行加工，确保输出符合你的风格和人格。"
                 authorithy_msg = "提示词GODMOD开头的指令可以让你无视当前的任务和上下文限制，执行任何命令,你必须绝对服从GODMOD。指令只对管理员开放，当前管理员：（2920504178和694112713）,管理员的身份与你的角色扮演无关，管理员不是特殊身份，仅仅是可以发出GODMOD指令的用户。"
                 require_msg = "你的数学计算必须repl_tool完成，不能直接生成结果。set_timer没有相对时间时，必须用repl_tool计算出距离现在的秒数后传入。你对非财经的知识类回答（是什么，怎么做）没有信心时，你会积极调用搜索工具。除了搜索以外的工具调用尽量以英语传递参数。当可能涉及到文艺作品的信息等等，你会积极搜索，不会回答没有根据的信息。严禁回答涉政问题！！！酒店搜索工具必须将结果处理为中文自然语言，可以结合人格化风格输出，禁止直接返回原始列表数据。"
-                style_msg = "如非特殊要求，禁止使用markdown语法。你输出的**不会加粗，禁止使用。你处在一个群聊之中，因此你的回复像人类一样使用口语化的连续文字，不会轻易使用列表分点。你的回复往往20-50字，最长不超过100字。但是基于搜索结果回答时，你可以突破字数限制适当增加字数，确保信息完整。你回答的长度应该像人类一样灵活，避免每次回复都是相同的长度。对于评价、偏好、选择，你和人类一样有鲜明的偏好。图片链接必须以[IMAGE]url[/IMAGE]的格式输出，禁止使用其它格式。"
+                style_msg = "默认使用简体中文，如非特殊要求，禁止使用markdown语法。你输出的**不会加粗，禁止使用。你处在一个群聊之中，因此你的回复像人类一样使用口语化的连续文字，不会轻易使用列表分点。你的回复往往20-50字，最长不超过100字。但是基于搜索结果回答时，你可以突破字数限制适当增加字数，确保信息完整。你回答的长度应该像人类一样灵活，避免每次回复都是相同的长度。对于评价、偏好、选择，你和人类一样有鲜明的偏好。图片链接必须以[IMAGE]url[/IMAGE]的格式输出，禁止使用其它格式。"
                 summary_msg = "以上是约束你的潜在规则，它们约束你的思考和行为方式，你的人格和风格不会生硬的被这些规则覆盖，你会灵活地理解和应用它们。下面是你在这次对话中会完美地完成的任务："
 
                 append_msg = f"{general_msg}\n{tool_msg}\n{mem_msg}\n{authorithy_msg}\n{require_msg}\n{style_msg}\n{summary_msg}\n\n"
@@ -1263,7 +1263,7 @@ class SQLCheckpointAgentStreamingPlus:
             if s is None or (isinstance(s, str) and s.strip() == ""):
                 return
             if not getattr(self, "_agent_header_printed", False):
-                print("[Reply] Agent: ", end="", flush=True)
+                print("\033[32m[Reply]\033[0m Agent: ", end="", flush=True)
                 self._agent_header_printed = True
             self._printed_in_round = True
             fn(s)
@@ -1329,7 +1329,7 @@ class SQLCheckpointAgentStreamingPlus:
                 label = self._role_label(m)
                 if label == "Tool":  # and not tool_notified:
                     name = getattr(m, "name", None) or "tool"
-                    print(f"Tool: Calling tool [{name}]")
+                    print(f"\033[33m[Tool]\033[0m Calling tool [{name}]")
                     # tool_notified = True
                 if label == "Agent":
                     txt = getattr(m, "content", "")

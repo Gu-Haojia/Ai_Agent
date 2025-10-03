@@ -748,7 +748,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
         """
         clean_text = text.replace("\n", " ")
         print(
-            f"[Ignore] Message get: Group {group_id} Id {user_id} User {author}: {clean_text}", flush=True
+            f"\033[31m[Ignore]\033[0m Message get: Group {group_id} Id {user_id} User {author}: {clean_text}", flush=True
         )
         self._suppress_http_log = True
 
@@ -911,9 +911,9 @@ class QQBotHandler(BaseHTTPRequestHandler):
             # 终端打印服务消息
             author = _extract_sender_name(event)
             print(
-                f"[Chat] Request get: Group {group_id} Id {user_id} User {author}: {parsed.text if not parsed.images else parsed.text+'[with images]'}"
+                f"\033[34m[Chat]\033[0m Request get: Group {group_id} Id {user_id} User {author}: {parsed.text if not parsed.images else parsed.text+'[with images]'}"
             )
-            print("[Chat] Generating reply...")
+            print("\033[34m[Chat]\033[0m Generating reply...")
             # 为流式打印添加前缀标记到服务端日志，QQ 群内仅发送最终汇总
             self.agent.set_token_printer(lambda s: sys.stdout.write(s))
             # 设置当前群的持久记忆命名空间（langmem 工具使用）
@@ -1015,7 +1015,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
                     downloaded = True
                 except Exception as err:
                     failed_urls.append(url_norm)
-                    sys.stderr.write(f"[Chat] 下载回复图片失败: {url_norm} -> {err}\n")
+                    sys.stderr.write(f"\033[34m[Chat]\033[0m 下载回复图片失败: {url_norm} -> {err}\n")
             cleaned = re.sub(r"\[IMAGE\].+?\[/IMAGE\]", "", answer, flags=re.IGNORECASE).strip()
             if failed_urls and downloaded:
                 note = "（部分图片下载失败，已忽略无法访问的链接）"
