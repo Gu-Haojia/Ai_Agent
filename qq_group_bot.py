@@ -599,8 +599,34 @@ class QQBotHandler(BaseHTTPRequestHandler):
 
     def _send_no_content(self) -> None:
         """返回 204，无内容（避免触发 NapCat 快速操作）。"""
+        self._suppress_http_log = True
         self.send_response(204)
         self.end_headers()
+
+    def _log_ignore_request(
+        self, group_id: int, user_id: int, author: str, text: str
+    ) -> None:
+        """
+        记录被忽略的非 @ 消息，并抑制默认 HTTP 日志输出。
+
+        Args:
+            group_id (int): 群号。
+            user_id (int): 用户 QQ 号。
+            author (str): 用户昵称或名片。
+            text (str): 用户发送的原始文本。
+        """
+        clean_text = text.replace("\n", " ")
+        print(
+            f"[Ignore] Message get: Group {group_id} Id {user_id} User {author}: {clean_text}", flush=True
+        )
+        self._suppress_http_log = True
+
+    def log_request(self, code: int | str = "-", size: int | str = "-") -> None:
+        """自定义请求日志，允许在特定场景下禁用默认输出。"""
+        if getattr(self, "_suppress_http_log", False):
+            self._suppress_http_log = False
+            return
+        super().log_request(code, size)
 
     def log_message(self, fmt: str, *args) -> None:  # noqa: D401
         # 避免 http.server 默认 stdout 噪音，简化为一行
@@ -691,6 +717,8 @@ class QQBotHandler(BaseHTTPRequestHandler):
         parsed = _parse_message_and_at(event)
 
         if not parsed.text and not parsed.images:
+            author = _extract_sender_name(event)
+            self._log_ignore_request(group_id, user_id, author, "[No text]")
             self._send_no_content()
             return
 
@@ -706,6 +734,8 @@ class QQBotHandler(BaseHTTPRequestHandler):
 
         # 仅在被 @ 机器人时响应
         if not parsed.at_me:
+            author = _extract_sender_name(event)
+            self._log_ignore_request(group_id, user_id, author, parsed.text if not parsed.images else parsed.text+" [with images]")
             self._send_no_content()
             return
 
@@ -720,7 +750,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
             # 终端打印服务消息
             author = _extract_sender_name(event)
             print(
-                f"[Chat] Request get: Group {group_id} Id {user_id} User {author}: {parsed.text}"
+                f"[Chat] Request get: Group {group_id} Id {user_id} User {author}: {parsed.text if not parsed.images else parsed.text+' [with images]'}"
             )
             print("[Chat] Generating reply...")
             # 为流式打印添加前缀标记到服务端日志，QQ 群内仅发送最终汇总

@@ -1263,7 +1263,7 @@ class SQLCheckpointAgentStreamingPlus:
             if s is None or (isinstance(s, str) and s.strip() == ""):
                 return
             if not getattr(self, "_agent_header_printed", False):
-                print("Agent: ", end="", flush=True)
+                print("[Reply] Agent: ", end="", flush=True)
                 self._agent_header_printed = True
             self._printed_in_round = True
             fn(s)
