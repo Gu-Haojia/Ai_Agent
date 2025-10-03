@@ -998,40 +998,40 @@ class SQLCheckpointAgentStreamingPlus:
                     tools.append(finance_tool)
                 # from langchain_community.tools.yahoo_finance_news import YahooFinanceNewsTool
                 # tools.append(YahooFinanceNewsTool())
+        if False:  # 先关闭，避免误用
+            @tool
+            def generate_local_image(prompt: str, size: str = "1024x1024") -> str:
+                """
+                生成图像并返回本地文件路径，供下游发送真实图片。
 
-        @tool
-        def generate_local_image(prompt: str, size: str = "1024x1024") -> str:
-            """
-            生成图像并返回本地文件路径，供下游发送真实图片。
+                Args:
+                    prompt (str): 图像描述，须包含主体、场景与风格信息。
+                    size (str): 输出尺寸，支持 256x256、512x512、1024x1024。
 
-            Args:
-                prompt (str): 图像描述，须包含主体、场景与风格信息。
-                size (str): 输出尺寸，支持 256x256、512x512、1024x1024。
+                Returns:
+                    str: JSON 字符串，包含 path、mime_type、prompt。
 
-            Returns:
-                str: JSON 字符串，包含 path、mime_type、prompt。
+                Raises:
+                    AssertionError: 当提示为空、尺寸非法或缺少图像管理器时抛出。
+                    RuntimeError: 当图像生成失败时抛出。
+                """
+                prompt_text = prompt.strip()
+                assert prompt_text, "prompt 不能为空"
+                size_norm = size.strip().lower()
+                allowed = {"256x256", "512x512", "1024x1024"}
+                assert size_norm in allowed, f"size 必须为 {allowed} 之一"
+                _ensure_openai_env_once()
+                manager = self._require_image_manager()
+                image = manager.generate_image_via_openai(prompt_text, size_norm)
+                self._generated_images.append(image)
+                payload = {
+                    "path": str(image.path),
+                    "mime_type": image.mime_type,
+                    "prompt": prompt_text,
+                }
+                return json.dumps(payload, ensure_ascii=False)
 
-            Raises:
-                AssertionError: 当提示为空、尺寸非法或缺少图像管理器时抛出。
-                RuntimeError: 当图像生成失败时抛出。
-            """
-            prompt_text = prompt.strip()
-            assert prompt_text, "prompt 不能为空"
-            size_norm = size.strip().lower()
-            allowed = {"256x256", "512x512", "1024x1024"}
-            assert size_norm in allowed, f"size 必须为 {allowed} 之一"
-            _ensure_openai_env_once()
-            manager = self._require_image_manager()
-            image = manager.generate_image_via_openai(prompt_text, size_norm)
-            self._generated_images.append(image)
-            payload = {
-                "path": str(image.path),
-                "mime_type": image.mime_type,
-                "prompt": prompt_text,
-            }
-            return json.dumps(payload, ensure_ascii=False)
-
-        tools.append(generate_local_image)
+            tools.append(generate_local_image)
 
         # 两种绑定：
         # - auto：允许模型自行决定是否调用工具（用于首轮/工具前）
