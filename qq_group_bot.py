@@ -47,6 +47,101 @@ from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 
 
+_CQ_REPLY_PATTERN = re.compile(r"\[CQ:reply,([^\]]*)\]")
+
+
+def _extract_reply_ids_from_raw(raw: str) -> tuple[str, tuple[str, ...]]:
+    """
+    从包含 CQ reply 标签的字符串中提取引用消息 ID 并移除标签。
+
+    Args:
+        raw (str): 原始消息字符串。
+
+    Returns:
+        tuple[str, tuple[str, ...]]: 包含清理后文本与引用 message_id 的元组。
+
+    Raises:
+        None: 不会在此函数中抛出异常。
+    """
+    ids: list[str] = []
+
+    def _replace(match: re.Match[str]) -> str:
+        params = match.group(1)
+        for part in params.split(","):
+            key, _, value = part.partition("=")
+            key = key.strip()
+            value = value.strip()
+            if key in {"message_id", "id"} and value:
+                ids.append(value)
+        return ""
+
+    cleaned = _CQ_REPLY_PATTERN.sub(_replace, raw)
+    return cleaned.strip(), tuple(ids)
+
+
+def _extract_message_content(
+    message: object, raw_fallback: Optional[str] = None
+) -> MessageContent:
+    """
+    从消息对象提取文本与图像信息。
+
+    Args:
+        message (object): OneBot 返回的 message 字段。
+        raw_fallback (Optional[str]): 当 message 为空时的原始字符串。
+
+    Returns:
+        MessageContent: 标准化的消息内容。
+    """
+
+    if isinstance(message, list):
+        text, _at_me, images, _reply_ids = _normalize_message_segments(message)
+        return MessageContent(text=text, images=images)
+
+    raw = str(message or raw_fallback or "")
+    raw, _ = _extract_reply_ids_from_raw(raw)
+    images = _extract_cq_images(raw) if raw else ()
+    return MessageContent(text=raw, images=images)
+
+
+def _fetch_message_content(
+    api_base: str, message_id: str, access_token: str = ""
+) -> MessageContent:
+    """
+    通过 OneBot HTTP API 获取指定消息的文本与图像内容。
+
+    Args:
+        api_base (str): OneBot HTTP API 的基地址。
+        message_id (str): 需要获取内容的消息 ID。
+        access_token (str): API Token，可为空字符串。
+
+    Returns:
+        MessageContent: 对应消息的文本与图像内容。
+
+    Raises:
+        RuntimeError: 当 HTTP 响应码或返回 retcode 不符合预期时抛出。
+    """
+
+    assert message_id, "message_id 不可为空"
+    url = urljoin(api_base + "/", "get_msg")
+    payload: dict[str, object] = {}
+    if message_id.isdigit():
+        payload["message_id"] = int(message_id)
+    else:
+        payload["message_id"] = message_id
+    headers = {"Content-Type": "application/json"}
+    if access_token:
+        headers["Authorization"] = f"Bearer {access_token}"
+    req = Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers)
+    with urlopen(req, timeout=15) as resp:
+        if resp.status != 200:
+            raise RuntimeError(f"get_msg HTTP {resp.status}")
+        body = json.loads(resp.read().decode("utf-8"))
+    if body.get("status") != "ok" or body.get("retcode") not in {0, None}:
+        raise RuntimeError(f"get_msg failed: retcode={body.get('retcode')}")
+    data = body.get("data") or {}
+    return _extract_message_content(data.get("message"), data.get("raw_message"))
+
+
 def _load_env_from_files(files: list[str]) -> None:
     """
     从 .env/.env.local 读取 KEY=VALUE 并注入到进程环境（不覆盖已存在的环境变量）。
@@ -201,12 +296,21 @@ class ImageSegmentInfo:
 
 
 @dataclass(frozen=True)
+class MessageContent:
+    """标准化的消息内容（文本与图像）。"""
+
+    text: str
+    images: tuple[ImageSegmentInfo, ...]
+
+
+@dataclass(frozen=True)
 class ParsedMessage:
     """标准化的消息解析结果。"""
 
     text: str
     at_me: bool
     images: tuple[ImageSegmentInfo, ...]
+    reply_message_ids: tuple[str, ...]
 
 
 def _extract_cq_images(raw: str) -> tuple[ImageSegmentInfo, ...]:
@@ -248,6 +352,56 @@ def _extract_cq_images(raw: str) -> tuple[ImageSegmentInfo, ...]:
     return tuple(images)
 
 
+def _normalize_message_segments(
+    segments: Sequence[dict], self_id: str = ""
+) -> tuple[str, bool, tuple[ImageSegmentInfo, ...], tuple[str, ...]]:
+    """
+    将消息段标准化为文本、@ 标记、图像与引用消息 ID。
+
+    Args:
+        segments (Sequence[dict]): OneBot 消息段列表。
+        self_id (str): 机器人自身 QQ 号，用于识别 @。
+
+    Returns:
+        tuple[str, bool, tuple[ImageSegmentInfo, ...], tuple[str, ...]]: 包含文本、是否@、图片段与引用 ID。
+    """
+    texts: list[str] = []
+    at_me = False
+    images: list[ImageSegmentInfo] = []
+    reply_ids: list[str] = []
+    for seg in segments:
+        if not isinstance(seg, dict):
+            continue
+        typ = seg.get("type")
+        data = seg.get("data") or {}
+        if typ == "text":
+            texts.append(str(data.get("text", "")))
+        elif typ == "at" and self_id:
+            qq = str(data.get("qq", ""))
+            if qq == self_id:
+                at_me = True
+        elif typ == "image":
+            url = data.get("url")
+            file_id = data.get("file") or data.get("file_id")
+            filename = data.get("name") or data.get("file")
+            images.append(
+                ImageSegmentInfo(
+                    url=str(url) if url else None,
+                    file_id=str(file_id) if file_id else None,
+                    filename=str(filename) if filename else None,
+                )
+            )
+        elif typ == "reply":
+            candidate = ""
+            for key in ("message_id", "id"):
+                candidate = str(data.get(key) or "").strip()
+                if candidate:
+                    break
+            if candidate:
+                reply_ids.append(candidate)
+    return "".join(texts).strip(), at_me, tuple(images), tuple(reply_ids)
+
+
 def _parse_message_and_at(event: dict) -> ParsedMessage:
     """
     解析 NapCat 群消息，返回文本、@ 状态与图像段。
@@ -262,41 +416,17 @@ def _parse_message_and_at(event: dict) -> ParsedMessage:
 
     msg = event.get("message")
     if isinstance(msg, list):
-        texts: list[str] = []
-        at_me = False
-        images: list[ImageSegmentInfo] = []
-        for seg in msg:
-            try:
-                typ = seg.get("type")
-                data = seg.get("data") or {}
-            except Exception:
-                continue
-            if typ == "text":
-                texts.append(str(data.get("text", "")))
-            elif typ == "at":
-                qq = str(data.get("qq", ""))
-                if self_id and qq == self_id:
-                    at_me = True
-            elif typ == "image":
-                url = data.get("url")
-                file_id = data.get("file") or data.get("file_id")
-                filename = data.get("name") or data.get("file")
-                images.append(
-                    ImageSegmentInfo(
-                        url=str(url) if url else None,
-                        file_id=str(file_id) if file_id else None,
-                        filename=str(filename) if filename else None,
-                    )
-                )
-        return ParsedMessage("".join(texts).strip(), at_me, tuple(images))
+        text, at_me, images, reply_ids = _normalize_message_segments(msg, self_id)
+        return ParsedMessage(text, at_me, images, reply_ids)
 
     raw = str(event.get("raw_message") or msg or "").strip()
+    raw, reply_ids = _extract_reply_ids_from_raw(raw)
     at_me = False
     if self_id and "[CQ:at,qq=" in raw:
         at_me = f"[CQ:at,qq={self_id}]" in raw
     images = _extract_cq_images(raw) if raw else ()
     print(f"[Debug] Alternative way enabled")
-    return ParsedMessage(raw, at_me, images)
+    return ParsedMessage(raw, at_me, images, reply_ids)
 
 
 def _extract_sender_name(event: dict) -> str:
@@ -676,6 +806,36 @@ class QQBotHandler(BaseHTTPRequestHandler):
             return b"", "read body failed"
         return body or b"", None
 
+    def _collect_reply_contents(self, message_ids: Sequence[str]) -> list[MessageContent]:
+        """
+        批量获取引用消息对应的内容（文本与图像）。
+
+        Args:
+            message_ids (Sequence[str]): 需要查询的 message_id 列表。
+
+        Returns:
+            list[MessageContent]: 成功获取的引用消息内容列表。
+
+        Raises:
+            None: 不会在此函数中抛出异常。
+        """
+        contents: list[MessageContent] = []
+        for mid in message_ids:
+            mid_norm = mid.strip()
+            if not mid_norm:
+                continue
+            try:
+                content = _fetch_message_content(
+                    self.bot_cfg.api_base, mid_norm, self.bot_cfg.access_token
+                )
+            except Exception as err:
+                sys.stderr.write(
+                    f"[Chat] 获取引用消息失败: message_id={mid_norm} err={err}\n"
+                )
+                continue
+            contents.append(content)
+        return contents
+
     def do_GET(self) -> None:  # noqa: N802
         """健康检查：仅 /healthz 返回 200，其他 GET 返回 501。"""
         if self.path.rstrip("/") == "/healthz":
@@ -717,7 +877,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
         user_id = int(event.get("user_id", 0))
         parsed = _parse_message_and_at(event)
 
-        if not parsed.text and not parsed.images:
+        if not parsed.text and not parsed.images and not parsed.reply_message_ids:
             author = _extract_sender_name(event)
             self._log_ignore_request(group_id, user_id, author, "[No text]")
             self._send_no_content()
@@ -760,17 +920,53 @@ class QQBotHandler(BaseHTTPRequestHandler):
             ns = self._namespace_for(group_id)
             self.agent.set_memory_namespace(ns)
             # 轻量方案：在发给 Agent 的文本前加入说话人标识，提升区分度
-            user_text = parsed.text if parsed.text else "（用户未提供文本，仅包含图片）"
+            reply_contents = (
+                self._collect_reply_contents(parsed.reply_message_ids)
+                if parsed.reply_message_ids
+                else []
+            )
+            reply_texts = [c.text for c in reply_contents if c.text]
+            user_text = parsed.text
+            if not user_text:
+                if parsed.images:
+                    user_text = "（用户未提供文本，仅包含图片）"
+                elif reply_texts:
+                    user_text = "（当前消息正文为空，仅引用其他消息）"
+                else:
+                    user_text = "（用户未提供文本）"
+            if reply_contents:
+                context_lines: list[str] = []
+                for idx, content in enumerate(reply_contents, 1):
+                    summary = content.text.strip()
+                    if not summary:
+                        summary = "（引用消息未提供文本）"
+                    if content.images:
+                        summary += f"（包含{len(content.images)}张图片）"
+                    context_lines.append(f"引用消息{idx}: {summary}")
+                context_lines.append(f"当前消息: {user_text}")
+                user_text = "\n".join(context_lines)
             model_input = (
                 f"Group_id: [{group_id}]; User_id: [{user_id}]; User_name: {author}; Text: {user_text}"
             )
-            stored_images: list[StoredImage] = []
+            image_segments: list[ImageSegmentInfo] = []
             if parsed.images:
+                image_segments.extend(parsed.images)
+            for content in reply_contents:
+                if content.images:
+                    image_segments.extend(content.images)
+            stored_images: list[StoredImage] = []
+            if image_segments:
                 storage = self._require_image_storage()
-                for seg in parsed.images:
+                seen_tokens: set[str] = set()
+                for seg in image_segments:
                     assert (
                         seg.url
                     ), "当前仅支持通过 URL 获取的图片消息"
+                    token = seg.url or seg.file_id or seg.filename or ""
+                    if token and token in seen_tokens:
+                        continue
+                    if token:
+                        seen_tokens.add(token)
                     stored_images.append(
                         storage.save_remote_image(seg.url, seg.filename)
                     )
