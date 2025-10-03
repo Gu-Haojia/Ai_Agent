@@ -295,6 +295,7 @@ def _parse_message_and_at(event: dict) -> ParsedMessage:
     if self_id and "[CQ:at,qq=" in raw:
         at_me = f"[CQ:at,qq={self_id}]" in raw
     images = _extract_cq_images(raw) if raw else ()
+    print(f"[Debug] Alternative way enabled")
     return ParsedMessage(raw, at_me, images)
 
 
