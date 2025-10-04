@@ -39,6 +39,7 @@ import os
 import re
 import sys
 import time
+from pathlib import Path
 from dataclasses import dataclass
 from hashlib import sha1
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -518,7 +519,8 @@ class QQBotHandler(BaseHTTPRequestHandler):
             images (Sequence[StoredImage]): 已保存的图像集合。
 
         Returns:
-            list[dict[str, object]]: 可直接传递给多模态模型的内容结构。
+            list[dict[str, object]]: 可直接传递给多模态模型的内容结构，
+                在包含 Base64 数据时会同步提供对应的本地文件名。
         """
         content: list[dict[str, object]] = [{"type": "text", "text": model_input}]
         if images:
@@ -529,10 +531,15 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 }
             )
         for idx, stored in enumerate(images, 1):
+            file_path = Path(stored.path)
+            assert file_path.name, "图像文件名不能为空"
             content.append(
                 {
                     "type": "text",
-                    "text": f"第 {idx} 张图像已经以内嵌 data URL 形式提供。",
+                    "text": (
+                        f"第 {idx} 张图像已经以内嵌 data URL 形式提供，"
+                        f"本地文件名为 {file_path.name}。"
+                    ),
                 }
             )
             content.append(

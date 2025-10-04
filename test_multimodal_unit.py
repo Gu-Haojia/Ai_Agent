@@ -64,6 +64,12 @@ class MultimodalUnitTest(unittest.TestCase):
             content = QQBotHandler._build_multimodal_content("test", [stored])
             self.assertEqual(content[0]["text"], "test")
             self.assertTrue(any(item.get("type") == "image_url" for item in content))
+            self.assertTrue(
+                any(
+                    item.get("type") == "text" and "stored.png" in item.get("text", "")
+                    for item in content
+                )
+            )
 
     @unittest.skipUnless(_QQ_MODULE_AVAILABLE, "缺少 langgraph 依赖，跳过 QQ 解析逻辑测试")
     def test_compose_group_message_appends_cq_codes(self) -> None:
