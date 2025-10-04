@@ -405,6 +405,45 @@ class ImageStorageManager:
         encoded = base64.b64encode(data).decode("ascii")
         return StoredImage(path=path, mime_type=mime_type, base64_data=encoded)
 
+    def load_stored_image(self, filename: str) -> StoredImage:
+        """
+        根据文件名读取已保存的图像。
+
+        优先在 incoming 目录下查找，其次尝试 generated 目录；
+        读取成功后重新封装为 StoredImage，包含最新的 Base64 数据。
+
+        Args:
+            filename (str): 图像文件名，仅支持纯文件名，不允许包含路径分隔符。
+
+        Returns:
+            StoredImage: 匹配到的图像信息。
+
+        Raises:
+            AssertionError: 当文件名无效或文件不存在时抛出。
+        """
+
+        assert isinstance(filename, str) and filename.strip(), "filename 不能为空"
+        normalized = filename.strip()
+        assert Path(normalized).name == normalized, "filename 不允许包含路径"
+
+        def _read_from(path: Path) -> StoredImage:
+            data_bytes = path.read_bytes()
+            guessed = mimetypes.guess_type(str(path))[0]
+            mime = (
+                guessed
+                if guessed and guessed.startswith("image/")
+                else self._infer_mime(data_bytes, guessed)
+            )
+            encoded = base64.b64encode(data_bytes).decode("ascii")
+            return StoredImage(path=path, mime_type=mime, base64_data=encoded)
+
+        for directory in (self._incoming_dir, self._generated_dir):
+            candidate = directory / normalized
+            if candidate.is_file():
+                return _read_from(candidate)
+
+        raise AssertionError(f"找不到已保存的图像文件: {normalized}")
+
     def generate_image_via_openai(self, prompt: str, size: str = "1024x1024") -> GeneratedImage:
         """
         使用 OpenAI Images API 生成图像并保存。

@@ -11,9 +11,7 @@
 """
 
 from __future__ import annotations
-import base64
 import json
-import mimetypes
 import os
 import sys
 import time
@@ -1026,11 +1024,11 @@ class SQLCheckpointAgentStreamingPlus:
             调用 Gemini 接口生成或编辑图像，并返回本地文件路径信息。必须强调“生成或编辑图像”才能使用这个工具
 
             Args:
-                prompt (str): 图像描述或编辑指令，必须包含清晰主体与风格。
+                prompt (str): 图像描述或编辑指令，必须包含清晰主体与风格，例如 ````。
                 size (str): 输出尺寸或别名，例如 ``"1024x1024"``、``"square"``。
                 aspect_ratio (Optional[str]): 直接指定的宽高比，例如 ``"16:9"``。
                 reference_images (Optional[list[str]]):
-                    参考图像列表，可为 ``data:"`` 开头的 Data URL 或本地文件路径。
+                    参考图像文件名列表，文件需已保存在图像存储目录中。
 
             Returns:
                 str: JSON 字符串，包含 ``path``、``mime_type`` 与 ``prompt``。
@@ -1054,35 +1052,15 @@ class SQLCheckpointAgentStreamingPlus:
             if reference_images:
                 assert isinstance(
                     reference_images, list
-                ), "reference_images 必须为字符串列表"
+                ), "reference_images 必须为文件名列表"
 
                 for item in reference_images:
                     assert (
                         isinstance(item, str) and item.strip()
                     ), "reference_images 包含空字符串"
-                    value = item.strip()
-                    if value.startswith("data:"):
-                        header, _, encoded = value.partition(",")
-                        assert encoded, "Data URL 缺少 Base64 数据"
-                        assert (
-                            "base64" in header.lower()
-                        ), "Data URL 必须使用 base64 编码"
-                        mime_part = header.split(":", 1)[-1].split(";", 1)[0]
-                        assert mime_part.startswith("image/"), "Data URL 必须为图片类型"
-                        references.append((mime_part, encoded))
-                        continue
-
-                    path = Path(value).expanduser()
-                    assert path.is_file(), f"参考图像不存在: {path}"
-                    data_bytes = path.read_bytes()
-                    guessed = mimetypes.guess_type(str(path))[0]
-                    mime_type = (
-                        guessed
-                        if guessed and guessed.startswith("image/")
-                        else ImageStorageManager._infer_mime(data_bytes, guessed)
-                    )
-                    encoded = base64.b64encode(data_bytes).decode("ascii")
-                    references.append((mime_type, encoded))
+                    name = item.strip()
+                    stored_image = manager.load_stored_image(name)
+                    references.append((stored_image.mime_type, stored_image.base64_data))
 
             image = manager.generate_image_via_gemini(
                 prompt=prompt_text,

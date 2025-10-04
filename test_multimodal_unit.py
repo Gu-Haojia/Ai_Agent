@@ -98,6 +98,18 @@ class MultimodalUnitTest(unittest.TestCase):
             self.assertTrue(stored.path.exists())
             self.assertTrue(stored.base64_data)
 
+    def test_load_stored_image_by_filename(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            manager = ImageStorageManager(tmp_dir)
+            data = base64.b64encode(b"reference").decode("ascii")
+            stored = manager.save_base64_image(data, "image/png")
+            loaded = manager.load_stored_image(stored.path.name)
+            self.assertEqual(loaded.path, stored.path)
+            self.assertEqual(loaded.mime_type, "image/png")
+            self.assertTrue(loaded.base64_data)
+            with self.assertRaises(AssertionError):
+                manager.load_stored_image("missing.png")
+
     def test_generate_url_candidates_prefers_twitter_orig(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             manager = ImageStorageManager(tmp_dir)
