@@ -164,6 +164,7 @@ def _cap_messages(prev: list | None, new: list | object) -> list:
 
     先使用 `add_messages(prev, new)` 完成标准的消息合并（与内置追加行为一致），
     再对结果做截断，返回最后 20 条，避免改变既有消息规范化与合并语义。
+    同时会将新增消息内容追加到日志文件中，便于后续排查与回放。
 
     Args:
         prev (list|None): 既有消息列表。
@@ -173,6 +174,18 @@ def _cap_messages(prev: list | None, new: list | object) -> list:
         list: 合并后保留最后 20 条的消息列表。
     """
     combined = add_messages(prev or [], new)
+
+    log_dir = Path(os.environ.get("AGENT_MESSAGE_LOG_DIR", "logs")).expanduser()
+    log_path = log_dir / "agent_messages.log"
+
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        with log_path.open("a", encoding="utf-8") as fp:
+            fp.write(f"{timestamp} | {new}\n")
+    except Exception as err:
+        sys.stderr.write(f"[CapMessages] 记录消息失败: {err}\n")
+
     if len(combined) < 30:
         # print(f"\n\n[Debug] Merged messages: {combined}", flush=True)
         # print(f"\n\n[Debug] Length of combined messages: {len(combined)}", flush=True)
@@ -1001,6 +1014,7 @@ class SQLCheckpointAgentStreamingPlus:
                     tools.append(finance_tool)
                 # from langchain_community.tools.yahoo_finance_news import YahooFinanceNewsTool
                 # tools.append(YahooFinanceNewsTool())
+
         @tool
         def generate_local_image(
             prompt: str,
@@ -1050,7 +1064,9 @@ class SQLCheckpointAgentStreamingPlus:
                     if value.startswith("data:"):
                         header, _, encoded = value.partition(",")
                         assert encoded, "Data URL 缺少 Base64 数据"
-                        assert "base64" in header.lower(), "Data URL 必须使用 base64 编码"
+                        assert (
+                            "base64" in header.lower()
+                        ), "Data URL 必须使用 base64 编码"
                         mime_part = header.split(":", 1)[-1].split(";", 1)[0]
                         assert mime_part.startswith("image/"), "Data URL 必须为图片类型"
                         references.append((mime_part, encoded))
