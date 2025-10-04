@@ -107,6 +107,18 @@ class MultimodalUnitTest(unittest.TestCase):
             candidates = manager._generate_url_candidates(url)
             self.assertTrue(any("imageView" not in c and "thumbnail" not in c for c in candidates[:-1]))
 
+    def test_normalize_aspect_ratio_accepts_alias(self) -> None:
+        ratio = ImageStorageManager._normalize_aspect_ratio(None, "square")
+        self.assertEqual(ratio, "1:1")
+
+    def test_normalize_aspect_ratio_from_size(self) -> None:
+        ratio = ImageStorageManager._normalize_aspect_ratio(None, "800x600")
+        self.assertEqual(ratio, "800:600")
+
+    def test_normalize_aspect_ratio_invalid_size(self) -> None:
+        with self.assertRaises(AssertionError):
+            ImageStorageManager._normalize_aspect_ratio(None, "invalid")
+
 
 if __name__ == "__main__":
     unittest.main()

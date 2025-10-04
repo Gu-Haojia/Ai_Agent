@@ -11,12 +11,15 @@
 """
 
 from __future__ import annotations
+import base64
+import json
+import mimetypes
 import os
 import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Annotated, Callable, Iterable, Optional, Sequence, Union, Any
-import json
 import threading
 import requests
 
@@ -998,40 +1001,88 @@ class SQLCheckpointAgentStreamingPlus:
                     tools.append(finance_tool)
                 # from langchain_community.tools.yahoo_finance_news import YahooFinanceNewsTool
                 # tools.append(YahooFinanceNewsTool())
-        if False:  # 先关闭，避免误用
-            @tool
-            def generate_local_image(prompt: str, size: str = "1024x1024") -> str:
-                """
-                生成图像并返回本地文件路径，供下游发送真实图片。
+        @tool
+        def generate_local_image(
+            prompt: str,
+            size: str = "1024x1024",
+            aspect_ratio: Optional[str] = None,
+            reference_images: Optional[list[str]] = None,
+        ) -> str:
+            """
+            调用 Gemini 接口生成或编辑图像，并返回本地文件路径信息。
 
-                Args:
-                    prompt (str): 图像描述，须包含主体、场景与风格信息。
-                    size (str): 输出尺寸，支持 256x256、512x512、1024x1024。
+            Args:
+                prompt (str): 图像描述或编辑指令，必须包含清晰主体与风格。
+                size (str): 输出尺寸或别名，例如 ``"1024x1024"``、``"square"``。
+                aspect_ratio (Optional[str]): 直接指定的宽高比，例如 ``"16:9"``。
+                reference_images (Optional[list[str]]):
+                    参考图像列表，可为 ``data:"`` 开头的 Data URL 或本地文件路径。
 
-                Returns:
-                    str: JSON 字符串，包含 path、mime_type、prompt。
+            Returns:
+                str: JSON 字符串，包含 ``path``、``mime_type`` 与 ``prompt``。
 
-                Raises:
-                    AssertionError: 当提示为空、尺寸非法或缺少图像管理器时抛出。
-                    RuntimeError: 当图像生成失败时抛出。
-                """
-                prompt_text = prompt.strip()
-                assert prompt_text, "prompt 不能为空"
-                size_norm = size.strip().lower()
-                allowed = {"256x256", "512x512", "1024x1024"}
-                assert size_norm in allowed, f"size 必须为 {allowed} 之一"
-                _ensure_openai_env_once()
-                manager = self._require_image_manager()
-                image = manager.generate_image_via_openai(prompt_text, size_norm)
-                self._generated_images.append(image)
-                payload = {
-                    "path": str(image.path),
-                    "mime_type": image.mime_type,
-                    "prompt": prompt_text,
-                }
-                return json.dumps(payload, ensure_ascii=False)
+            Raises:
+                AssertionError: 当参数非法或参考图像不可用时抛出。
+                RuntimeError: 当 Gemini 未返回有效图像时抛出。
+                ValueError: 当接口调用失败时抛出。
+            """
 
-            tools.append(generate_local_image)
+            _ensure_common_env_once()
+            _ensure_gemini_env_once()
+            prompt_text = prompt.strip()
+            assert prompt_text, "prompt 不能为空"
+
+            manager = self._require_image_manager()
+            size_norm = size.strip() if isinstance(size, str) else None
+            ratio_norm = aspect_ratio.strip() if isinstance(aspect_ratio, str) else None
+
+            references: list[tuple[str, str]] = []
+            if reference_images:
+                assert isinstance(
+                    reference_images, list
+                ), "reference_images 必须为字符串列表"
+
+                for item in reference_images:
+                    assert (
+                        isinstance(item, str) and item.strip()
+                    ), "reference_images 包含空字符串"
+                    value = item.strip()
+                    if value.startswith("data:"):
+                        header, _, encoded = value.partition(",")
+                        assert encoded, "Data URL 缺少 Base64 数据"
+                        assert "base64" in header.lower(), "Data URL 必须使用 base64 编码"
+                        mime_part = header.split(":", 1)[-1].split(";", 1)[0]
+                        assert mime_part.startswith("image/"), "Data URL 必须为图片类型"
+                        references.append((mime_part, encoded))
+                        continue
+
+                    path = Path(value).expanduser()
+                    assert path.is_file(), f"参考图像不存在: {path}"
+                    data_bytes = path.read_bytes()
+                    guessed = mimetypes.guess_type(str(path))[0]
+                    mime_type = (
+                        guessed
+                        if guessed and guessed.startswith("image/")
+                        else ImageStorageManager._infer_mime(data_bytes, guessed)
+                    )
+                    encoded = base64.b64encode(data_bytes).decode("ascii")
+                    references.append((mime_type, encoded))
+
+            image = manager.generate_image_via_gemini(
+                prompt=prompt_text,
+                size=size_norm,
+                aspect_ratio=ratio_norm,
+                reference_images=references or None,
+            )
+            self._generated_images.append(image)
+            payload = {
+                "path": str(image.path),
+                "mime_type": image.mime_type,
+                "prompt": prompt_text,
+            }
+            return json.dumps(payload, ensure_ascii=False)
+
+        tools.append(generate_local_image)
 
         # 两种绑定：
         # - auto：允许模型自行决定是否调用工具（用于首轮/工具前）

@@ -14,7 +14,7 @@ import threading
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import requests
@@ -24,6 +24,9 @@ __all__ = [
     "GeneratedImage",
     "ImageStorageManager",
 ]
+
+# Gemini 接口需要的参考图像结构：(mime_type, base64 数据)
+GeminiReferenceImage = tuple[str, str]
 
 
 @dataclass(frozen=True)
@@ -133,6 +136,68 @@ class ImageStorageManager:
         with self._lock:
             path.write_bytes(data)
         return path
+
+    @staticmethod
+    def _normalize_aspect_ratio(
+        aspect_ratio: Optional[str], size: Optional[str]
+    ) -> Optional[str]:
+        """
+        规范化图像宽高比字符串。
+
+        Args:
+            aspect_ratio (Optional[str]): 直接指定的宽高比，格式如 "16:9"。
+            size (Optional[str]): 像素尺寸或别名，格式如 "1024x1024"、"square"。
+
+        Returns:
+            Optional[str]: 归一化后的宽高比字符串，例如 "16:9"。无法推断时返回 ``None``。
+
+        Raises:
+            AssertionError: 当提供的宽高比或尺寸格式非法时抛出。
+        """
+
+        def _format_ratio(value: str) -> str:
+            token = value.strip().lower().replace("/", ":").replace("：", ":")
+            parts = token.split(":")
+            assert (
+                len(parts) == 2 and parts[0] and parts[1]
+            ), "宽高比必须包含两个正整数"
+            if "." in parts[0] or "." in parts[1]:
+                raise AssertionError("宽高比必须使用整数")
+            try:
+                width = int(parts[0])
+                height = int(parts[1])
+            except ValueError as err:
+                raise AssertionError("宽高比必须使用整数") from err
+            assert width > 0 and height > 0, "宽高比的宽与高必须大于 0"
+            return f"{width}:{height}"
+
+        alias_map = {
+            "square": "1:1",
+            "landscape": "16:9",
+            "portrait": "3:4",
+        }
+
+        if aspect_ratio and aspect_ratio.strip():
+            return _format_ratio(aspect_ratio)
+
+        if size and size.strip():
+            normalized = size.strip().lower()
+            if normalized in alias_map:
+                return alias_map[normalized]
+            if "x" in normalized:
+                width_str, height_str = normalized.split("x", 1)
+                try:
+                    width = int(width_str)
+                    height = int(height_str)
+                except ValueError as err:
+                    raise AssertionError("size 参数必须包含整数") from err
+                assert width > 0 and height > 0, "size 对应的宽高必须大于 0"
+                return f"{width}:{height}"
+            if ":" in normalized or "/" in normalized:
+                return _format_ratio(normalized)
+            raise AssertionError("无法解析 size 参数，需提供形如 '宽x高' 的字符串")
+
+        return None
 
     def _generate_url_candidates(self, url: str) -> list[str]:
         """根据已知规则生成优先尝试的下载地址列表。"""
@@ -344,4 +409,130 @@ class ImageStorageManager:
         mime_type = getattr(item, "mime_type", None) or "image/png"
         if not b64_data:
             raise RuntimeError("生成结果缺少 Base64 数据")
+        return self.save_generated_image(b64_data, prompt.strip(), mime_type)
+
+    def generate_image_via_gemini(
+        self,
+        prompt: str,
+        *,
+        size: Optional[str] = "1024x1024",
+        aspect_ratio: Optional[str] = None,
+        reference_images: Optional[Sequence[GeminiReferenceImage]] = None,
+        model: Optional[str] = None,
+        timeout: int = 60,
+    ) -> GeneratedImage:
+        """
+        使用 Gemini API 生成或编辑图像，并将结果保存到本地。
+
+        Args:
+            prompt (str): 图像生成或编辑的文本描述。
+            size (Optional[str]): 期望的输出尺寸（如 ``"1024x1024"``）或别名。
+            aspect_ratio (Optional[str]): 直接指定的宽高比（如 ``"16:9"``）。
+            reference_images (Optional[Sequence[GeminiReferenceImage]]):
+                参考图像列表，每项为 ``(mime_type, base64_data)``。
+            model (Optional[str]): Gemini 图像模型名称，默认 ``gemini-2.5-flash-image``。
+            timeout (int): HTTP 请求超时时间（秒）。
+
+        Returns:
+            GeneratedImage: 保存后的图像信息。
+
+        Raises:
+            AssertionError: 当参数非法或缺少 API 密钥时抛出。
+            ValueError: 当 HTTP 请求失败时抛出。
+            RuntimeError: 当响应缺少图像数据时抛出。
+        """
+
+        assert isinstance(prompt, str) and prompt.strip(), "prompt 不能为空"
+        api_key = (
+            os.environ.get("GOOGLE_API_KEY")
+            or os.environ.get("GEMINI_API_KEY")
+            or os.environ.get("GOOGLE_GENERATIVE_AI_API_KEY")
+        )
+        assert api_key, "缺少 Gemini API Key，请设置 GOOGLE_API_KEY 或 GEMINI_API_KEY"
+
+        model_name = model or os.environ.get(
+            "GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image"
+        )
+        endpoint = os.environ.get(
+            "GEMINI_IMAGE_ENDPOINT",
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent",
+        )
+
+        parts: list[dict[str, object]] = []
+        if reference_images:
+            normalized_refs: list[GeminiReferenceImage] = []
+            for mime_type, data_b64 in reference_images:
+                assert (
+                    isinstance(mime_type, str)
+                    and mime_type.startswith("image/")
+                ), "参考图像必须提供合法的 MIME 类型"
+                assert (
+                    isinstance(data_b64, str) and data_b64.strip()
+                ), "参考图像 Base64 数据不能为空"
+                normalized_refs.append((mime_type.strip(), data_b64.strip()))
+            for mime_type, data_b64 in normalized_refs:
+                parts.append(
+                    {
+                        "inline_data": {
+                            "mime_type": mime_type,
+                            "data": data_b64,
+                        }
+                    }
+                )
+
+        parts.append({"text": prompt.strip()})
+
+        gen_config: dict[str, object] = {"responseModalities": ["Image"]}
+        ratio = self._normalize_aspect_ratio(aspect_ratio, size)
+        if ratio:
+            gen_config["imageConfig"] = {"aspectRatio": ratio}
+
+        payload: dict[str, object] = {"contents": [{"parts": parts}]}
+        if gen_config:
+            payload["generationConfig"] = gen_config
+
+        headers = {
+            "Content-Type": "application/json",
+            "x-goog-api-key": api_key,
+        }
+
+        response = requests.post(endpoint, headers=headers, json=payload, timeout=timeout)
+        if response.status_code != 200:
+            raise ValueError(
+                f"Gemini 图像生成失败: {response.status_code} {response.text[:128]}"
+            )
+
+        data = response.json()
+        candidates = data.get("candidates") or []
+        if not candidates:
+            raise RuntimeError("Gemini 响应缺少候选结果")
+        parts_data = (
+            (candidates[0].get("content") or {}).get("parts")
+            if isinstance(candidates[0], dict)
+            else None
+        )
+        if not parts_data:
+            raise RuntimeError("Gemini 响应缺少内容片段")
+
+        inline_data = None
+        for part in parts_data:
+            if not isinstance(part, dict):
+                continue
+            if "inlineData" in part and isinstance(part["inlineData"], dict):
+                inline_data = part["inlineData"]
+                break
+            if "inline_data" in part and isinstance(part["inline_data"], dict):
+                inline_data = part["inline_data"]
+                break
+
+        if not inline_data:
+            raise RuntimeError("Gemini 响应未返回图像数据")
+
+        b64_data = inline_data.get("data")
+        mime_type = inline_data.get("mimeType") or inline_data.get("mime_type")
+        if not b64_data:
+            raise RuntimeError("Gemini 图像数据为空")
+        if not mime_type:
+            mime_type = "image/png"
+
         return self.save_generated_image(b64_data, prompt.strip(), mime_type)
