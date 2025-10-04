@@ -137,68 +137,6 @@ class ImageStorageManager:
             path.write_bytes(data)
         return path
 
-    @staticmethod
-    def _normalize_aspect_ratio(
-        aspect_ratio: Optional[str], size: Optional[str]
-    ) -> Optional[str]:
-        """
-        规范化图像宽高比字符串。
-
-        Args:
-            aspect_ratio (Optional[str]): 直接指定的宽高比，格式如 "16:9"。
-            size (Optional[str]): 像素尺寸或别名，格式如 "1024x1024"、"square"。
-
-        Returns:
-            Optional[str]: 归一化后的宽高比字符串，例如 "16:9"。无法推断时返回 ``None``。
-
-        Raises:
-            AssertionError: 当提供的宽高比或尺寸格式非法时抛出。
-        """
-
-        def _format_ratio(value: str) -> str:
-            token = value.strip().lower().replace("/", ":").replace("：", ":")
-            parts = token.split(":")
-            assert (
-                len(parts) == 2 and parts[0] and parts[1]
-            ), "宽高比必须包含两个正整数"
-            if "." in parts[0] or "." in parts[1]:
-                raise AssertionError("宽高比必须使用整数")
-            try:
-                width = int(parts[0])
-                height = int(parts[1])
-            except ValueError as err:
-                raise AssertionError("宽高比必须使用整数") from err
-            assert width > 0 and height > 0, "宽高比的宽与高必须大于 0"
-            return f"{width}:{height}"
-
-        alias_map = {
-            "square": "1:1",
-            "landscape": "16:9",
-            "portrait": "3:4",
-        }
-
-        if aspect_ratio and aspect_ratio.strip():
-            return _format_ratio(aspect_ratio)
-
-        if size and size.strip():
-            normalized = size.strip().lower()
-            if normalized in alias_map:
-                return alias_map[normalized]
-            if "x" in normalized:
-                width_str, height_str = normalized.split("x", 1)
-                try:
-                    width = int(width_str)
-                    height = int(height_str)
-                except ValueError as err:
-                    raise AssertionError("size 参数必须包含整数") from err
-                assert width > 0 and height > 0, "size 对应的宽高必须大于 0"
-                return f"{width}:{height}"
-            if ":" in normalized or "/" in normalized:
-                return _format_ratio(normalized)
-            raise AssertionError("无法解析 size 参数，需提供形如 '宽x高' 的字符串")
-
-        return None
-
     def _generate_url_candidates(self, url: str) -> list[str]:
         """根据已知规则生成优先尝试的下载地址列表。"""
         parsed = urlparse(url)
@@ -483,7 +421,6 @@ class ImageStorageManager:
         prompt: str,
         *,
         size: Optional[str] = "1024x1024",
-        aspect_ratio: Optional[str] = None,
         reference_images: Optional[Sequence[GeminiReferenceImage]] = None,
         model: Optional[str] = None,
         timeout: int = 60,
@@ -494,7 +431,6 @@ class ImageStorageManager:
         Args:
             prompt (str): 图像生成或编辑的文本描述。
             size (Optional[str]): 期望的输出尺寸（如 ``"1024x1024"``）或别名。
-            aspect_ratio (Optional[str]): 直接指定的宽高比（如 ``"16:9"``）。
             reference_images (Optional[Sequence[GeminiReferenceImage]]):
                 参考图像列表，每项为 ``(mime_type, base64_data)``。
             model (Optional[str]): Gemini 图像模型名称，默认 ``gemini-2.5-flash-image``。
@@ -550,9 +486,6 @@ class ImageStorageManager:
         parts.append({"text": prompt.strip()})
 
         gen_config: dict[str, object] = {"responseModalities": ["Image"]}
-        ratio = self._normalize_aspect_ratio(aspect_ratio, size)
-        if ratio:
-            gen_config["imageConfig"] = {"aspectRatio": ratio}
 
         payload: dict[str, object] = {"contents": [{"parts": parts}]}
         if gen_config:

@@ -138,18 +138,6 @@ class MultimodalUnitTest(unittest.TestCase):
             other_path.write_bytes(base64.b64decode(png_base64))
             self.assertFalse(manager.is_generated_path(str(other_path)))
 
-    def test_normalize_aspect_ratio_accepts_alias(self) -> None:
-        ratio = ImageStorageManager._normalize_aspect_ratio(None, "square")
-        self.assertEqual(ratio, "1:1")
-
-    def test_normalize_aspect_ratio_from_size(self) -> None:
-        ratio = ImageStorageManager._normalize_aspect_ratio(None, "800x600")
-        self.assertEqual(ratio, "800:600")
-
-    def test_normalize_aspect_ratio_invalid_size(self) -> None:
-        with self.assertRaises(AssertionError):
-            ImageStorageManager._normalize_aspect_ratio(None, "invalid")
-
 
 if __name__ == "__main__":
     unittest.main()
