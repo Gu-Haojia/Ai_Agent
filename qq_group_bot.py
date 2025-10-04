@@ -1009,6 +1009,8 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 url_norm = url.strip()
                 if not url_norm:
                     continue
+                if manager.is_generated_path(url_norm):
+                    continue
                 try:
                     saved = manager.save_remote_image(url_norm)
                     image_payloads.append((saved.base64_data, saved.mime_type))

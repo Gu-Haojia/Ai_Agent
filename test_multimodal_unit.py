@@ -107,6 +107,19 @@ class MultimodalUnitTest(unittest.TestCase):
             candidates = manager._generate_url_candidates(url)
             self.assertTrue(any("imageView" not in c and "thumbnail" not in c for c in candidates[:-1]))
 
+    def test_is_generated_path_handles_generated_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            manager = ImageStorageManager(tmp_dir)
+            png_base64 = (
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/wwAAuMB9oK08QAAAABJRU5ErkJggg=="
+            )
+            generated = manager.save_generated_image(png_base64, "prompt", "image/png")
+            self.assertTrue(manager.is_generated_path(str(generated.path)))
+            self.assertTrue(manager.is_generated_path(f"file://{generated.path}"))
+            other_path = Path(tmp_dir) / "outer.png"
+            other_path.write_bytes(base64.b64decode(png_base64))
+            self.assertFalse(manager.is_generated_path(str(other_path)))
+
     def test_normalize_aspect_ratio_accepts_alias(self) -> None:
         ratio = ImageStorageManager._normalize_aspect_ratio(None, "square")
         self.assertEqual(ratio, "1:1")

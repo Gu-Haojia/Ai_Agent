@@ -254,6 +254,34 @@ class ImageStorageManager:
                 seen.add(item)
         return ordered
 
+    def is_generated_path(self, candidate: str) -> bool:
+        """
+        判断给定路径是否位于生成图像目录内。
+
+        Args:
+            candidate (str): 待判断的路径字符串，支持 ``file://`` 前缀。
+
+        Returns:
+            bool: 当路径指向 ``generated`` 目录或其子项时返回 ``True``，否则返回 ``False``。
+
+        Raises:
+            AssertionError: 当传入参数类型不是字符串时抛出。
+        """
+
+        assert isinstance(candidate, str), "candidate 必须为字符串"
+        normalized = candidate.strip()
+        if not normalized:
+            return False
+        if normalized.startswith("file://"):
+            normalized = normalized[len("file://") :]
+        target_path = Path(normalized).expanduser()
+        try:
+            target_resolved = target_path.resolve(strict=False)
+            generated_resolved = self._generated_dir.resolve(strict=False)
+        except Exception:
+            return False
+        return generated_resolved == target_resolved or generated_resolved in target_resolved.parents
+
     def save_remote_image(self, url: str, filename_hint: Optional[str] = None) -> StoredImage:
         """
         下载并保存远程图像。
