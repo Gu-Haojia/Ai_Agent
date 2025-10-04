@@ -1073,6 +1073,8 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 answer = answer or "（未能下载图片，请稍后重试）"
 
         if answer:
+            #计算字数
+            char_count = len(answer)
             lines = []
             prev_blank = False
             for line in answer.splitlines():
@@ -1080,7 +1082,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
                     lines.append(line)
                     prev_blank = False
                 else:  # 空行
-                    if not prev_blank:  # 上一行不是空行，保留一个
+                    if not prev_blank and char_count > 100:  # 上一行不是空行且字数超过100,允许一个空行
                         lines.append("")
                     prev_blank = True
             # 去掉结尾的空行
