@@ -159,7 +159,7 @@ def _ensure_model_env_once(model_name: str) -> None:
         _ensure_gemini_env_once()
 
 
-def _cap20_messages(prev: list | None, new: list | object) -> list:
+def _cap_messages(prev: list | None, new: list | object) -> list:
     """基于内置 `add_messages` 的长度控制合并器：仅保留最近 20 条。
 
     先使用 `add_messages(prev, new)` 完成标准的消息合并（与内置追加行为一致），
@@ -355,7 +355,7 @@ class RapidAPIHotelSearchClient:
 class State(TypedDict):
     """Agent 的图状态。"""
 
-    messages: Annotated[list, _cap20_messages]
+    messages: Annotated[list, _cap_messages]
 
 
 @dataclass
