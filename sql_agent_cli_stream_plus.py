@@ -1023,7 +1023,7 @@ class SQLCheckpointAgentStreamingPlus:
             reference_images: Optional[list[str]] = None,
         ) -> str:
             """
-            调用 Gemini 接口生成或编辑图像，并返回本地文件路径信息。
+            调用 Gemini 接口生成或编辑图像，并返回本地文件路径信息。必须强调“生成或编辑图像”才能使用这个工具
 
             Args:
                 prompt (str): 图像描述或编辑指令，必须包含清晰主体与风格。
