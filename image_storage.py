@@ -523,7 +523,7 @@ class ImageStorageManager:
             "Content-Type": "application/json",
             "x-goog-api-key": api_key,
         }
-
+        #print(f"请求 Gemini payload: {payload}")
         response = requests.post(endpoint, headers=headers, json=payload, timeout=timeout)
         if response.status_code != 200:
             raise ValueError(
