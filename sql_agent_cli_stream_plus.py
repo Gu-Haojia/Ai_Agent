@@ -13,11 +13,12 @@
 from __future__ import annotations
 import json
 import os
+import re
 import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, Callable, Iterable, Optional, Sequence, Union, Any
+from typing import Annotated, Callable, Iterable, Match, Optional, Sequence, Union, Any
 import threading
 import requests
 
@@ -103,6 +104,44 @@ def _ensure_gemini_env_once() -> None:
     _ENV_GEMINI_CHECKED = True
 
 
+_BASE64_DATA_URL_PATTERN = re.compile(r"(data:[^;]+;base64,)[0-9A-Za-z+/=_-]+", re.IGNORECASE)
+
+
+def _sanitize_for_logging(payload: object) -> str:
+    """
+    将待写入日志的对象转换为字符串，并将 base64 段落替换为占位符。
+
+    Args:
+        payload (object): 待记录的消息对象，可以是字符串、列表或消息实例。
+
+    Returns:
+        str: 已将 base64 内容脱敏为 ``[BASE64...]`` 的字符串。
+
+    Raises:
+        None.
+    """
+
+    text = str(payload)
+
+    def _replace(match: Match[str]) -> str:
+        """
+        匹配到 base64 字符串后替换为占位符。
+
+        Args:
+            match (Match[str]): 正则匹配结果对象。
+
+        Returns:
+            str: 已替换 base64 内容后的子串。
+
+        Raises:
+            None.
+        """
+        return f"{match.group(1)}[BASE64...]"
+
+    sanitized = _BASE64_DATA_URL_PATTERN.sub(_replace, text)
+    return sanitized
+
+
 def _infer_model_provider(model_name: str) -> str:
     """
     推断模型提供方前缀。
@@ -179,8 +218,9 @@ def _cap_messages(prev: list | None, new: list | object) -> list:
     try:
         log_dir.mkdir(parents=True, exist_ok=True)
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        log_text = _sanitize_for_logging(new)
         with log_path.open("a", encoding="utf-8") as fp:
-            fp.write(f"{timestamp} | {new}\n")
+            fp.write(f"{timestamp} | {log_text}\n")
     except Exception as err:
         sys.stderr.write(f"[CapMessages] 记录消息失败: {err}\n")
 
