@@ -944,7 +944,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
             print(
                 f"\033[34m[Chat]\033[0m Request get: Group {group_id} Id {user_id} User {author}: {parsed.text if not parsed.images else parsed.text+'[with images]'}"
             )
-            print("\033[34m[Chat]\033[0m Thread lock enabled.Generating reply...")
+            print("\033[34m[Chat]\033[0m Thread lock enabled. Generating reply...")
             # 为流式打印添加前缀标记到服务端日志，QQ 群内仅发送最终汇总
             self.agent.set_token_printer(lambda s: sys.stdout.write(s))
             # 设置当前群的持久记忆命名空间（langmem 工具使用）
