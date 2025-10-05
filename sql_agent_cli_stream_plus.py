@@ -843,12 +843,12 @@ class SQLCheckpointAgentStreamingPlus:
                                 cfg.api_base, group_id, user_id, text, cfg.access_token
                             )
                             print(
-                                f"[TimerTool] 计时器触发，已在群 {group_id} 内提醒 @({user_id})：{description}",
+                                f"\033[33m[TimerTool]\033[0m 计时器触发，已在群 {group_id} 内提醒 @({user_id})：{description}",
                                 flush=True,
                             )
                         except Exception as e:
                             # 打印到标准错误便于排查，不吞异常
-                            sys.stderr.write(f"[TimerTool] 发送提醒失败：{e}\n")
+                            sys.stderr.write(f"\033[31m[TimerTool]\033[0m 发送提醒失败：{e}\n")
                         finally:
                             # 成功或失败均尝试移除该记录，避免重复
                             try:
@@ -856,13 +856,13 @@ class SQLCheckpointAgentStreamingPlus:
                                     ts, group_id, user_id, description, answer
                                 )
                             except Exception as re:
-                                sys.stderr.write(f"[TimerTool] 移除记录失败：{re}\n")
+                                sys.stderr.write(f"\033[31m[TimerTool]\033[0m 移除记录失败：{re}\n")
 
                     t = threading.Timer(seconds, _send_group_at_message_later)
                     t.daemon = True  # 后台线程，不阻塞主流程
                     t.start()
                     print(
-                        f"[TimerTool] 已创建计时器：{seconds} 秒后将在群 {group_id} 内提醒 @({user_id})：{description}",
+                        f"\n\033[33m[TimerTool]\033[0m 已创建计时器：{seconds} 秒后将在群 {group_id} 内提醒 @({user_id})：{description}",
                         flush=True,
                     )
                     return f"已创建计时器：{seconds} 秒后将在群 {group_id} 内提醒 @({user_id})：{description}"
