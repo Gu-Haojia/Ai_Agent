@@ -43,7 +43,8 @@ from pathlib import Path
 from dataclasses import dataclass
 from hashlib import sha1
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Optional, Sequence, Union
+from threading import Lock
+from typing import ClassVar, Optional, Sequence, Union
 from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 
@@ -483,6 +484,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
     bot_cfg: BotConfig
     agent: SQLCheckpointAgentStreamingPlus
     image_storage: Optional[ImageStorageManager] = None
+    _post_lock: ClassVar[Lock] = Lock()  # 串行化处理 POST 请求
     # 群 -> 线程ID 映射，用于 /clear 后为群对话分配新线程
     _group_threads: dict[int, str] = {}
     _thread_store_file: str = ""
@@ -851,6 +853,28 @@ class QQBotHandler(BaseHTTPRequestHandler):
         self.send_error(501, "Unsupported method ('GET')")
 
     def do_POST(self) -> None:  # noqa: N802
+        """
+        处理 NapCat HTTP 回调的 POST 请求，并通过互斥锁串行化。
+
+        Returns:
+            None: 无返回值。
+
+        Raises:
+            None: 未在此函数中额外抛出异常。
+        """
+        with self.__class__._post_lock:
+            self._handle_post_locked()
+
+    def _handle_post_locked(self) -> None:
+        """
+        在互斥锁保护下执行 POST 请求的详细处理逻辑。
+
+        Returns:
+            None: 无返回值。
+
+        Raises:
+            None: 不在此处额外抛出异常。
+        """
         # 读取 body（支持 chunked）
         body, err = self._read_body()
         if err:
@@ -920,7 +944,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
             print(
                 f"\033[34m[Chat]\033[0m Request get: Group {group_id} Id {user_id} User {author}: {parsed.text if not parsed.images else parsed.text+'[with images]'}"
             )
-            print("\033[34m[Chat]\033[0m Generating reply...")
+            print("\033[34m[Chat]\033[0m Thread lock enabled.Generating reply...")
             # 为流式打印添加前缀标记到服务端日志，QQ 群内仅发送最终汇总
             self.agent.set_token_printer(lambda s: sys.stdout.write(s))
             # 设置当前群的持久记忆命名空间（langmem 工具使用）
