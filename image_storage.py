@@ -450,7 +450,7 @@ class ImageStorageManager:
         Raises:
             AssertionError: 当参数非法或缺少 API 密钥时抛出。
             ValueError: 当 HTTP 请求失败时抛出。
-            RuntimeError: 当响应缺少图像数据时抛出。
+            RuntimeError: 当响应缺少图像数据或被判定为违规内容时抛出。
         """
 
         assert isinstance(prompt, str) and prompt.strip(), "prompt 不能为空"
@@ -511,14 +511,23 @@ class ImageStorageManager:
             )
 
         data = response.json()
+        #print(f"Gemini 响应: {data}", flush=True)
         candidates = data.get("candidates") or []
         if not candidates:
             raise RuntimeError("Gemini 响应缺少候选结果")
-        parts_data = (
-            (candidates[0].get("content") or {}).get("parts")
-            if isinstance(candidates[0], dict)
-            else None
-        )
+        first_candidate = candidates[0] if len(candidates) > 0 else None
+        if isinstance(first_candidate, dict):
+            finish_reason = first_candidate.get("finishReason") or first_candidate.get("finish_reason")
+            if finish_reason == "PROHIBITED_CONTENT":
+                finish_message = (
+                    first_candidate.get("finishMessage")
+                    or first_candidate.get("finish_message")
+                    or "Gemini 判定请求涉及受限内容"
+                )
+                raise RuntimeError(f"Gemini 拒绝生成图像：{finish_message}")
+            parts_data = (first_candidate.get("content") or {}).get("parts")
+        else:
+            parts_data = None
         if not parts_data:
             raise RuntimeError("Gemini 响应缺少内容片段")
 
