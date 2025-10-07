@@ -1404,8 +1404,11 @@ def main() -> None:
     agent = _build_agent_from_env()
     image_dir = os.environ.get(
         "QQ_IMAGE_DIR",
-        os.path.join(os.getcwd(), "local_backup", "qq_images"),
+        os.path.join(os.getcwd(), "images"),
     )
+    #生成日期时间戳目录
+    date_str = time.strftime("%Y%m%d", time.localtime())+"~run"
+    image_dir = os.path.join(image_dir, date_str)
     image_manager = ImageStorageManager(image_dir)
     agent.set_image_manager(image_manager)
 
