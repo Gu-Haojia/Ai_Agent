@@ -213,7 +213,9 @@ def _cap_messages(prev: list | None, new: list | object) -> list:
     combined = add_messages(prev or [], new)
 
     log_dir = Path(os.environ.get("AGENT_MESSAGE_LOG_DIR", "logs")).expanduser()
-    log_path = log_dir / "agent_messages.log"
+    #按日期分日志
+    filename = time.strftime("%Y-%m-%d", time.localtime()) + ".log"
+    log_path = log_dir / filename
 
     try:
         log_dir.mkdir(parents=True, exist_ok=True)
