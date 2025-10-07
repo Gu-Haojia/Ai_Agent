@@ -388,14 +388,14 @@ def _normalize_message_segments(
             url = data.get("url")
             file_id = data.get("file") or data.get("file_id")
             filename = data.get("name") or data.get("file")
-            sub_type = data.get("sub_type")
+            #sub_type = data.get("sub_type")
             #print(f"[Debug] Image segment: url={url} file_id={file_id} filename={filename}", flush=True)
             name_candidates = [
                 str(value).strip().lower()
                 for value in (url, file_id, filename)
                 if value
             ]
-            if any(candidate.split("?", 1)[0].endswith(".gif") for candidate in name_candidates) or sub_type != 0:
+            if any(candidate.split("?", 1)[0].endswith(".gif") for candidate in name_candidates):
                 continue
             images.append(
                 ImageSegmentInfo(
@@ -1009,9 +1009,9 @@ class QQBotHandler(BaseHTTPRequestHandler):
                         continue
                     if token:
                         seen_tokens.add(token)
-                    stored_images.append(
-                        storage.save_remote_image(seg.url, seg.filename)
-                    )
+                    saved = storage.save_remote_image(seg.url, seg.filename)
+                    if saved:
+                        stored_images.append(saved)
             payload = (
                 self._build_multimodal_content(model_input, stored_images)
                 if stored_images
@@ -1055,8 +1055,9 @@ class QQBotHandler(BaseHTTPRequestHandler):
                     continue
                 try:
                     saved = manager.save_remote_image(url_norm)
-                    image_payloads.append((saved.base64_data, saved.mime_type))
-                    downloaded = True
+                    if saved:
+                        image_payloads.append((saved.base64_data, saved.mime_type))
+                        downloaded = True
                 except Exception as err:
                     failed_urls.append(url_norm)
                     sys.stderr.write(f"\033[34m[Chat]\033[0m 下载回复图片失败: {url_norm} -> {err}\n")
@@ -1101,8 +1102,11 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 if file_val.startswith("http"):
                     try:
                         saved = manager.save_remote_image(file_val)
-                        image_payloads.append((saved.base64_data, saved.mime_type))
-                        success = True
+                        if saved:
+                            image_payloads.append(
+                                (saved.base64_data, saved.mime_type)
+                            )
+                            success = True
                     except Exception as err:
                         failed_urls.append(file_val)
                         sys.stderr.write(

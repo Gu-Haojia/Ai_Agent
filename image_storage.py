@@ -220,7 +220,9 @@ class ImageStorageManager:
             return False
         return generated_resolved == target_resolved or generated_resolved in target_resolved.parents
 
-    def save_remote_image(self, url: str, filename_hint: Optional[str] = None) -> StoredImage:
+    def save_remote_image(
+        self, url: str, filename_hint: Optional[str] = None
+    ) -> Optional[StoredImage]:
         """
         下载并保存远程图像。
 
@@ -229,7 +231,7 @@ class ImageStorageManager:
             filename_hint (Optional[str]): 原始文件名提示，若存在用于决定默认扩展名。
 
         Returns:
-            StoredImage: 本地化后的图像信息。
+            Optional[StoredImage]: 本地化后的图像信息；当目标为 GIF 等不支持类型时返回 ``None``。
 
         Raises:
             AssertionError: 当 URL 无效或无法确定扩展名时抛出。
@@ -254,10 +256,16 @@ class ImageStorageManager:
                 continue
             content_type = resp.headers.get("Content-Type") or ""
             try:
-                mime = self._infer_mime(resp.content, content_type.split(";")[0] if content_type else None)
+                mime = self._infer_mime(
+                    resp.content,
+                    content_type.split(";")[0] if content_type else None,
+                )
             except AssertionError as err:
                 last_error = str(err)
                 continue
+            if mime == "image/gif":
+                # GIF 动图不参与多模态分析，直接忽略并结束
+                return None
             data = resp.content
             chosen_url = candidate
             break
