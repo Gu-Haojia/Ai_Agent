@@ -102,6 +102,7 @@ def _extract_message_content(
     raw = str(message or raw_fallback or "")
     raw, _ = _extract_reply_ids_from_raw(raw)
     images = _extract_cq_images(raw) if raw else ()
+    print(f"[Debug] Alternative way enabled", flush=True)
     return MessageContent(text=raw, images=images)
 
 
@@ -376,6 +377,7 @@ def _normalize_message_segments(
             continue
         typ = seg.get("type")
         data = seg.get("data") or {}
+        #print(f"[Debug] Segment: type={typ} data={data}", flush=True)
         if typ == "text":
             texts.append(str(data.get("text", "")))
         elif typ == "at" and self_id:
@@ -386,6 +388,15 @@ def _normalize_message_segments(
             url = data.get("url")
             file_id = data.get("file") or data.get("file_id")
             filename = data.get("name") or data.get("file")
+            sub_type = data.get("sub_type")
+            #print(f"[Debug] Image segment: url={url} file_id={file_id} filename={filename}", flush=True)
+            name_candidates = [
+                str(value).strip().lower()
+                for value in (url, file_id, filename)
+                if value
+            ]
+            if any(candidate.split("?", 1)[0].endswith(".gif") for candidate in name_candidates) or sub_type != 0:
+                continue
             images.append(
                 ImageSegmentInfo(
                     url=str(url) if url else None,
