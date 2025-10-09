@@ -212,7 +212,7 @@ def _cap_messages(prev: list | None, new: list | object) -> list:
     Returns:
         list: 合并后保留最后 n 条的消息列表。
     """
-    LENGTH_LIMIT = int(os.environ.get("MESSAGE_LENGTH_LIMIT")) or None
+    LENGTH_LIMIT = int(os.environ.get("MESSAGE_LENGTH_LIMIT", 20))
     if not isinstance(LENGTH_LIMIT, int) or LENGTH_LIMIT < 10:
         LENGTH_LIMIT = 20
 
