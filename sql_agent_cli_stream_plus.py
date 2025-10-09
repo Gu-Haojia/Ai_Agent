@@ -212,10 +212,13 @@ def _cap_messages(prev: list | None, new: list | object) -> list:
     Returns:
         list: 合并后保留最后 n 条的消息列表。
     """
+    """
+    #暂时不使用
     LENGTH_LIMIT = int(os.environ.get("MESSAGE_LENGTH_LIMIT", 20))
     if not isinstance(LENGTH_LIMIT, int) or LENGTH_LIMIT < 10:
         LENGTH_LIMIT = 20
-
+    """
+    LENGTH_LIMIT = 20
     combined = add_messages(prev or [], new)
 
     log_dir = Path(os.environ.get("AGENT_MESSAGE_LOG_DIR", "logs")).expanduser()
@@ -709,7 +712,9 @@ class SQLCheckpointAgentStreamingPlus:
         assert os.path.isfile(abs_path), f"系统提示文件不存在: {abs_path}"
         with open(abs_path, "r", encoding="utf-8") as f:
             content = f.read()
-            print(f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [SysInfo] 已加载文件: {abs_path}，长度 {len(content)} 字符。")
+            print(
+                f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [SysInfo] 已加载文件: {abs_path}，长度 {len(content)} 字符。"
+            )
             # 打印头尾各50字符,仅输出文本不要格式符号
             print(
                 f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [SysInfo] Prompt内容预览: {content[:50].replace(chr(10), ' ')} ... {content[-50:].replace(chr(10), ' ')}"
@@ -744,7 +749,10 @@ class SQLCheckpointAgentStreamingPlus:
                         "like 'Tokyo' or 'Kyoto'."
                         weather = OpenWeatherMapAPIWrapper()
                         result = weather.run(location_en_name)
-                        print(f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [Weather Tool Output] {result}", flush=True)  # 调用时直接打印
+                        print(
+                            f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [Weather Tool Output] {result}",
+                            flush=True,
+                        )  # 调用时直接打印
                         return result
 
                     tools.append(get_weather)
@@ -932,7 +940,8 @@ class SQLCheckpointAgentStreamingPlus:
                 except Exception as e:
                     # 未安装或失败时跳过，不影响其它工具
                     print(
-                        f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [Warn] langmem 工具加载失败，跳过。错误信息：{e}", flush=True
+                        f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [Warn] langmem 工具加载失败，跳过。错误信息：{e}",
+                        flush=True,
                     )
                     pass
 
@@ -998,7 +1007,11 @@ class SQLCheckpointAgentStreamingPlus:
                         lines.append(
                             f"{idx}. {name} | 评分: {rating} | 价格: {price} | 地址: {address}"
                         )
-                    print(f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [Hotel Tool] 查询结果：\n" + "\n".join(lines), flush=True)
+                    print(
+                        f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [Hotel Tool] 查询结果：\n"
+                        + "\n".join(lines),
+                        flush=True,
+                    )
                     return "\n".join(lines)
 
                 tools.append(hotel_search)
@@ -1358,7 +1371,11 @@ class SQLCheckpointAgentStreamingPlus:
             if s is None or (isinstance(s, str) and s.strip() == ""):
                 return
             if not getattr(self, "_agent_header_printed", False):
-                print(f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m \033[32m[Reply]\033[0m Agent: ", end="", flush=True)
+                print(
+                    f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m \033[32m[Reply]\033[0m Agent: ",
+                    end="",
+                    flush=True,
+                )
                 self._agent_header_printed = True
             self._printed_in_round = True
             fn(s)
@@ -1424,7 +1441,9 @@ class SQLCheckpointAgentStreamingPlus:
                 label = self._role_label(m)
                 if label == "Tool":  # and not tool_notified:
                     name = getattr(m, "name", None) or "tool"
-                    print(f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m \033[33m[Tool]\033[0m Calling tool [{name}]")
+                    print(
+                        f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m \033[33m[Tool]\033[0m Calling tool [{name}]"
+                    )
                     # tool_notified = True
                 if label == "Agent":
                     txt = getattr(m, "content", "")
