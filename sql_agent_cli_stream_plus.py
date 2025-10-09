@@ -684,7 +684,7 @@ class SQLCheckpointAgentStreamingPlus:
             t.daemon = True
             t.start()
             print(
-                f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m[TimerStore] 恢复计时器：{remain} 秒后将在群 {group_id} 内提醒 @({user_id})：{desc}",
+                f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [TimerStore] 恢复计时器：{remain} 秒后将在群 {group_id} 内提醒 @({user_id})：{desc}",
                 flush=True,
             )
 
@@ -709,10 +709,10 @@ class SQLCheckpointAgentStreamingPlus:
         assert os.path.isfile(abs_path), f"系统提示文件不存在: {abs_path}"
         with open(abs_path, "r", encoding="utf-8") as f:
             content = f.read()
-            print(f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m[SysInfo] 已加载文件: {abs_path}，长度 {len(content)} 字符。")
+            print(f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [SysInfo] 已加载文件: {abs_path}，长度 {len(content)} 字符。")
             # 打印头尾各50字符,仅输出文本不要格式符号
             print(
-                f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m[SysInfo] Prompt内容预览: {content[:50].replace(chr(10), ' ')} ... {content[-50:].replace(chr(10), ' ')}"
+                f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [SysInfo] Prompt内容预览: {content[:50].replace(chr(10), ' ')} ... {content[-50:].replace(chr(10), ' ')}"
             )
         assert content and content.strip(), "系统提示文件内容为空。"
         return content
@@ -744,7 +744,7 @@ class SQLCheckpointAgentStreamingPlus:
                         "like 'Tokyo' or 'Kyoto'."
                         weather = OpenWeatherMapAPIWrapper()
                         result = weather.run(location_en_name)
-                        print(f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m[Weather Tool Output] {result}", flush=True)  # 调用时直接打印
+                        print(f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [Weather Tool Output] {result}", flush=True)  # 调用时直接打印
                         return result
 
                     tools.append(get_weather)
@@ -891,7 +891,7 @@ class SQLCheckpointAgentStreamingPlus:
                                 cfg.api_base, group_id, user_id, text, cfg.access_token
                             )
                             print(
-                                f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m\033[33m[TimerTool]\033[0m 计时器触发，已在群 {group_id} 内提醒 @({user_id})：{description}",
+                                f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m \033[33m[TimerTool]\033[0m 计时器触发，已在群 {group_id} 内提醒 @({user_id})：{description}",
                                 flush=True,
                             )
                         except Exception as e:
@@ -914,7 +914,7 @@ class SQLCheckpointAgentStreamingPlus:
                     t.daemon = True  # 后台线程，不阻塞主流程
                     t.start()
                     print(
-                        f"\n\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m\033[33m[TimerTool]\033[0m 已创建计时器：{seconds} 秒后将在群 {group_id} 内提醒 @({user_id})：{description}",
+                        f"\n\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m \033[33m[TimerTool]\033[0m 已创建计时器：{seconds} 秒后将在群 {group_id} 内提醒 @({user_id})：{description}",
                         flush=True,
                     )
                     return f"已创建计时器：{seconds} 秒后将在群 {group_id} 内提醒 @({user_id})：{description}"
@@ -932,7 +932,7 @@ class SQLCheckpointAgentStreamingPlus:
                 except Exception as e:
                     # 未安装或失败时跳过，不影响其它工具
                     print(
-                        f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m[Warn] langmem 工具加载失败，跳过。错误信息：{e}", flush=True
+                        f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [Warn] langmem 工具加载失败，跳过。错误信息：{e}", flush=True
                     )
                     pass
 
@@ -998,7 +998,7 @@ class SQLCheckpointAgentStreamingPlus:
                         lines.append(
                             f"{idx}. {name} | 评分: {rating} | 价格: {price} | 地址: {address}"
                         )
-                    print(f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m[Hotel Tool] 查询结果：\n" + "\n".join(lines), flush=True)
+                    print(f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [Hotel Tool] 查询结果：\n" + "\n".join(lines), flush=True)
                     return "\n".join(lines)
 
                 tools.append(hotel_search)
@@ -1358,7 +1358,7 @@ class SQLCheckpointAgentStreamingPlus:
             if s is None or (isinstance(s, str) and s.strip() == ""):
                 return
             if not getattr(self, "_agent_header_printed", False):
-                print(f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m\033[32m[Reply]\033[0m Agent: ", end="", flush=True)
+                print(f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m \033[32m[Reply]\033[0m Agent: ", end="", flush=True)
                 self._agent_header_printed = True
             self._printed_in_round = True
             fn(s)
@@ -1424,7 +1424,7 @@ class SQLCheckpointAgentStreamingPlus:
                 label = self._role_label(m)
                 if label == "Tool":  # and not tool_notified:
                     name = getattr(m, "name", None) or "tool"
-                    print(f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m\033[33m[Tool]\033[0m Calling tool [{name}]")
+                    print(f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m \033[33m[Tool]\033[0m Calling tool [{name}]")
                     # tool_notified = True
                 if label == "Agent":
                     txt = getattr(m, "content", "")
