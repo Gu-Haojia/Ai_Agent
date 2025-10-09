@@ -938,7 +938,8 @@ class QQBotHandler(BaseHTTPRequestHandler):
         # 仅在被 @ 机器人时响应
         if not parsed.at_me:
             author = _extract_sender_name(event)
-            self._log_ignore_request(group_id, user_id, author, parsed.text if not parsed.images else parsed.text+"[with images]")
+            msg=parsed.text if parsed.text else "[No text]"
+            self._log_ignore_request(group_id, user_id, author, msg if not parsed.images else msg+"[With images]")
             self._send_no_content()
             return
 
@@ -952,8 +953,9 @@ class QQBotHandler(BaseHTTPRequestHandler):
         try:
             # 终端打印服务消息
             author = _extract_sender_name(event)
+            msg=parsed.text if parsed.text else "[No text]"
             print(
-                f"\033[34m[Chat]\033[0m Request get: Group {group_id} Id {user_id} User {author}: {parsed.text if not parsed.images else parsed.text+'[with images]'}"
+                f"\033[34m[Chat]\033[0m Request get: Group {group_id} Id {user_id} User {author}: {msg if not parsed.images else msg+'[With images]'}"
             )
             print("\033[34m[Chat]\033[0m Thread lock enabled. Generating reply...")
             # 为流式打印添加前缀标记到服务端日志，QQ 群内仅发送最终汇总
