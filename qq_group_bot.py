@@ -988,7 +988,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 context_lines.append(f"当前消息: {user_text}")
                 user_text = "\n".join(context_lines)
             model_input = (
-                f"Group_id: [{group_id}]; User_id: [{user_id}]; User_name: {author}; Text: {user_text}"
+                f"Group_id: [{group_id}]; User_id: [{user_id}]; User_name: {author}; Msg: {user_text}"
             )
             image_segments: list[ImageSegmentInfo] = []
             if parsed.images:

@@ -104,7 +104,9 @@ def _ensure_gemini_env_once() -> None:
     _ENV_GEMINI_CHECKED = True
 
 
-_BASE64_DATA_URL_PATTERN = re.compile(r"(data:[^;]+;base64,)[0-9A-Za-z+/=_-]+", re.IGNORECASE)
+_BASE64_DATA_URL_PATTERN = re.compile(
+    r"(data:[^;]+;base64,)[0-9A-Za-z+/=_-]+", re.IGNORECASE
+)
 
 
 def _sanitize_for_logging(payload: object) -> str:
@@ -197,10 +199,10 @@ def _ensure_model_env_once(model_name: str) -> None:
 
 
 def _cap_messages(prev: list | None, new: list | object) -> list:
-    """基于内置 `add_messages` 的长度控制合并器：仅保留最近 20 条。
+    """基于内置 `add_messages` 的长度控制合并器：仅保留最近 n 条。
 
     先使用 `add_messages(prev, new)` 完成标准的消息合并（与内置追加行为一致），
-    再对结果做截断，返回最后 20 条，避免改变既有消息规范化与合并语义。
+    再对结果做截断，返回最后 n 条，避免改变既有消息规范化与合并语义。
     同时会将新增消息内容追加到日志文件中，便于后续排查与回放。
 
     Args:
@@ -208,12 +210,16 @@ def _cap_messages(prev: list | None, new: list | object) -> list:
         new (list|object): 新增消息（单条或列表）。
 
     Returns:
-        list: 合并后保留最后 20 条的消息列表。
+        list: 合并后保留最后 n 条的消息列表。
     """
+    LENGTH_LIMIT = int(os.environ.get("MESSAGE_LENGTH_LIMIT")) or None
+    if not isinstance(LENGTH_LIMIT, int) or LENGTH_LIMIT < 10:
+        LENGTH_LIMIT = 20
+
     combined = add_messages(prev or [], new)
 
     log_dir = Path(os.environ.get("AGENT_MESSAGE_LOG_DIR", "logs")).expanduser()
-    #按日期分日志
+    # 按日期分日志
     filename = time.strftime("%Y-%m-%d", time.localtime()) + ".log"
     log_path = log_dir / filename
 
@@ -226,18 +232,18 @@ def _cap_messages(prev: list | None, new: list | object) -> list:
     except Exception as err:
         sys.stderr.write(f"[CapMessages] 记录消息失败: {err}\n")
 
-    if len(combined) < 30:
+    if len(combined) < LENGTH_LIMIT:
         # print(f"\n\n[Debug] Merged messages: {combined}", flush=True)
         # print(f"\n\n[Debug] Length of combined messages: {len(combined)}", flush=True)
         return combined
-    start_msg = combined[-30] if len(combined) >= 30 else None
+    start_msg = combined[-LENGTH_LIMIT] if len(combined) >= LENGTH_LIMIT else None
     # print(isinstance(start_msg, ToolMessage), flush=True)
     if isinstance(start_msg, HumanMessage):
-        # print(f"\n\n[Debug] Merged messages: {combined[-20:]}", flush=True)
-        # print(f"\n\n[Debug] Length of combined messages: {len(combined[-20:])}", flush=True)
-        return combined[-30:]
+        # print(f"\n\n[Debug] Merged messages: {combined[-LENGTH_LIMIT:]}", flush=True)
+        # print(f"\n\n[Debug] Length of combined messages: {len(combined[-LENGTH_LIMIT:])}", flush=True)
+        return combined[-LENGTH_LIMIT:]
     # 向后找到下一条 HumanMessage
-    for i in range(len(combined) - 31, -1, -1):
+    for i in range(len(combined) - LENGTH_LIMIT - 1, -1, -1):
         if isinstance(combined[i], HumanMessage):
             # print(f"\n\n[Debug] Merged messages: {combined[i:]}", flush=True)
             # print(f"\n\n[Debug] Length of combined messages: {len(combined[i:])}", flush=True)
@@ -890,7 +896,9 @@ class SQLCheckpointAgentStreamingPlus:
                             )
                         except Exception as e:
                             # 打印到标准错误便于排查，不吞异常
-                            sys.stderr.write(f"\033[31m[TimerTool]\033[0m 发送提醒失败：{e}\n")
+                            sys.stderr.write(
+                                f"\033[31m[TimerTool]\033[0m 发送提醒失败：{e}\n"
+                            )
                         finally:
                             # 成功或失败均尝试移除该记录，避免重复
                             try:
@@ -898,7 +906,9 @@ class SQLCheckpointAgentStreamingPlus:
                                     ts, group_id, user_id, description, answer
                                 )
                             except Exception as re:
-                                sys.stderr.write(f"\033[31m[TimerTool]\033[0m 移除记录失败：{re}\n")
+                                sys.stderr.write(
+                                    f"\033[31m[TimerTool]\033[0m 移除记录失败：{re}\n"
+                                )
 
                     t = threading.Timer(seconds, _send_group_at_message_later)
                     t.daemon = True  # 后台线程，不阻塞主流程
