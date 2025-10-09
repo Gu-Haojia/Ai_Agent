@@ -377,7 +377,7 @@ def _normalize_message_segments(
             continue
         typ = seg.get("type")
         data = seg.get("data") or {}
-        #print(f"[Debug] Segment: type={typ} data={data}", flush=True)
+        # print(f"[Debug] Segment: type={typ} data={data}", flush=True)
         if typ == "text":
             texts.append(str(data.get("text", "")))
         elif typ == "at" and self_id:
@@ -388,14 +388,17 @@ def _normalize_message_segments(
             url = data.get("url")
             file_id = data.get("file") or data.get("file_id")
             filename = data.get("name") or data.get("file")
-            #sub_type = data.get("sub_type")
-            #print(f"[Debug] Image segment: url={url} file_id={file_id} filename={filename}", flush=True)
+            # sub_type = data.get("sub_type")
+            # print(f"[Debug] Image segment: url={url} file_id={file_id} filename={filename}", flush=True)
             name_candidates = [
                 str(value).strip().lower()
                 for value in (url, file_id, filename)
                 if value
             ]
-            if any(candidate.split("?", 1)[0].endswith(".gif") for candidate in name_candidates):
+            if any(
+                candidate.split("?", 1)[0].endswith(".gif")
+                for candidate in name_candidates
+            ):
                 continue
             images.append(
                 ImageSegmentInfo(
@@ -581,9 +584,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 "image/webp": "webp",
             }.get(mime, "jpg")
             name = f"img_{ts}_{idx}.{suffix}"
-            parts.append(
-                f"[CQ:image,file=base64://{b64},name={name},cache=0]"
-            )
+            parts.append(f"[CQ:image,file=base64://{b64},name={name},cache=0]")
         if not parts:
             return "（未生成回复）"
         return "\n".join(parts)
@@ -768,7 +769,8 @@ class QQBotHandler(BaseHTTPRequestHandler):
         """
         clean_text = text.replace("\n", " ")
         print(
-            f"\033[31m[Ignore]\033[0m Message get: Group {group_id} Id {user_id} User {author}: {clean_text}", flush=True
+            f"\033[31m[Ignore]\033[0m Message get: Group {group_id} Id {user_id} User {author}: {clean_text}",
+            flush=True,
         )
         self._suppress_http_log = True
 
@@ -826,7 +828,9 @@ class QQBotHandler(BaseHTTPRequestHandler):
             return b"", "read body failed"
         return body or b"", None
 
-    def _collect_reply_contents(self, message_ids: Sequence[str]) -> list[MessageContent]:
+    def _collect_reply_contents(
+        self, message_ids: Sequence[str]
+    ) -> list[MessageContent]:
         """
         批量获取引用消息对应的内容（文本与图像）。
 
@@ -938,8 +942,14 @@ class QQBotHandler(BaseHTTPRequestHandler):
         # 仅在被 @ 机器人时响应
         if not parsed.at_me:
             author = _extract_sender_name(event)
-            msg=parsed.text if parsed.text else "[No text]"
-            self._log_ignore_request(group_id, user_id, author, msg if not parsed.images else msg+"[With images]")
+            msg = parsed.text or ""
+            if parsed.images:
+                msg += "[With images]"
+            if parsed.reply_message_ids:
+                msg += "[With reply]"
+            if not msg:
+                msg = "[No text]"
+            self._log_ignore_request(group_id, user_id, author, msg)
             self._send_no_content()
             return
 
@@ -953,9 +963,15 @@ class QQBotHandler(BaseHTTPRequestHandler):
         try:
             # 终端打印服务消息
             author = _extract_sender_name(event)
-            msg=parsed.text if parsed.text else "[No text]"
+            msg = parsed.text or ""
+            if parsed.reply_message_ids:
+                msg += "[With reply]"
+            if not msg and parsed.images:
+                msg += "[No text, with images]"
+            elif not msg:
+                msg = "[No text]"
             print(
-                f"\033[34m[Chat]\033[0m Request get: Group {group_id} Id {user_id} User {author}: {msg if not parsed.images else msg+'[With images]'}"
+                f"\033[34m[Chat]\033[0m Request get: Group {group_id} Id {user_id} User {author}: {msg}"
             )
             print("\033[34m[Chat]\033[0m Thread lock enabled. Generating reply...")
             # 为流式打印添加前缀标记到服务端日志，QQ 群内仅发送最终汇总
@@ -989,9 +1005,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
                     context_lines.append(f"引用消息{idx}: {summary}")
                 context_lines.append(f"当前消息: {user_text}")
                 user_text = "\n".join(context_lines)
-            model_input = (
-                f"Group_id: [{group_id}]; User_id: [{user_id}]; User_name: {author}; Msg: {user_text}"
-            )
+            model_input = f"Group_id: [{group_id}]; User_id: [{user_id}]; User_name: {author}; Msg: {user_text}"
             image_segments: list[ImageSegmentInfo] = []
             if parsed.images:
                 image_segments.extend(parsed.images)
@@ -1003,9 +1017,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 storage = self._require_image_storage()
                 seen_tokens: set[str] = set()
                 for seg in image_segments:
-                    assert (
-                        seg.url
-                    ), "当前仅支持通过 URL 获取的图片消息"
+                    assert seg.url, "当前仅支持通过 URL 获取的图片消息"
                     token = seg.url or seg.file_id or seg.filename or ""
                     if token and token in seen_tokens:
                         continue
@@ -1044,7 +1056,9 @@ class QQBotHandler(BaseHTTPRequestHandler):
             except Exception as err:
                 sys.stderr.write(f"[Chat] 读取生成图片失败: {img.path} -> {err}\n")
         # 解析 Agent 回复中的 [IMAGE]url[/IMAGE] 标签，转换为本地图片
-        image_tags = re.findall(r"\[IMAGE\](.+?)\[/IMAGE\]", answer, flags=re.IGNORECASE)
+        image_tags = re.findall(
+            r"\[IMAGE\](.+?)\[/IMAGE\]", answer, flags=re.IGNORECASE
+        )
         if image_tags:
             manager = self._require_image_storage()
             failed_urls: list[str] = []
@@ -1062,8 +1076,12 @@ class QQBotHandler(BaseHTTPRequestHandler):
                         downloaded = True
                 except Exception as err:
                     failed_urls.append(url_norm)
-                    sys.stderr.write(f"\033[34m[Chat]\033[0m 下载回复图片失败: {url_norm} -> {err}\n")
-            cleaned = re.sub(r"\[IMAGE\].+?\[/IMAGE\]", "", answer, flags=re.IGNORECASE).strip()
+                    sys.stderr.write(
+                        f"\033[34m[Chat]\033[0m 下载回复图片失败: {url_norm} -> {err}\n"
+                    )
+            cleaned = re.sub(
+                r"\[IMAGE\].+?\[/IMAGE\]", "", answer, flags=re.IGNORECASE
+            ).strip()
             if failed_urls and downloaded:
                 note = "（部分图片下载失败，已忽略无法访问的链接）"
                 answer = f"{cleaned}\n{note}" if cleaned else note
@@ -1097,17 +1115,13 @@ class QQBotHandler(BaseHTTPRequestHandler):
                         success = True
                     except Exception as err:
                         failed_urls.append("base64-data")
-                        sys.stderr.write(
-                            f"[Chat] 保存CQ Base64图片失败: {err}\n"
-                        )
+                        sys.stderr.write(f"[Chat] 保存CQ Base64图片失败: {err}\n")
                     continue
                 if file_val.startswith("http"):
                     try:
                         saved = manager.save_remote_image(file_val)
                         if saved:
-                            image_payloads.append(
-                                (saved.base64_data, saved.mime_type)
-                            )
+                            image_payloads.append((saved.base64_data, saved.mime_type))
                             success = True
                     except Exception as err:
                         failed_urls.append(file_val)
@@ -1123,7 +1137,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 answer = answer or "（未能下载图片，请稍后重试）"
 
         if answer:
-            #计算字数
+            # 计算字数
             char_count = len(answer)
             lines = []
             prev_blank = False
@@ -1132,7 +1146,9 @@ class QQBotHandler(BaseHTTPRequestHandler):
                     lines.append(line)
                     prev_blank = False
                 else:  # 空行
-                    if not prev_blank and char_count > 100:  # 上一行不是空行且字数超过100,允许一个空行
+                    if (
+                        not prev_blank and char_count > 100
+                    ):  # 上一行不是空行且字数超过100,允许一个空行
                         lines.append("")
                     prev_blank = True
             # 去掉结尾的空行
@@ -1408,8 +1424,8 @@ def main() -> None:
         "QQ_IMAGE_DIR",
         os.path.join(os.getcwd(), "images"),
     )
-    #生成日期时间戳目录
-    date_str = time.strftime("%Y%m%d", time.localtime())+"~run"
+    # 生成日期时间戳目录
+    date_str = time.strftime("%Y%m%d", time.localtime()) + "~run"
     image_dir = os.path.join(image_dir, date_str)
     image_manager = ImageStorageManager(image_dir)
     agent.set_image_manager(image_manager)
