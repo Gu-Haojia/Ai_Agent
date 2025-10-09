@@ -1,5 +1,5 @@
 import time
-from agent_with_timetravel import AgentWithTimetravel
+from src.agent_with_timetravel import AgentWithTimetravel
 
 def test_agent_workflow():
     agent = AgentWithTimetravel(thread_id=f"test-{int(time.time())}")
