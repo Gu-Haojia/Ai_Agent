@@ -636,18 +636,18 @@ class QQBotHandler(BaseHTTPRequestHandler):
                             cls._env_consistency_checked = True
                             cls.save_thread_store()
                             print(
-                                f"[QQBot] Thread store cleared due to env mismatch: {path}"
+                                f"\033[94m{time.strftime("[%Y-%m-%d %H:%M:%S]", time.localtime())}\033[0m[QQBot] Thread store cleared due to env mismatch: {path}"
                             )
                         else:
                             cls._group_threads = m
                             cls._env_consistency_checked = True
                             print(
-                                f"[QQBot] Loaded group threads from {path}: {len(m)} groups"
+                                f"\033[94m{time.strftime("[%Y-%m-%d %H:%M:%S]", time.localtime())}\033[0m[QQBot] Loaded group threads from {path}: {len(m)} groups"
                             )
                     else:
                         cls._group_threads = m
                         print(
-                            f"[QQBot] Loaded group threads from {path}: {len(m)} groups (env check skipped)"
+                            f"\033[94m{time.strftime("[%Y-%m-%d %H:%M:%S]", time.localtime())}\033[0m[QQBot] Loaded group threads from {path}: {len(m)} groups (env check skipped)"
                         )
         except Exception as e:
             sys.stderr.write(f"[QQBot] Load group threads failed: {e}\n")
@@ -711,18 +711,18 @@ class QQBotHandler(BaseHTTPRequestHandler):
                             cls._env_ns_checked = True
                             cls.save_namespace_store()
                             print(
-                                f"[QQBot] Namespace store cleared due to env mismatch: {path}"
+                                f"\033[94m{time.strftime("[%Y-%m-%d %H:%M:%S]", time.localtime())}\033[0m[QQBot] Namespace store cleared due to env mismatch: {path}"
                             )
                         else:
                             cls._group_namespaces = m
                             cls._env_ns_checked = True
                             print(
-                                f"[QQBot] Loaded group namespaces from {path}: {len(m)} groups"
+                                f"\033[94m{time.strftime("[%Y-%m-%d %H:%M:%S]", time.localtime())}\033[0m[QQBot] Loaded group namespaces from {path}: {len(m)} groups"
                             )
                     else:
                         cls._group_namespaces = m
                         print(
-                            f"[QQBot] Loaded group namespaces from {path}: {len(m)} groups (env check skipped)"
+                            f"\033[94m{time.strftime("[%Y-%m-%d %H:%M:%S]", time.localtime())}\033[0m[QQBot] Loaded group namespaces from {path}: {len(m)} groups (env check skipped)"
                         )
         except Exception as e:
             sys.stderr.write(f"[QQBot] Load group namespaces failed: {e}\n")
@@ -769,7 +769,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
         """
         clean_text = text.replace("\n", " ")
         print(
-            f"\033[31m[Ignore]\033[0m Message get: Group {group_id} Id {user_id} User {author}: {clean_text}",
+            f"\033[94m{time.strftime("[%Y-%m-%d %H:%M:%S]", time.localtime())}\033[0m\033[31m[Ignore]\033[0m Message get: Group {group_id} Id {user_id} User {author}: {clean_text}",
             flush=True,
         )
         self._suppress_http_log = True
@@ -970,10 +970,11 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 msg += "[No text, with images]"
             elif not msg:
                 msg = "[No text]"
+                # 时间戳信息打印
             print(
-                f"\033[34m[Chat]\033[0m Request get: Group {group_id} Id {user_id} User {author}: {msg}"
+                f"\033[94m{time.strftime("[%Y-%m-%d %H:%M:%S]", time.localtime())}\033[0m\033[34m[Chat]\033[0m Request get: Group {group_id} Id {user_id} User {author}: {msg}"
             )
-            print("\033[34m[Chat]\033[0m Thread lock enabled. Generating reply...")
+            print(f"\033[94m{time.strftime("[%Y-%m-%d %H:%M:%S]", time.localtime())}\033[0m\033[34m[Chat]\033[0m Thread lock enabled. Generating reply...")
             # 为流式打印添加前缀标记到服务端日志，QQ 群内仅发送最终汇总
             self.agent.set_token_printer(lambda s: sys.stdout.write(s))
             # 设置当前群的持久记忆命名空间（langmem 工具使用）
@@ -1416,7 +1417,7 @@ def main() -> None:
     ), "必须先激活虚拟环境 (.venv)。"
 
     print(
-        "--------------------------------------------------------------------------------------------------------"
+        "------------------------------------------------------------------------------------------------------------------"
     )
     bot_cfg = BotConfig.from_env()
     agent = _build_agent_from_env()
@@ -1443,17 +1444,17 @@ def main() -> None:
 
     server = ThreadingHTTPServer((bot_cfg.host, bot_cfg.port), QQBotHandler)
     print(
-        f"[QQBot] Listening http://{bot_cfg.host}:{bot_cfg.port} api={bot_cfg.api_base} whitelist={bot_cfg.allowed_groups or 'ALL'} blacklist={bot_cfg.blacklist_groups or 'NONE'} model={agent._config.model_name} dry_run={'YES' if agent._config.use_memory_ckpt else 'NO'} thread_id={agent._config.thread_id} thread_store={thread_store} mem_id={agent._config.store_id} mem_store={ns_store}"
+        f"\033[94m{time.strftime("[%Y-%m-%d %H:%M:%S]", time.localtime())}\033[0m[QQBot] Listening http://{bot_cfg.host}:{bot_cfg.port} api={bot_cfg.api_base} whitelist={bot_cfg.allowed_groups or 'ALL'} blacklist={bot_cfg.blacklist_groups or 'NONE'} model={agent._config.model_name} dry_run={'YES' if agent._config.use_memory_ckpt else 'NO'} thread_id={agent._config.thread_id} thread_store={thread_store} mem_id={agent._config.store_id} mem_store={ns_store}"
     )
-    print("[QQBot] Allowed command users:", bot_cfg.cmd_allowed_users or "ALL")
-    print("[QQBot] Bot now started, press Ctrl+C to stop.")
+    print(f"\033[94m{time.strftime("[%Y-%m-%d %H:%M:%S]", time.localtime())}\033[0m[QQBot] Allowed command users:", bot_cfg.cmd_allowed_users or "ALL")
+    print(f"\033[94m{time.strftime("[%Y-%m-%d %H:%M:%S]", time.localtime())}\033[0m[QQBot] Bot now started, press Ctrl+C to stop.")
     print(
-        "--------------------------------------------------------------------------------------------------------"
+        "------------------------------------------------------------------------------------------------------------------"
     )
     try:
         server.serve_forever(poll_interval=0.5)
     except KeyboardInterrupt:
-        print("\n[QQBot] stopped.")
+        print(f"\n\033[94m{time.strftime("[%Y-%m-%d %H:%M:%S]", time.localtime())}\033[0m[QQBot] stopped.")
     finally:
         try:
             server.server_close()
