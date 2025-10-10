@@ -19,120 +19,135 @@ class VisualCrossingWeatherRequest(BaseModel):
 
     Args:
         location (str): 查询地点，支持自然语言地点或经纬度。
-        date (str | None): 指定日期（YYYY-MM-DD），为空时查询默认时间轴。
-        start_date (str | None): 日期范围起始值（YYYY-MM-DD），需与 end_date 搭配使用。
-        end_date (str | None): 日期范围结束值（YYYY-MM-DD），需与 start_date 搭配使用。
-        datetime_text (str | None): ISO8601 日期时间（如 2024-05-01T15:00），用于查询特定小时。
-        target_hour (int | None): 指定的小时（0-23），需与 date 或 datetime_text 搭配。
-        include_day (bool): 是否在请求中包含 days 数据。
-        include_hour (bool): 是否在请求中包含 hours 数据。
-        include_current (bool): 是否在请求中包含 current 数据。
-        unit_group (str): 单位组配置，可选 metric、us、uk、base。
+        start_time (str): 起始时间，允许仅传日期或带小时的日期时间。
+        end_time (str | None): 结束时间，可为空；为空时按单次查询处理。
+        hour (bool): 是否按小时粒度返回数据，False 表示仅返回按天数据。
 
     Returns:
-        VisualCrossingWeatherRequest: 已验证的参数对象。
+        VisualCrossingWeatherRequest: 已验证并附加内部字段的请求对象。
 
     Raises:
-        ValueError: 当参数组合不合法或格式不正确时抛出。
+        ValueError: 当参数组合不合法或时间格式不符合 ISO8601 时抛出。
     """
 
-    location: str = Field(..., description="查询地点，支持城市、邮编或经纬度。")
-    date: str | None = Field(
+    location: str = Field(..., description="查询地点，支持城市、邮编或经纬度描述。")
+    start_time: str = Field(
+        ...,
+        description="起始时间，ISO8601 日期或日期时间，例如 2024-05-01 或 2024-05-01T15:00。",
+    )
+    end_time: str | None = Field(
         None,
-        description="单日查询日期，格式 YYYY-MM-DD。",
+        description="结束时间，可为空，格式与 start_time 一致。",
     )
-    start_date: str | None = Field(
-        None,
-        alias="startDate",
-        description="区间查询起始日期，格式 YYYY-MM-DD。",
+    hour: bool = Field(
+        False,
+        description="是否按小时粒度返回数据；False 时默认按天粒度。",
     )
-    end_date: str | None = Field(
-        None,
-        alias="endDate",
-        description="区间查询结束日期，格式 YYYY-MM-DD。",
-    )
-    datetime_text: str | None = Field(
-        None,
-        alias="datetime",
-        description="用于查询具体小时的 ISO8601 日期时间，例如 2024-05-01T15:00。",
-    )
-    target_hour: int | None = Field(
-        None,
-        alias="hour",
-        ge=0,
-        le=23,
-        description="指定小时（0-23），需与 date 或 datetime_text 搭配使用。",
-    )
-    include_day: bool = Field(
-        True, alias="day", description="是否包含天级别数据（days）。"
-    )
-    include_hour: bool = Field(
-        False, alias="hourly", description="是否包含小时级别数据（hours）。"
-    )
-    include_current: bool = Field(
-        False, alias="current", description="是否包含当前天气数据（current）。"
-    )
-    unit_group: str = Field(
-        "metric",
-        alias="unitGroup",
-        description="单位组，可选 metric、us、uk、base，默认为 metric。",
-    )
+    normalized_start: str = Field("", exclude=True)
+    normalized_end: str | None = Field(None, exclude=True)
+    use_hours: bool = Field(False, exclude=True)
+    use_days: bool = Field(True, exclude=True)
+    target_hour: int | None = Field(None, exclude=True)
 
     model_config = ConfigDict(populate_by_name=True)
 
     @model_validator(mode="after")
-    def _validate_dates(self) -> "VisualCrossingWeatherRequest":
+    def _validate_and_normalize(self) -> "VisualCrossingWeatherRequest":
         """
-        校验日期范围与小时参数组合的合法性。
+        校验输入时间并生成内部规范化字段。
 
         Args:
             None
 
         Returns:
-            VisualCrossingWeatherRequest: 通过校验后的自身实例。
+            VisualCrossingWeatherRequest: 自身实例。
 
         Raises:
-            ValueError: 当日期与小时参数组合不合法或格式错误时抛出。
+            ValueError: 当输入无效时抛出。
         """
 
         if not isinstance(self.location, str) or not self.location.strip():
             raise ValueError("location 必须为非空字符串。")
+        self.location = self.location.strip()
 
-        if self.start_date or self.end_date:
-            if not self.start_date or not self.end_date:
-                raise ValueError("start_date 与 end_date 必须同时提供。")
-            if self.date:
-                raise ValueError("使用日期区间时不应再传入单独的 date。")
-            if self.datetime_text:
-                raise ValueError("使用日期区间时不应传入 datetime_text。")
+        norm_start, start_has_time, start_hour = self._normalize_time(
+            self.start_time, "start_time"
+        )
+        self.normalized_start = norm_start
 
-        if self.datetime_text:
-            try:
-                dt_value = datetime.fromisoformat(self.datetime_text)
-            except ValueError as exc:
-                raise ValueError(
-                    "datetime_text 必须为 ISO8601 格式，例如 2024-05-01T15:00。"
-                ) from exc
-            normalized_date = dt_value.date().isoformat()
-            self.date = self.date or normalized_date
-            if self.target_hour is None:
-                self.target_hour = dt_value.hour
-            if not self.include_hour:
-                self.include_hour = True
+        if self.end_time is not None:
+            norm_end, _has_time, _ = self._normalize_time(self.end_time, "end_time")
+            self.normalized_end = norm_end
+            if self._to_datetime(norm_end) < self._to_datetime(norm_start):
+                raise ValueError("end_time 不可早于 start_time。")
+        else:
+            self.normalized_end = None
 
-        if self.target_hour is not None and self.date is None:
-            raise ValueError("指定 target_hour 时必须提供 date 或 datetime_text。")
+        self.use_hours = bool(self.hour)
+        self.use_days = not self.use_hours
 
-        valid_units = {"metric", "us", "uk", "base"}
-        if self.unit_group not in valid_units:
-            raise ValueError(f"unit_group 仅支持 {sorted(valid_units)}。")
-
-        if self.include_hour and not self.include_day and not (
-            self.start_date or self.end_date or self.date
-        ):
-            raise ValueError("查询小时数据时必须指定 date 或日期区间。")
+        if self.use_hours and self.end_time is None and start_has_time:
+            self.target_hour = start_hour
+        else:
+            self.target_hour = None
 
         return self
+
+    @staticmethod
+    def _normalize_time(value: str, field_name: str) -> tuple[str, bool, int | None]:
+        """
+        将输入时间标准化为 Timeline API 接受的格式。
+
+        Args:
+            value (str): 原始输入字符串。
+            field_name (str): 字段名称，用于错误提示。
+
+        Returns:
+            tuple[str, bool, int | None]: 规范化后的字符串、是否包含时间、小时值。
+
+        Raises:
+            ValueError: 当字符串无法解析为 ISO8601 日期或日期时间时抛出。
+        """
+
+        if not isinstance(value, str):
+            raise ValueError(f"{field_name} 必须为字符串。")
+        raw = value.strip()
+        if not raw:
+            raise ValueError(f"{field_name} 不可为空字符串。")
+        iso_candidate = raw.replace(" ", "T")
+        try:
+            dt = datetime.fromisoformat(iso_candidate)
+        except ValueError as exc:
+            raise ValueError(
+                f"{field_name} 必须为 ISO8601 日期或日期时间，例如 2024-05-01 或 2024-05-01T15:00。"
+            ) from exc
+        has_time = ("T" in raw) or (":" in raw) or (" " in raw)
+        if has_time:
+            normalized = dt.strftime("%Y-%m-%dT%H:%M")
+            hour_value = dt.hour
+        else:
+            normalized = dt.date().isoformat()
+            hour_value = None
+        return normalized, has_time, hour_value
+
+    @staticmethod
+    def _to_datetime(value: str) -> datetime:
+        """
+        将规范化后的日期或日期时间转换为 datetime 对象。
+
+        Args:
+            value (str): 规范化后的时间字符串。
+
+        Returns:
+            datetime: 对应的 datetime 对象。
+
+        Raises:
+            ValueError: 当字符串无法解析为 datetime 时抛出。
+        """
+
+        if "T" in value:
+            return datetime.fromisoformat(value)
+        return datetime.fromisoformat(f"{value}T00:00")
 
 
 class VisualCrossingWeatherClient:
@@ -235,14 +250,10 @@ class VisualCrossingWeatherClient:
             None
         """
 
-        segments: list[str] = [self._base_url, quote(request.location.strip())]
-
-        if request.start_date and request.end_date:
-            segments.append(quote(request.start_date))
-            segments.append(quote(request.end_date))
-        elif request.date:
-            segments.append(quote(request.date))
-
+        segments: list[str] = [self._base_url, quote(request.location)]
+        segments.append(quote(request.normalized_start))
+        if request.normalized_end:
+            segments.append(quote(request.normalized_end))
         return "/".join(segments)
 
     def _build_params(self, request: VisualCrossingWeatherRequest) -> dict[str, Any]:
@@ -260,18 +271,16 @@ class VisualCrossingWeatherClient:
         """
 
         includes: list[str] = []
-        if request.include_day:
-            includes.append("days")
-        if request.include_hour or request.target_hour is not None:
+        if request.use_hours:
             includes.append("hours")
-        if request.include_current:
-            includes.append("current")
+        if request.use_days:
+            includes.append("days")
 
         params: dict[str, Any] = {
             "key": self._api_key,
-            "unitGroup": request.unit_group,
-            "include": ",".join(includes) if includes else None,
+            "unitGroup": "metric",
             "contentType": "json",
+            "include": ",".join(includes) if includes else None,
         }
         return {k: v for k, v in params.items() if v is not None}
 
@@ -312,7 +321,7 @@ class VisualCrossingWeatherFormatter:
         }
 
         current_conditions = payload.get("currentConditions")
-        if request.include_current and isinstance(current_conditions, dict):
+        if isinstance(current_conditions, dict) and not request.use_hours:
             result["current"] = self._pick_fields(
                 current_conditions,
                 ["datetime", "temp", "feelslike", "humidity", "windspeed", "conditions"],
@@ -342,15 +351,12 @@ class VisualCrossingWeatherFormatter:
 
         context = {
             "location": request.location,
-            "date": request.date,
-            "start_date": request.start_date,
-            "end_date": request.end_date,
-            "target_hour": request.target_hour,
-            "unit_group": request.unit_group,
-            "include_day": request.include_day,
-            "include_hour": request.include_hour or request.target_hour is not None,
-            "include_current": request.include_current,
+            "start_time": request.normalized_start,
+            "end_time": request.normalized_end,
+            "granularity": "hour" if request.use_hours else "day",
         }
+        if request.target_hour is not None:
+            context["target_hour"] = request.target_hour
         return {k: v for k, v in context.items() if v is not None}
 
     def _extract_days(
@@ -419,18 +425,18 @@ class VisualCrossingWeatherFormatter:
             None
         """
 
-        if not request.include_hour and request.target_hour is None:
+        if not request.use_hours:
             return []
 
         if not isinstance(hours_payload, Iterable):
             return []
 
         filtered_hours: list[dict[str, Any]] = []
-        for hour in hours_payload:
-            if not isinstance(hour, dict):
+        for hour_item in hours_payload:
+            if not isinstance(hour_item, dict):
                 continue
             hour_entry = self._pick_fields(
-                hour,
+                hour_item,
                 [
                     "datetime",
                     "temp",
@@ -444,9 +450,7 @@ class VisualCrossingWeatherFormatter:
             )
             if request.target_hour is not None:
                 hour_value = self._parse_hour_value(hour_entry.get("datetime"))
-                if hour_value is None:
-                    continue
-                if hour_value != request.target_hour:
+                if hour_value is None or hour_value != request.target_hour:
                     continue
             filtered_hours.append(hour_entry)
 

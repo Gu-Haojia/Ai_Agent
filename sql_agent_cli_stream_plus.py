@@ -787,30 +787,18 @@ class SQLCheckpointAgentStreamingPlus:
                     )
                     def visual_crossing_weather_tool(
                         location: str,
-                        date: str | None = None,
-                        startDate: str | None = None,
-                        endDate: str | None = None,
-                        datetime: str | None = None,
-                        hour: int | None = None,
-                        day: bool = True,
-                        hourly: bool = False,
-                        current: bool = False,
-                        unitGroup: str = "metric",
+                        start_time: str,
+                        end_time: str | None = None,
+                        hour: bool = False,
                     ) -> str:
                         """
-                        查询 Visual Crossing 天气数据，支持单日、区间与具体小时的组合查询。
+                        查询 Visual Crossing 天气数据，支持单次或区间查询，并根据 hour 参数控制粒度。
 
                         Args:
-                            location (str): 查询地点。
-                            date (str | None): 单日日期，YYYY-MM-DD。
-                            startDate (str | None): 区间起始日期，YYYY-MM-DD。
-                            endDate (str | None): 区间结束日期，YYYY-MM-DD。
-                            datetime (str | None): ISO8601 日期时间，例如 2024-05-01T15:00。
-                            hour (int | None): 指定小时（0-23）。
-                            day (bool): 是否包含 days 数据。
-                            hourly (bool): 是否包含 hours 数据。
-                            current (bool): 是否包含 current 数据。
-                            unitGroup (str): 单位组配置。
+                            location (str): 查询地点，可为城市名或经纬度。
+                            start_time (str): 起始时间，支持日期或包含小时的日期时间。
+                            end_time (str | None): 结束时间，可为空。
+                            hour (bool): True 表示按小时返回，False 表示按天返回。
 
                         Returns:
                             str: 整理后的天气信息 JSON 字符串。
@@ -822,15 +810,9 @@ class SQLCheckpointAgentStreamingPlus:
 
                         request_obj = VisualCrossingWeatherRequest(
                             location=location,
-                            date=date,
-                            startDate=startDate,
-                            endDate=endDate,
-                            datetime=datetime,
+                            start_time=start_time,
+                            end_time=end_time,
                             hour=hour,
-                            day=day,
-                            hourly=hourly,
-                            current=current,
-                            unitGroup=unitGroup,
                         )
                         payload = visual_crossing_client.fetch(request_obj)
                         formatted = visual_crossing_formatter.format(

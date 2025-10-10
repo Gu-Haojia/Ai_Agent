@@ -30,7 +30,7 @@ class VisualCrossingWeatherTests(unittest.TestCase):
 
     def test_request_datetime_parsing(self) -> None:
         """
-        验证 datetime 字段可自动解析日期与小时。
+        验证小时粒度时，起始时间可自动解析规范化信息。
 
         Args:
             None
@@ -43,15 +43,17 @@ class VisualCrossingWeatherTests(unittest.TestCase):
         """
 
         request = VisualCrossingWeatherRequest(
-            location="Shanghai", datetime="2024-05-01T15:30", hourly=True
+            location="Shanghai", start_time="2024-05-01T15:30", hour=True
         )
-        self.assertEqual(request.date, "2024-05-01")
+        self.assertEqual(request.normalized_start, "2024-05-01T15:30")
+        self.assertIsNone(request.normalized_end)
         self.assertEqual(request.target_hour, 15)
-        self.assertTrue(request.include_hour)
+        self.assertTrue(request.use_hours)
+        self.assertFalse(request.use_days)
 
     def test_request_invalid_range(self) -> None:
         """
-        确保日期区间参数缺失时抛出错误。
+        确保结束时间早于起始时间时抛出错误。
 
         Args:
             None
@@ -66,7 +68,9 @@ class VisualCrossingWeatherTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             VisualCrossingWeatherRequest(
                 location="Beijing",
-                startDate="2024-05-01",
+                start_time="2024-05-02",
+                end_time="2024-05-01",
+                hour=False,
             )
 
     def test_formatter_extract_hours_target(self) -> None:
@@ -85,10 +89,8 @@ class VisualCrossingWeatherTests(unittest.TestCase):
 
         request = VisualCrossingWeatherRequest(
             location="New York",
-            date="2024-05-01",
-            hour=9,
-            day=True,
-            hourly=True,
+            start_time="2024-05-01T09:00",
+            hour=True,
         )
         payload = {
             "resolvedAddress": "New York, NY",
@@ -119,6 +121,7 @@ class VisualCrossingWeatherTests(unittest.TestCase):
         data = json.loads(formatted)
         self.assertEqual(data["days"][0]["hours"][0]["datetime"], "09:00:00")
         self.assertAlmostEqual(data["days"][0]["hours"][0]["temp"], 16.5, places=1)
+        self.assertEqual(data["query"]["granularity"], "hour")
 
     def test_compose_url_with_range(self) -> None:
         """
@@ -137,10 +140,9 @@ class VisualCrossingWeatherTests(unittest.TestCase):
         client = VisualCrossingWeatherClient(api_key="dummy")
         request = VisualCrossingWeatherRequest(
             location="Tokyo",
-            startDate="2024-05-01",
-            endDate="2024-05-05",
-            day=True,
-            hourly=False,
+            start_time="2024-05-01",
+            end_time="2024-05-05",
+            hour=False,
         )
         url = client._compose_url(request)
         self.assertTrue(url.endswith("/Tokyo/2024-05-01/2024-05-05"))
