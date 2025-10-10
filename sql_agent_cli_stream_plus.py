@@ -834,7 +834,7 @@ class SQLCheckpointAgentStreamingPlus:
                 from langchain.agents import Tool
                 from langchain_experimental.utilities import PythonREPL
 
-                python_repl = PythonREPL()
+                python_repl = PythonREPL(_locals=None)
                 repl_tool = Tool(
                     name="python_repl",
                     description="一个REPL Python shell。使用它来执行python命令以及你所有的数学计算需求。输入应该是一个有效的python命令。如果你想看到一个值的输出，你应该用`print(...)`打印出来。你必须每次先执行完整的import语句，然后才能使用导入的模块。",
@@ -1361,7 +1361,7 @@ class SQLCheckpointAgentStreamingPlus:
             # 显式要求则强制工具，否则交由模型自动决定
             runner = llm_tools_auto
 
-            STREAM=False
+            STREAM=True
             if hasattr(runner, "stream") and STREAM:
                 # 使用 LangChain 的 chunk 相加协议，将增量内容与工具调用一起合并
                 accumulated = None
