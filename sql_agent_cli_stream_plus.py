@@ -34,6 +34,11 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 from langchain_core.messages import ToolMessage, HumanMessage, SystemMessage
 from image_storage import GeneratedImage, ImageStorageManager
+from src.visual_crossing_weather import (
+    VisualCrossingWeatherClient,
+    VisualCrossingWeatherFormatter,
+    VisualCrossingWeatherRequest,
+)
 
 # ---- 环境校验：仅在首次需要时检查，避免重复消耗 ----
 _ENV_COMMON_CHECKED: bool = False
@@ -768,6 +773,76 @@ class SQLCheckpointAgentStreamingPlus:
                         ),
                     )
                     """
+
+                visual_crossing_key = os.environ.get("VISUAL_CROSSING_API_KEY", "").strip()
+                if visual_crossing_key:
+                    visual_crossing_client = VisualCrossingWeatherClient(
+                        api_key=visual_crossing_key
+                    )
+                    visual_crossing_formatter = VisualCrossingWeatherFormatter()
+
+                    @tool(
+                        "visual_crossing_weather",
+                        args_schema=VisualCrossingWeatherRequest,
+                    )
+                    def visual_crossing_weather_tool(
+                        location: str,
+                        date: str | None = None,
+                        startDate: str | None = None,
+                        endDate: str | None = None,
+                        datetime: str | None = None,
+                        hour: int | None = None,
+                        day: bool = True,
+                        hourly: bool = False,
+                        current: bool = False,
+                        unitGroup: str = "metric",
+                    ) -> str:
+                        """
+                        查询 Visual Crossing 天气数据，支持单日、区间与具体小时的组合查询。
+
+                        Args:
+                            location (str): 查询地点。
+                            date (str | None): 单日日期，YYYY-MM-DD。
+                            startDate (str | None): 区间起始日期，YYYY-MM-DD。
+                            endDate (str | None): 区间结束日期，YYYY-MM-DD。
+                            datetime (str | None): ISO8601 日期时间，例如 2024-05-01T15:00。
+                            hour (int | None): 指定小时（0-23）。
+                            day (bool): 是否包含 days 数据。
+                            hourly (bool): 是否包含 hours 数据。
+                            current (bool): 是否包含 current 数据。
+                            unitGroup (str): 单位组配置。
+
+                        Returns:
+                            str: 整理后的天气信息 JSON 字符串。
+
+                        Raises:
+                            ValueError: 当参数组合不符合要求时抛出。
+                            RuntimeError: 当调用 Visual Crossing API 失败时抛出。
+                        """
+
+                        request_obj = VisualCrossingWeatherRequest(
+                            location=location,
+                            date=date,
+                            startDate=startDate,
+                            endDate=endDate,
+                            datetime=datetime,
+                            hour=hour,
+                            day=day,
+                            hourly=hourly,
+                            current=current,
+                            unitGroup=unitGroup,
+                        )
+                        payload = visual_crossing_client.fetch(request_obj)
+                        formatted = visual_crossing_formatter.format(
+                            request_obj, payload
+                        )
+                        print(
+                            f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [VisualCrossing Tool Output] {formatted}",
+                            flush=True,
+                        )
+                        return formatted
+
+                    tools.append(visual_crossing_weather_tool)
 
                 from langchain.agents import Tool
                 from langchain_experimental.utilities import PythonREPL
