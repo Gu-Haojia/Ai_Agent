@@ -123,7 +123,7 @@ class VisualCrossingWeatherRequest(BaseModel):
             ) from exc
         has_time = ("T" in raw) or (":" in raw) or (" " in raw)
         if has_time:
-            normalized = dt.strftime("%Y-%m-%dT%H:%M")
+            normalized = dt.strftime("%Y-%m-%dT%H:%M:%S")
             hour_value = dt.hour
         else:
             normalized = dt.date().isoformat()

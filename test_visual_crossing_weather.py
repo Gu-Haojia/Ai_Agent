@@ -45,7 +45,7 @@ class VisualCrossingWeatherTests(unittest.TestCase):
         request = VisualCrossingWeatherRequest(
             location="Shanghai", start_time="2024-05-01T15:30", hour=True
         )
-        self.assertEqual(request.normalized_start, "2024-05-01T15:30")
+        self.assertEqual(request.normalized_start, "2024-05-01T15:30:00")
         self.assertIsNone(request.normalized_end)
         self.assertEqual(request.target_hour, 15)
         self.assertTrue(request.use_hours)

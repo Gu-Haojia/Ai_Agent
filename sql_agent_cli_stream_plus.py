@@ -795,10 +795,14 @@ class SQLCheckpointAgentStreamingPlus:
                         查询 Visual Crossing 天气数据，支持单次或区间查询，并根据 hour 参数控制粒度。
 
                         Args:
-                            location (str): 查询地点，可为城市名或经纬度。
+                            location (str): 查询地点，可为英文城市名或经纬度。
+                                示例 {"location": "Tokyo", ...}
                             start_time (str): 起始时间，支持日期或包含小时的日期时间。
+                                示例 {"start_time": "2024-05-01"} 或 {"start_time": "2024-05-01T09:00"}
                             end_time (str | None): 结束时间，可为空。
+                                示例 {"end_time": "2024-05-03"}；当仅查询单个时间点时可省略。
                             hour (bool): True 表示按小时返回，False 表示按天返回。
+                                示例 {"hour": true} 表示返回小时级数据；{"hour": false} 表示仅返回天级数据。
 
                         Returns:
                             str: 整理后的天气信息 JSON 字符串。
