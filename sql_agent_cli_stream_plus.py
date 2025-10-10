@@ -836,7 +836,12 @@ class SQLCheckpointAgentStreamingPlus:
 
                 def python_repl_tool(code: str) -> str:
                     repl = PythonREPL(_locals=None)  # 每次调用都新建实例
-                    return repl.run(code,timeout=30)
+                    result = repl.run(code, timeout=30)
+                    print(
+                        f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [Python REPL Tool Output] {result}",
+                        flush=True,
+                    )  # 调用时直接打印
+                    return result
                 
                 repl_tool = Tool(
                     name="python_repl",
