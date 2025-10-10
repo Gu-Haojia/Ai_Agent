@@ -745,7 +745,8 @@ class SQLCheckpointAgentStreamingPlus:
 
                 from langchain_community.utilities import OpenWeatherMapAPIWrapper
 
-                if os.environ.get("OPENWEATHERMAP_API_KEY"):
+                #暂时关闭OpenWeatherMap天气工具
+                if os.environ.get("OPENWEATHERMAP_API_KEY") and False:
 
                     @tool
                     def get_weather(location_en_name: str) -> str:
