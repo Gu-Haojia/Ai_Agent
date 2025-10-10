@@ -1361,7 +1361,8 @@ class SQLCheckpointAgentStreamingPlus:
             # 显式要求则强制工具，否则交由模型自动决定
             runner = llm_tools_auto
 
-            if hasattr(runner, "stream"):
+            STREAM=False
+            if hasattr(runner, "stream") and STREAM:
                 # 使用 LangChain 的 chunk 相加协议，将增量内容与工具调用一起合并
                 accumulated = None
                 for c in runner.stream(messages):  # type: ignore[attr-defined]
