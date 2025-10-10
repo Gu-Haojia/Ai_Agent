@@ -834,11 +834,14 @@ class SQLCheckpointAgentStreamingPlus:
                 from langchain.agents import Tool
                 from langchain_experimental.utilities import PythonREPL
 
-                python_repl = PythonREPL(_locals=None)
+                def python_repl_tool(code: str) -> str:
+                    repl = PythonREPL(_locals=None)  # 每次调用都新建实例
+                    return repl.run(code,timeout=30)
+                
                 repl_tool = Tool(
                     name="python_repl",
                     description="一个REPL Python shell。使用它来执行python命令以及你所有的数学计算需求。输入应该是一个有效的python命令。如果你想看到一个值的输出，你应该用`print(...)`打印出来。你必须每次先执行完整的import语句，然后才能使用导入的模块。",
-                    func=python_repl.run,
+                    func=python_repl_tool,
                 )
 
                 tools.append(repl_tool)
