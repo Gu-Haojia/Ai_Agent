@@ -798,9 +798,9 @@ class SQLCheckpointAgentStreamingPlus:
                         Args:
                             location (str): 查询地点，可为英文城市名或经纬度。
                                 示例 {"location": "Tokyo", ...}
-                            start_time (str): 起始时间，支持日期或包含小时的日期时间。
+                            start_time (str): 起始时间（注意是当地时间），支持日期或包含小时的日期时间。
                                 示例 {"start_time": "2024-05-01"} 或 {"start_time": "2024-05-01T09:00"}
-                            end_time (str | None): 结束时间，可为空。
+                            end_time (str | None): 结束时间（注意是当地时间），可为空。
                                 示例 {"end_time": "2024-05-03"}；当仅查询单个时间点时可省略。
                             hour (bool): True 表示按小时返回，False 表示按天返回。
                                 示例 {"hour": true} 表示返回小时级数据；{"hour": false} 表示仅返回天级数据。
@@ -892,6 +892,11 @@ class SQLCheckpointAgentStreamingPlus:
                         offset_fmt = offset[:3] + ":" + offset[3:]
                     else:
                         offset_fmt = offset
+
+                    print(
+                        f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [DateTime Tool Output] {date_part} {time_part} | {weekday_en}/{weekday_zh} | TZ: {tzname} (UTC{offset_fmt})",
+                        flush=True,
+                    )
                     return f"{date_part} {time_part} | {weekday_en}/{weekday_zh} | TZ: {tzname} (UTC{offset_fmt})"
 
                 tools.append(datetime_now)
