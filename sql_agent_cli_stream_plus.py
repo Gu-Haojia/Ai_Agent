@@ -1114,7 +1114,7 @@ class SQLCheckpointAgentStreamingPlus:
                         sort (str | None): 排序方式，支持 ``TRENDING_DESC``、``POPULARITY_DESC``、``SCORE_DESC``。
                         page (int): 页码，从 1 开始；若需查看更多结果，请递增此值。
                         per_page (int): 每页返回数量，默认 5，可在 1-10 间调整。
-                        media_type (str | None): 作品类型，可选 ``ANIME``、``MANGA``，为 ``None`` 时返回全部。
+                        media_type (str | None): 作品类型，可选 ``ANIME``、``MANGA``，显式传入 ``None`` 时不限制类型。
 
                     Returns:
                         str: JSON 字符串，包含 ``pageInfo`` 与 ``media`` 列表。

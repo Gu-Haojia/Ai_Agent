@@ -200,18 +200,18 @@ class AniListAPI:
         }
         """
 
-        data = self._post(
-            query_text,
-            {
-                "search": search_value if search_value else None,
-                "page": page,
-                "perPage": per_page,
-                "season": normalized_season,
-                "seasonYear": season_year,
-                "type": normalized_type,
-                "sort": normalized_sort,
-            },
-        )
+        variables: dict[str, Any] = {
+            "search": search_value if search_value else None,
+            "page": page,
+            "perPage": per_page,
+            "season": normalized_season,
+            "seasonYear": season_year,
+            "sort": normalized_sort,
+        }
+        if normalized_type is not None:
+            variables["type"] = normalized_type
+
+        data = self._post(query_text, variables)
 
         page = data.get("Page")
         if not isinstance(page, dict):
