@@ -225,6 +225,7 @@ class AniListAPI:
         if not isinstance(page_info, dict) or not isinstance(media_items, list):
             raise ValueError("AniList 返回数据缺少 pageInfo 或 media 列表")
         sanitized_media: list[dict[str, Any]] = []
+        summary_lines: list[str] = []
         for item in media_items:
             if not isinstance(item, dict):
                 continue
@@ -253,7 +254,16 @@ class AniListAPI:
                 else:
                     sanitized["tags"] = []
             sanitized_media.append(sanitized)
-        return {"pageInfo": page_info, "media": sanitized_media}
+            title_info = sanitized.get("title") or {}
+            title_display = (
+                title_info.get("romaji")
+                or title_info.get("english")
+                or title_info.get("native")
+                or "未知标题"
+            )
+            summary_lines.append(f"{sanitized.get('id')} - {title_display}")
+        summary_text = "; ".join(summary_lines) if summary_lines else "无匹配结果"
+        return {"pageInfo": page_info, "media": sanitized_media, "summary": summary_text}
 
     def _post(self, query: str, variables: dict[str, Any]) -> dict[str, Any]:
         """

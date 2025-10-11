@@ -1137,7 +1137,11 @@ class SQLCheckpointAgentStreamingPlus:
                     output = json.dumps(payload, ensure_ascii=False)
                     timestamp = time.strftime("[%m-%d %H:%M:%S]", time.localtime())
                     print(
-                        f"\033[94m{timestamp}\033[0m [AniList Tool] 返回原始数据：{output}",
+                        f"\033[94m{timestamp}\033[0m [AniList Tool] 参数：query='{query}', season_year={season_year}, season={season}, sort={sort}, page={page}, per_page={per_page}, media_type={media_type}",
+                        flush=True,
+                    )
+                    print(
+                        f"\033[94m{timestamp}\033[0m [AniList Tool] 返回摘要：{payload.get('summary', '无摘要信息')}",
                         flush=True,
                     )
                     return output
