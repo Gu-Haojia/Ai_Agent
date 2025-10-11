@@ -258,13 +258,9 @@ class AniListAPI:
                     sanitized["tags"] = []
             sanitized_media.append(sanitized)
             title_info = sanitized.get("title") or {}
-            title_display = (
-                title_info.get("romaji")
-                or title_info.get("english")
-                or title_info.get("native")
-                or "未知标题"
-            )
-            summary_lines.append(f"{sanitized.get('id')} - {title_display}")
+            native_title = title_info.get("native") or title_info.get("romaji") or title_info.get("english") or "未知标题"
+            sanitized["title"] = {"native": native_title}
+            summary_lines.append(f"{sanitized.get('id')} - {native_title}")
         summary_text = "; ".join(summary_lines) if summary_lines else "无匹配结果"
         return {"pageInfo": page_info, "media": sanitized_media, "summary": summary_text}
 
