@@ -1107,7 +1107,7 @@ class SQLCheckpointAgentStreamingPlus:
                     基于 AniList API 的二次元作品检索工具，直接返回 GraphQL 原始数据供 LLM 解读。
 
                     Args:
-                        query (str): 搜索关键词，仅支持英文、日文原文或罗马字；若需按季度/年份检索新番，可留空字符串。
+                        query (str): 搜索关键词，仅支持英文、作品原文或罗马字；若需按季度/年份检索新番，可留空字符串。
                         season_year (int | None): 过滤年份，范围 1900-2100。
                         season (str | None): 过滤季度，仅支持 ``winter``、``spring``、``summer``、``fall``/``autumn``。
                         sort (str | None): 排序方式，支持的枚举包括 ``{ANILIST_SORT_CHOICES_TEXT}``。

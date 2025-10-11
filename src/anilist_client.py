@@ -114,7 +114,7 @@ class AniListAPI:
 
         query_text = """
         query (
-            $search: String!,
+            $search: String,
             $page: Int!,
             $perPage: Int!,
             $season: MediaSeason,
@@ -198,7 +198,7 @@ class AniListAPI:
         data = self._post(
             query_text,
             {
-                "search": search_value,
+                "search": search_value if search_value else None,
                 "page": page,
                 "perPage": per_page,
                 "season": normalized_season,
