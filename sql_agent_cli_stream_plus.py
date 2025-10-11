@@ -1103,14 +1103,14 @@ class SQLCheckpointAgentStreamingPlus:
                     page: int = 1,
                     per_page: int = 5,
                 ) -> str:
-                    f"""
+                    """
                     基于 AniList API 的二次元作品检索工具，直接返回 GraphQL 原始数据供 LLM 解读。
 
                     Args:
                         query (str): 搜索关键词，仅支持英文、作品原文或罗马字；若需按季度/年份检索新番，可留空字符串。
                         season_year (int | None): 过滤年份，范围 1900-2100。
                         season (str | None): 过滤季度，仅支持 ``winter``、``spring``、``summer``、``fall``/``autumn``。
-                        sort (str | None): 排序方式，支持的枚举包括 ``{ANILIST_SORT_CHOICES_TEXT}``。
+                        sort (str | None): 排序方式，支持 ``TRENDING_DESC``、``POPULARITY_DESC``、``SCORE_DESC``。
                         page (int): 页码，从 1 开始；若需查看更多结果，请递增此值。
                         per_page (int): 每页返回数量，默认 5，可在 1-10 间调整。
 
