@@ -1111,7 +1111,7 @@ class SQLCheckpointAgentStreamingPlus:
                         query (str): 搜索关键词，仅支持英文、作品原文或罗马字；若需按季度/年份检索新番，可留空字符串。
                         season_year (int | None): 过滤年份，范围 1900-2100。
                         season (str | None): 过滤季度，仅支持 ``winter``、``spring``、``summer``、``fall``/``autumn``。
-                        sort (str | None): 排序方式，支持 ``TRENDING_DESC``、``POPULARITY_DESC``、``SCORE_DESC``。
+                        sort (str | None): 排序方式，支持 ``SEARCH_MATCH``、``TRENDING_DESC``、``SCORE_DESC``；当提供 query 且未指定排序时默认使用 ``SEARCH_MATCH``。
                         page (int): 页码，从 1 开始；若需查看更多结果，请递增此值。
                         per_page (int): 每页返回数量，默认 5，可在 1-10 间调整。
                         media_type (str | None): 作品类型，可选 ``ANIME``、``MANGA``，显式传入 ``None`` 时不限制类型。

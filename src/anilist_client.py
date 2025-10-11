@@ -13,7 +13,6 @@ import requests
 ANILIST_MEDIA_SORTS: list[str] = [
     "SEARCH_MATCH",
     "TRENDING_DESC",
-    "POPULARITY_DESC",
     "SCORE_DESC",
 ]
 """AniList 支持且常用的 MediaSort 排序枚举。"""
@@ -106,7 +105,6 @@ class AniListAPI:
             )
 
         normalized_season = self._normalize_season(season)
-        normalized_sort = self._normalize_sort(sort)
         normalized_type = self._normalize_media_type(media_type)
         search_value = query.strip()
         if search_value:
@@ -115,6 +113,11 @@ class AniListAPI:
             assert (
                 season_year is not None or normalized_season is not None
             ), "query 为空时必须提供 season 或 season_year 作为过滤条件"
+
+        if sort is None and search_value:
+            normalized_sort = ["SEARCH_MATCH"]
+        else:
+            normalized_sort = self._normalize_sort(sort)
 
         query_text = """
         query (
@@ -232,7 +235,7 @@ class AniListAPI:
             sanitized: dict[str, Any] = dict(item)
             cover = sanitized.get("coverImage")
             if isinstance(cover, dict):
-                large_url = cover.get("large") or cover.get("extraLarge") or cover.get("medium")
+                large_url = cover.get("extraLarge") or cover.get("large") or cover.get("medium")
                 sanitized["coverImage"] = {"large": large_url} if large_url else {}
             tags_raw = sanitized.get("tags")
             if isinstance(tags_raw, list):
