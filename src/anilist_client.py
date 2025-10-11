@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
+import re
 
 import requests
 
@@ -17,6 +18,26 @@ ANILIST_MEDIA_SORTS: list[str] = [
 """AniList 中最常用的 MediaSort 排序枚举。"""
 
 _VALID_SEASONS: set[str] = {"WINTER", "SPRING", "SUMMER", "FALL"}
+
+_QUERY_ALLOWED_PATTERN = re.compile(
+    r"^[0-9A-Za-z\s\-_'’\":!?&./()]+$|^[\u3040-\u30FF\u3000-\u303F\u4E00-\u9FFF0-9A-Za-z\s\-_'’\":!?&./()]+$"
+)
+
+
+def _is_supported_query(value: str) -> bool:
+    """
+    校验查询字符串是否由英文、日文原文或罗马字构成。
+
+    Args:
+        value (str): 待校验的查询词。
+
+    Returns:
+        bool: True 表示通过校验。
+    """
+
+    if not value:
+        return True
+    return bool(_QUERY_ALLOWED_PATTERN.fullmatch(value))
 
 
 @dataclass
@@ -51,7 +72,8 @@ class AniListAPI:
         season_year: int | None = None,
         season: str | None = None,
         sort: str | None = None,
-        per_page: int = 6,
+        per_page: int = 5,
+        page: int = 1,
     ) -> dict[str, Any]:
         """
         按关键词检索 AniList 作品，并保留原始返回结构。
@@ -61,7 +83,8 @@ class AniListAPI:
             season_year (int | None): 过滤季节年份，范围 1900-2100。
             season (str | None): 过滤季度，可选 winter/spring/summer/fall。
             sort (str | None): 排序枚举，详见 ``ANILIST_MEDIA_SORTS``。
-            per_page (int): 每次返回的条目数量，默认 6。
+            per_page (int): 每页返回条目数量，默认 5，范围 1-10。
+            page (int): 页码（1 起），用于滚动翻页。
 
         Returns:
             dict[str, Any]: 包含 ``pageInfo`` 与 ``media`` 列表的原始数据。
@@ -73,6 +96,7 @@ class AniListAPI:
 
         assert isinstance(query, str), "query 必须为字符串"
         assert isinstance(per_page, int) and 1 <= per_page <= 10, "per_page 必须介于 1-10"
+        assert isinstance(page, int) and page >= 1, "page 必须为 >=1 的整数"
         if season_year is not None:
             assert isinstance(season_year, int) and 1900 <= season_year <= 2100, (
                 "season_year 必须介于 1900-2100"
@@ -81,6 +105,8 @@ class AniListAPI:
         normalized_season = self._normalize_season(season)
         normalized_sort = self._normalize_sort(sort)
         search_value = query.strip()
+        if search_value:
+            assert _is_supported_query(search_value), "query 仅支持英文、原生语言或罗马字。"
         if not search_value:
             assert (
                 season_year is not None or normalized_season is not None
@@ -173,7 +199,7 @@ class AniListAPI:
             query_text,
             {
                 "search": search_value,
-                "page": 1,
+                "page": page,
                 "perPage": per_page,
                 "season": normalized_season,
                 "seasonYear": season_year,
@@ -188,7 +214,36 @@ class AniListAPI:
         media_items = page.get("media")
         if not isinstance(page_info, dict) or not isinstance(media_items, list):
             raise ValueError("AniList 返回数据缺少 pageInfo 或 media 列表")
-        return {"pageInfo": page_info, "media": media_items}
+        sanitized_media: list[dict[str, Any]] = []
+        for item in media_items:
+            if not isinstance(item, dict):
+                continue
+            sanitized: dict[str, Any] = dict(item)
+            cover = sanitized.get("coverImage")
+            if isinstance(cover, dict):
+                large_url = cover.get("large") or cover.get("extraLarge") or cover.get("medium")
+                sanitized["coverImage"] = {"large": large_url} if large_url else {}
+            tags_raw = sanitized.get("tags")
+            if isinstance(tags_raw, list):
+                tags_clean: list[str] = []
+                for tag in tags_raw:
+                    if not isinstance(tag, dict):
+                        continue
+                    name = tag.get("name")
+                    if isinstance(name, str) and name.strip():
+                        tags_clean.append(name.strip())
+                if tags_clean:
+                    unique_tags: list[str] = []
+                    seen: set[str] = set()
+                    for name in tags_clean:
+                        if name not in seen:
+                            unique_tags.append(name)
+                            seen.add(name)
+                    sanitized["tags"] = unique_tags
+                else:
+                    sanitized["tags"] = []
+            sanitized_media.append(sanitized)
+        return {"pageInfo": page_info, "media": sanitized_media}
 
     def _post(self, query: str, variables: dict[str, Any]) -> dict[str, Any]:
         """

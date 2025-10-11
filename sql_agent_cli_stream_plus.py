@@ -1100,15 +1100,19 @@ class SQLCheckpointAgentStreamingPlus:
                     season_year: int | None = None,
                     season: str | None = None,
                     sort: str | None = None,
+                    page: int = 1,
+                    per_page: int = 5,
                 ) -> str:
                     f"""
-                    基于 AniList API 的二次元动画，声优等信息检索工具，直接返回 GraphQL 原始数据供 LLM 解读。
+                    基于 AniList API 的二次元作品检索工具，直接返回 GraphQL 原始数据供 LLM 解读。
 
                     Args:
-                        query (str): 搜索关键词；若需按季度/年份检索新番，可留空字符串。
+                        query (str): 搜索关键词，仅支持英文、日文原文或罗马字；若需按季度/年份检索新番，可留空字符串。
                         season_year (int | None): 过滤年份，范围 1900-2100。
                         season (str | None): 过滤季度，仅支持 ``winter``、``spring``、``summer``、``fall``/``autumn``。
                         sort (str | None): 排序方式，支持的枚举包括 ``{ANILIST_SORT_CHOICES_TEXT}``。
+                        page (int): 页码，从 1 开始；若需查看更多结果，请递增此值。
+                        per_page (int): 每页返回数量，默认 5，可在 1-10 间调整。
 
                     Returns:
                         str: JSON 字符串，包含 ``pageInfo`` 与 ``media`` 列表。
@@ -1124,6 +1128,8 @@ class SQLCheckpointAgentStreamingPlus:
                         season_year=season_year,
                         season=season,
                         sort=sort,
+                        per_page=per_page,
+                        page=page,
                     )
                     output = json.dumps(payload, ensure_ascii=False)
                     timestamp = time.strftime("[%m-%d %H:%M:%S]", time.localtime())
