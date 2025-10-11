@@ -1102,9 +1102,10 @@ class SQLCheckpointAgentStreamingPlus:
                     sort: str | None = None,
                     page: int = 1,
                     per_page: int = 5,
+                    media_type: str | None = "ANIME",
                 ) -> str:
                     """
-                    基于 AniList API 的二次元作品检索工具，可以用来查询动画，漫画等作品，也可以用于查询某个时间点的作品。
+                    基于 AniList API 的二次元作品检索工具，可以用来查询动画、漫画等作品，也可以用于查询某个时间点的作品。
 
                     Args:
                         query (str): 搜索关键词，仅支持英文、作品原文或罗马字；若需按季度/年份检索新番，可留空字符串。
@@ -1113,6 +1114,7 @@ class SQLCheckpointAgentStreamingPlus:
                         sort (str | None): 排序方式，支持 ``TRENDING_DESC``、``POPULARITY_DESC``、``SCORE_DESC``。
                         page (int): 页码，从 1 开始；若需查看更多结果，请递增此值。
                         per_page (int): 每页返回数量，默认 5，可在 1-10 间调整。
+                        media_type (str | None): 作品类型，可选 ``ANIME``、``MANGA``，为 ``None`` 时返回全部。
 
                     Returns:
                         str: JSON 字符串，包含 ``pageInfo`` 与 ``media`` 列表。
@@ -1130,6 +1132,7 @@ class SQLCheckpointAgentStreamingPlus:
                         sort=sort,
                         per_page=per_page,
                         page=page,
+                        media_type=media_type,
                     )
                     output = json.dumps(payload, ensure_ascii=False)
                     timestamp = time.strftime("[%m-%d %H:%M:%S]", time.localtime())

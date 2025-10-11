@@ -74,6 +74,7 @@ class AniListAPI:
         sort: str | None = None,
         per_page: int = 5,
         page: int = 1,
+        media_type: str | None = "ANIME",
     ) -> dict[str, Any]:
         """
         按关键词检索 AniList 作品，并保留原始返回结构。
@@ -85,6 +86,7 @@ class AniListAPI:
             sort (str | None): 排序枚举，详见 ``ANILIST_MEDIA_SORTS``。
             per_page (int): 每页返回条目数量，默认 5，范围 1-10。
             page (int): 页码（1 起），用于滚动翻页。
+            media_type (str | None): 作品类型，支持 ``ANIME``、``MANGA``，为 ``None`` 时不限制。
 
         Returns:
             dict[str, Any]: 包含 ``pageInfo`` 与 ``media`` 列表的原始数据。
@@ -104,6 +106,7 @@ class AniListAPI:
 
         normalized_season = self._normalize_season(season)
         normalized_sort = self._normalize_sort(sort)
+        normalized_type = self._normalize_media_type(media_type)
         search_value = query.strip()
         if search_value:
             assert _is_supported_query(search_value), "query 仅支持英文、原生语言或罗马字。"
@@ -119,6 +122,7 @@ class AniListAPI:
             $perPage: Int!,
             $season: MediaSeason,
             $seasonYear: Int,
+            $type: MediaType,
             $sort: [MediaSort!]
         ) {
             Page(page: $page, perPage: $perPage) {
@@ -133,6 +137,7 @@ class AniListAPI:
                     search: $search,
                     season: $season,
                     seasonYear: $seasonYear,
+                    type: $type,
                     sort: $sort
                 ) {
                     id
@@ -203,6 +208,7 @@ class AniListAPI:
                 "perPage": per_page,
                 "season": normalized_season,
                 "seasonYear": season_year,
+                "type": normalized_type,
                 "sort": normalized_sort,
             },
         )
@@ -334,3 +340,24 @@ class AniListAPI:
         normalized = value.strip().upper().replace("-", "_")
         assert normalized in ANILIST_MEDIA_SORTS, "sort 不在 ANILIST_MEDIA_SORTS 列表内"
         return [normalized]
+
+    def _normalize_media_type(self, value: str | None) -> str | None:
+        """
+        规范化作品类型。
+
+        Args:
+            value (str | None): 目标类型。
+
+        Returns:
+            str | None: 合法的 MediaType。
+
+        Raises:
+            AssertionError: 当类型超出支持范围时抛出。
+        """
+
+        if value is None:
+            return None
+        normalized = value.strip().upper()
+        allowed = {"ANIME", "MANGA"}
+        assert normalized in allowed, "media_type 仅支持 ANIME 或 MANGA"
+        return normalized
