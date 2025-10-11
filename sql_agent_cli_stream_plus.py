@@ -1102,7 +1102,7 @@ class SQLCheckpointAgentStreamingPlus:
                     sort: str | None = None,
                 ) -> str:
                     f"""
-                    基于 AniList API 的二次元检索工具，直接返回 GraphQL 原始数据供 LLM 解读。
+                    基于 AniList API 的二次元动画，声优等信息检索工具，直接返回 GraphQL 原始数据供 LLM 解读。
 
                     Args:
                         query (str): 搜索关键词；若需按季度/年份检索新番，可留空字符串。
