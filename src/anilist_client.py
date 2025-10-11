@@ -11,11 +11,12 @@ import re
 import requests
 
 ANILIST_MEDIA_SORTS: list[str] = [
+    "SEARCH_MATCH",
     "TRENDING_DESC",
     "POPULARITY_DESC",
     "SCORE_DESC",
 ]
-"""AniList 中最常用的 MediaSort 排序枚举。"""
+"""AniList 支持且常用的 MediaSort 排序枚举。"""
 
 _VALID_SEASONS: set[str] = {"WINTER", "SPRING", "SUMMER", "FALL"}
 
