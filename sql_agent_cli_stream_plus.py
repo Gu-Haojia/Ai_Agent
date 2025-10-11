@@ -17,6 +17,7 @@ import re
 import sys
 import time
 from dataclasses import dataclass
+from html import unescape
 from pathlib import Path
 from typing import Annotated, Callable, Iterable, Match, Optional, Sequence, Union, Any
 import threading
@@ -418,6 +419,521 @@ class RapidAPIHotelSearchClient:
 
         return results
 
+
+class AniListMediaItem(TypedDict):
+    """
+    表示 AniList 上的作品条目信息。
+
+    Attributes:
+        title (str): 用于展示的标题。
+        native_title (str | None): 原语言标题，可能为空。
+        format_label (str): 作品形式的中文描述，例如“电视动画”。
+        status_label (str): 播出或出版状态的中文描述。
+        average_score (int | None): 平均评分（0-100）。
+        episodes (int | None): 集数信息，仅动画可用。
+        chapters (int | None): 章节信息，仅漫画可用。
+        season_year (int | None): 首播或出版年份。
+        genres (list[str]): 类型标签列表。
+        description (str): 简介摘要。
+        url (str): AniList 站点链接。
+    """
+
+    title: str
+    native_title: str | None
+    format_label: str
+    status_label: str
+    average_score: int | None
+    episodes: int | None
+    chapters: int | None
+    season_year: int | None
+    genres: list[str]
+    description: str
+    url: str
+
+
+class AniListCharacterItem(TypedDict):
+    """
+    表示 AniList 上的角色条目信息。
+
+    Attributes:
+        display_name (str): 角色常用名称。
+        native_name (str | None): 原语言名称。
+        gender (str | None): 性别信息。
+        age (str | None): 年龄信息，可能为字符串。
+        birthday (str | None): 生日信息，格式如 "1999-07-05" 或 "07-05"。
+        notable_works (list[str]): 代表作列表。
+        description (str): 简介摘要。
+        url (str): AniList 链接。
+    """
+
+    display_name: str
+    native_name: str | None
+    gender: str | None
+    age: str | None
+    birthday: str | None
+    notable_works: list[str]
+    description: str
+    url: str
+
+
+@dataclass
+class AniListClient:
+    """
+    AniList GraphQL API 客户端，提供基础的作品与角色检索功能。
+
+    Attributes:
+        endpoint (str): GraphQL 接口地址，默认指向官方 AniList。
+        timeout (int): 网络请求超时时间，单位秒。
+    """
+
+    endpoint: str = "https://graphql.anilist.co"
+    timeout: int = 15
+
+    def __post_init__(self) -> None:
+        """
+        初始化客户端并校验配置。
+
+        Raises:
+            AssertionError: 当接口地址或超时参数非法时抛出。
+        """
+
+        assert isinstance(self.endpoint, str) and self.endpoint.startswith(
+            "http"
+        ), "endpoint 必须为有效的 URL"
+        assert isinstance(self.timeout, int) and self.timeout > 0, "timeout 必须为正整数"
+
+    def search(self, category: str, keyword: str, limit: int) -> list[dict[str, Any]]:
+        """
+        按分类检索作品或角色。
+
+        Args:
+            category (str): 检索类别，可选 "anime"、"manga"、"character"。
+            keyword (str): 关键字，必须为非空字符串。
+            limit (int): 返回条目数量上限，1-10。
+
+        Returns:
+            list[dict[str, Any]]: AniList 条目列表。
+
+        Raises:
+            AssertionError: 当参数非法时抛出。
+            ValueError: 当 AniList 接口返回错误或数据异常时抛出。
+        """
+
+        assert isinstance(category, str) and category.strip(), "category 不能为空"
+        normalized = category.strip().lower()
+        assert normalized in {
+            "anime",
+            "manga",
+            "character",
+        }, "category 必须为 anime/manga/character"
+        assert isinstance(keyword, str) and keyword.strip(), "keyword 必须为非空字符串"
+        assert isinstance(limit, int) and 1 <= limit <= 10, "limit 必须为 1 到 10 的整数"
+
+        if normalized == "anime":
+            return self._search_media(keyword.strip(), limit, "ANIME")
+        if normalized == "manga":
+            return self._search_media(keyword.strip(), limit, "MANGA")
+        return self._search_characters(keyword.strip(), limit)
+
+    def _post(self, query: str, variables: dict[str, Any]) -> dict[str, Any]:
+        """
+        执行 GraphQL POST 请求，返回 data 字段。
+
+        Args:
+            query (str): GraphQL 查询语句。
+            variables (dict[str, Any]): 查询变量。
+
+        Returns:
+            dict[str, Any]: data 字段内容。
+
+        Raises:
+            AssertionError: 当 query 为空时抛出。
+            ValueError: 当 HTTP 请求失败或返回结构异常时抛出。
+        """
+
+        assert isinstance(query, str) and query.strip(), "GraphQL 查询语句不能为空"
+        response = requests.post(
+            self.endpoint,
+            json={"query": query, "variables": variables},
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            timeout=self.timeout,
+        )
+        if response.status_code != 200:
+            raise ValueError(f"AniList 请求失败，HTTP {response.status_code}")
+        try:
+            payload = response.json()
+        except json.JSONDecodeError as exc:
+            raise ValueError("AniList 返回非 JSON 数据") from exc
+        errors = payload.get("errors")
+        if errors:
+            first_error = errors[0] if isinstance(errors, list) and errors else errors
+            if isinstance(first_error, dict):
+                message = first_error.get("message") or str(first_error)
+            else:
+                message = str(first_error)
+            raise ValueError(f"AniList 返回错误: {message}")
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            raise ValueError("AniList 返回数据缺失 data 字段")
+        return data
+
+    def _search_media(
+        self, keyword: str, limit: int, media_type: str
+    ) -> list[AniListMediaItem]:
+        """
+        检索动画或漫画作品。
+
+        Args:
+            keyword (str): 检索关键字。
+            limit (int): 返回条目数量。
+            media_type (str): GraphQL MediaType，例如 "ANIME" 或 "MANGA"。
+
+        Returns:
+            list[AniListMediaItem]: 作品条目列表。
+
+        Raises:
+            AssertionError: 当 media_type 非法时抛出。
+            ValueError: 当返回数据结构异常时抛出。
+        """
+
+        assert media_type in {"ANIME", "MANGA"}, "media_type 非法"
+        query = """
+        query ($search: String!, $page: Int!, $perPage: Int!, $type: MediaType!) {
+            Page(page: $page, perPage: $perPage) {
+                media(search: $search, type: $type) {
+                    title {
+                        romaji
+                        native
+                        english
+                    }
+                    description(asHtml: false)
+                    format
+                    status
+                    episodes
+                    chapters
+                    averageScore
+                    genres
+                    seasonYear
+                    siteUrl
+                }
+            }
+        }
+        """
+
+        data = self._post(
+            query,
+            {
+                "search": keyword,
+                "page": 1,
+                "perPage": limit,
+                "type": media_type,
+            },
+        )
+        page = data.get("Page")
+        if not isinstance(page, dict):
+            raise ValueError("AniList 返回数据缺少 Page 节点")
+        media_items = page.get("media")
+        if not isinstance(media_items, list):
+            raise ValueError("AniList 返回数据缺少 media 列表")
+        results: list[AniListMediaItem] = []
+        for item in media_items:
+            if not isinstance(item, dict):
+                continue
+            title = self._pick_title(item.get("title"))
+            native_title = self._pick_title(item.get("title"), key_priority=("native",))
+            clean_desc = self._clean_description(item.get("description"))
+            format_label = self._translate_format(item.get("format"))
+            status_label = self._translate_status(item.get("status"))
+            score_val = item.get("averageScore")
+            score = int(score_val) if isinstance(score_val, int) else None
+            episodes_val = item.get("episodes")
+            episodes = int(episodes_val) if isinstance(episodes_val, int) else None
+            chapters_val = item.get("chapters")
+            chapters = int(chapters_val) if isinstance(chapters_val, int) else None
+            season_val = item.get("seasonYear")
+            season_year = int(season_val) if isinstance(season_val, int) else None
+            genres_raw = item.get("genres")
+            genres = [
+                g.strip()
+                for g in genres_raw
+                if isinstance(g, str) and g.strip()
+            ]
+            site_url = item.get("siteUrl")
+            url = site_url.strip() if isinstance(site_url, str) else ""
+            results.append(
+                AniListMediaItem(
+                    title=title,
+                    native_title=native_title,
+                    format_label=format_label,
+                    status_label=status_label,
+                    average_score=score,
+                    episodes=episodes,
+                    chapters=chapters,
+                    season_year=season_year,
+                    genres=genres,
+                    description=clean_desc,
+                    url=url,
+                )
+            )
+        return results
+
+    def _search_characters(
+        self, keyword: str, limit: int
+    ) -> list[AniListCharacterItem]:
+        """
+        检索角色信息。
+
+        Args:
+            keyword (str): 检索关键字。
+            limit (int): 返回条目数量。
+
+        Returns:
+            list[AniListCharacterItem]: 角色条目列表。
+
+        Raises:
+            ValueError: 当返回数据结构异常时抛出。
+        """
+
+        query = """
+        query ($search: String!, $page: Int!, $perPage: Int!) {
+            Page(page: $page, perPage: $perPage) {
+                characters(search: $search) {
+                    name {
+                        full
+                        native
+                    }
+                    gender
+                    age
+                    dateOfBirth {
+                        year
+                        month
+                        day
+                    }
+                    description(asHtml: false)
+                    siteUrl
+                    media(perPage: 3) {
+                        nodes {
+                            title {
+                                romaji
+                                native
+                            }
+                            type
+                        }
+                    }
+                }
+            }
+        }
+        """
+
+        data = self._post(
+            query,
+            {
+                "search": keyword,
+                "page": 1,
+                "perPage": limit,
+            },
+        )
+        page = data.get("Page")
+        if not isinstance(page, dict):
+            raise ValueError("AniList 返回数据缺少 Page 节点")
+        char_items = page.get("characters")
+        if not isinstance(char_items, list):
+            raise ValueError("AniList 返回数据缺少 characters 列表")
+        results: list[AniListCharacterItem] = []
+        for item in char_items:
+            if not isinstance(item, dict):
+                continue
+            name_info = item.get("name") or {}
+            display_name = self._pick_title(name_info, ("full", "native"))
+            native_name = self._pick_title(name_info, ("native",))
+            gender = self._normalize_str(item.get("gender"))
+            age = self._normalize_str(item.get("age"))
+            birthday = self._format_birthday(item.get("dateOfBirth"))
+            clean_desc = self._clean_description(item.get("description"))
+            media_conn = item.get("media")
+            notable_works: list[str] = []
+            if isinstance(media_conn, dict):
+                nodes = media_conn.get("nodes")
+                if isinstance(nodes, list):
+                    for node in nodes:
+                        if not isinstance(node, dict):
+                            continue
+                        title_text = self._pick_title(node.get("title"))
+                        type_text = self._normalize_str(node.get("type"))
+                        if title_text and type_text:
+                            notable_works.append(f"{title_text}（{type_text}）")
+                        elif title_text:
+                            notable_works.append(title_text)
+            site_url = item.get("siteUrl")
+            url = site_url.strip() if isinstance(site_url, str) else ""
+            results.append(
+                AniListCharacterItem(
+                    display_name=display_name,
+                    native_name=native_name,
+                    gender=gender,
+                    age=age,
+                    birthday=birthday,
+                    notable_works=notable_works,
+                    description=clean_desc,
+                    url=url,
+                )
+            )
+        return results
+
+    def _pick_title(
+        self, title_info: Any, key_priority: Sequence[str] | None = None
+    ) -> str:
+        """
+        从标题字典中选择最佳展示名称。
+
+        Args:
+            title_info (Any): 包含标题信息的对象。
+            key_priority (Sequence[str] | None): 选择顺序，默认按 native/romaji/english。
+
+        Returns:
+            str: 最佳标题，若均为空则返回 "未知标题"。
+        """
+
+        if not isinstance(title_info, dict):
+            return "未知标题"
+        priority = key_priority or ("native", "romaji", "english")
+        for key in priority:
+            value = title_info.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        # 有些字段包含 title 键，取第一个非空字符串
+        for val in title_info.values():
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+        return "未知标题"
+
+    def _clean_description(self, text: Any) -> str:
+        """
+        清洗简介文本，去除 HTML 并截断长度。
+
+        Args:
+            text (Any): 原始简介文本。
+
+        Returns:
+            str: 清洗后的简介，若为空则返回“暂无简介”。
+        """
+
+        if not isinstance(text, str):
+            return "暂无简介"
+        stripped = unescape(re.sub(r"<[^>]+>", " ", text))
+        normalized = re.sub(r"\s+", " ", stripped).strip()
+        if not normalized:
+            return "暂无简介"
+        if len(normalized) > 120:
+            return normalized[:120].rstrip() + "..."
+        return normalized
+
+    def _translate_status(self, status: Any) -> str:
+        """
+        将 AniList 状态枚举转换为中文描述。
+
+        Args:
+            status (Any): 原始状态值。
+
+        Returns:
+            str: 中文状态描述。
+        """
+
+        mapping = {
+            "FINISHED": "已完结",
+            "RELEASING": "连载中",
+            "NOT_YET_RELEASED": "未开播",
+            "CANCELLED": "已取消",
+            "HIATUS": "暂停更新",
+        }
+        if isinstance(status, str):
+            upper = status.strip().upper()
+            if upper in mapping:
+                return mapping[upper]
+            return status.strip()
+        return "未知状态"
+
+    def _translate_format(self, format_value: Any) -> str:
+        """
+        将 AniList 作品形式转换为中文描述。
+
+        Args:
+            format_value (Any): 原始形式枚举值。
+
+        Returns:
+            str: 中文形式描述。
+        """
+
+        mapping = {
+            "TV": "电视动画",
+            "TV_SHORT": "短篇动画",
+            "MOVIE": "剧场版",
+            "SPECIAL": "特别篇",
+            "OVA": "OVA",
+            "ONA": "网络动画",
+            "MUSIC": "音乐视频",
+            "MANGA": "漫画",
+            "NOVEL": "小说",
+            "ONE_SHOT": "短篇漫画",
+        }
+        if isinstance(format_value, str):
+            upper = format_value.strip().upper()
+            if upper in mapping:
+                return mapping[upper]
+            return format_value.strip()
+        return "未知形式"
+
+    def _format_birthday(self, dob: Any) -> str | None:
+        """
+        将生日字典格式化为可读字符串。
+
+        Args:
+            dob (Any): 包含 year/month/day 的字典。
+
+        Returns:
+            str | None: 格式化后的生日。
+        """
+
+        if not isinstance(dob, dict):
+            return None
+        year = dob.get("year")
+        month = dob.get("month")
+        day = dob.get("day")
+        year_text = str(year) if isinstance(year, int) and year > 0 else ""
+        month_text = f"{month:02d}" if isinstance(month, int) and month > 0 else ""
+        day_text = f"{day:02d}" if isinstance(day, int) and day > 0 else ""
+        if year_text and month_text and day_text:
+            return f"{year_text}-{month_text}-{day_text}"
+        if month_text and day_text:
+            return f"{month_text}-{day_text}"
+        if year_text and month_text:
+            return f"{year_text}-{month_text}"
+        if year_text:
+            return year_text
+        if month_text:
+            return month_text
+        if day_text:
+            return day_text
+        return None
+
+    def _normalize_str(self, value: Any) -> str | None:
+        """
+        将可能为 None 的字符串清洗后返回。
+
+        Args:
+            value (Any): 待处理对象。
+
+        Returns:
+            str | None: 清洗后的字符串，若为空则返回 None。
+        """
+
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        return None
 
 class State(TypedDict):
     """Agent 的图状态。"""
@@ -1090,6 +1606,130 @@ class SQLCheckpointAgentStreamingPlus:
                     return "\n".join(lines)
 
                 tools.append(hotel_search)
+
+                @tool
+                def anilist_lookup(
+                    category: str, keyword: str, limit: int = 3
+                ) -> str:
+                    """
+                    基于 AniList API 的二次元知识库检索工具，支持动画、漫画与角色信息。
+
+                    Args:
+                        category (str): 检索类别，可选 "anime"、"manga"、"character"。
+                        keyword (str): 搜索关键字，必须提供具体词语。
+                        limit (int): 返回条目数量上限，范围 1-10，默认 3。
+
+                    Returns:
+                        str: 经过整理的中文文本，按条目分行展示关键信息。
+
+                    Raises:
+                        AssertionError: 当参数非法或 AniList 无返回结果时抛出。
+                        ValueError: 当 AniList 接口调用失败时抛出。
+                    """
+
+                    normalized = (category or "").strip().lower()
+                    assert normalized in {
+                        "anime",
+                        "manga",
+                        "character",
+                    }, "category 必须为 anime/manga/character"
+                    assert isinstance(keyword, str) and keyword.strip(), "keyword 必须为非空字符串"
+                    if not isinstance(limit, int) or not (1 <= limit <= 10):
+                        raise AssertionError("limit 必须为 1 到 10 的整数")
+
+                    client = AniListClient()
+                    records = client.search(normalized, keyword.strip(), limit)
+                    assert records, "AniList 未返回任何结果，请尝试调整关键词。"
+
+                    lines: list[str] = []
+                    timestamp = time.strftime("[%m-%d %H:%M:%S]", time.localtime())
+                    if normalized in {"anime", "manga"}:
+                        for idx, record in enumerate(records, start=1):
+                            if not isinstance(record, dict):
+                                continue
+                            title = str(record.get("title") or "未知标题")
+                            native_title = record.get("native_title")
+                            header = f"{idx}. 《{title}》"
+                            if isinstance(native_title, str) and native_title.strip() and native_title.strip() != title:
+                                header += f" / {native_title.strip()}"
+                            score_val = record.get("average_score")
+                            score_text = (
+                                f"{score_val}/100"
+                                if isinstance(score_val, int)
+                                else "暂无评分"
+                            )
+                            detail_parts: list[str] = [
+                                f"类型：{record.get('format_label')}",
+                                f"状态：{record.get('status_label')}",
+                                f"评分：{score_text}",
+                            ]
+                            season_year = record.get("season_year")
+                            if isinstance(season_year, int):
+                                detail_parts.append(f"年份：{season_year}")
+                            episodes = record.get("episodes")
+                            chapters = record.get("chapters")
+                            if normalized == "anime" and isinstance(episodes, int):
+                                detail_parts.append(f"集数：{episodes}")
+                            if normalized == "manga" and isinstance(chapters, int):
+                                detail_parts.append(f"章节：{chapters}")
+                            genres = record.get("genres")
+                            if isinstance(genres, list) and genres:
+                                genre_text = "、".join(
+                                    str(g) for g in genres[:4] if isinstance(g, str)
+                                )
+                                if genre_text:
+                                    detail_parts.append(f"标签：{genre_text}")
+                            detail_line = " | ".join(detail_parts)
+                            desc = str(record.get("description") or "暂无简介")
+                            url = record.get("url")
+                            if isinstance(url, str) and url.strip():
+                                desc_line = f"简介：{desc} | 链接：{url.strip()}"
+                            else:
+                                desc_line = f"简介：{desc}"
+                            lines.append(f"{header}\n  {detail_line}\n  {desc_line}")
+                    else:
+                        for idx, record in enumerate(records, start=1):
+                            if not isinstance(record, dict):
+                                continue
+                            name = str(record.get("display_name") or "未知角色")
+                            native_name = record.get("native_name")
+                            header = f"{idx}. {name}"
+                            if isinstance(native_name, str) and native_name.strip() and native_name.strip() != name:
+                                header += f" / {native_name.strip()}"
+                            detail_parts: list[str] = []
+                            gender = record.get("gender")
+                            if isinstance(gender, str) and gender.strip():
+                                detail_parts.append(f"性别：{gender.strip()}")
+                            age = record.get("age")
+                            if isinstance(age, str) and age.strip():
+                                detail_parts.append(f"年龄：{age.strip()}")
+                            birthday = record.get("birthday")
+                            if isinstance(birthday, str) and birthday.strip():
+                                detail_parts.append(f"生日：{birthday.strip()}")
+                            works = record.get("notable_works")
+                            if isinstance(works, list) and works:
+                                works_text = "、".join(
+                                    str(w) for w in works if isinstance(w, str)
+                                )
+                                if works_text:
+                                    detail_parts.append(f"代表作：{works_text}")
+                            detail_line = " | ".join(detail_parts) if detail_parts else "暂无补充信息"
+                            desc = str(record.get("description") or "暂无简介")
+                            url = record.get("url")
+                            if isinstance(url, str) and url.strip():
+                                desc_line = f"简介：{desc} | 链接：{url.strip()}"
+                            else:
+                                desc_line = f"简介：{desc}"
+                            lines.append(f"{header}\n  {detail_line}\n  {desc_line}")
+
+                    output = "\n".join(lines)
+                    print(
+                        f"\033[94m{timestamp}\033[0m [AniList Tool] 检索结果：\n{output}",
+                        flush=True,
+                    )
+                    return output
+
+                tools.append(anilist_lookup)
 
                 @tool
                 def nbnhhsh(text: str) -> str:
