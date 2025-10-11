@@ -1096,7 +1096,7 @@ class SQLCheckpointAgentStreamingPlus:
 
                 @tool
                 def anilist_lookup(
-                    query: str,
+                    query: str = "",
                     season_year: int | None = None,
                     season: str | None = None,
                     sort: str | None = None,
@@ -1105,7 +1105,7 @@ class SQLCheckpointAgentStreamingPlus:
                     基于 AniList API 的二次元检索工具，直接返回 GraphQL 原始数据供 LLM 解读。
 
                     Args:
-                        query (str): 搜索关键词。
+                        query (str): 搜索关键词；若需按季度/年份检索新番，可留空字符串。
                         season_year (int | None): 过滤年份，范围 1900-2100。
                         season (str | None): 过滤季度，仅支持 ``winter``、``spring``、``summer``、``fall``/``autumn``。
                         sort (str | None): 排序方式，支持的枚举包括 ``{ANILIST_SORT_CHOICES_TEXT}``。

@@ -11,31 +11,10 @@ import requests
 
 ANILIST_MEDIA_SORTS: list[str] = [
     "TRENDING_DESC",
-    "TRENDING",
     "POPULARITY_DESC",
-    "POPULARITY",
-    "FAVOURITES_DESC",
-    "FAVOURITES",
     "SCORE_DESC",
-    "SCORE",
-    "MEAN_SCORE_DESC",
-    "MEAN_SCORE",
-    "START_DATE_DESC",
-    "START_DATE",
-    "END_DATE_DESC",
-    "END_DATE",
-    "TITLE_ROMAJI_DESC",
-    "TITLE_ROMAJI",
-    "TITLE_ENGLISH_DESC",
-    "TITLE_ENGLISH",
-    "TITLE_NATIVE_DESC",
-    "TITLE_NATIVE",
-    "EPISODES_DESC",
-    "EPISODES",
-    "DURATION_DESC",
-    "DURATION",
 ]
-"""AniList 可用的常见 MediaSort 排序枚举。"""
+"""AniList 中最常用的 MediaSort 排序枚举。"""
 
 _VALID_SEASONS: set[str] = {"WINTER", "SPRING", "SUMMER", "FALL"}
 
@@ -78,7 +57,7 @@ class AniListAPI:
         按关键词检索 AniList 作品，并保留原始返回结构。
 
         Args:
-            query (str): 搜索关键词。
+            query (str): 搜索关键词；当 ``season`` 或 ``season_year`` 至少指定一项时可为空字符串。
             season_year (int | None): 过滤季节年份，范围 1900-2100。
             season (str | None): 过滤季度，可选 winter/spring/summer/fall。
             sort (str | None): 排序枚举，详见 ``ANILIST_MEDIA_SORTS``。
@@ -92,7 +71,7 @@ class AniListAPI:
             ValueError: 当 API 调用失败或返回结构异常时抛出。
         """
 
-        assert isinstance(query, str) and query.strip(), "query 必须为非空字符串"
+        assert isinstance(query, str), "query 必须为字符串"
         assert isinstance(per_page, int) and 1 <= per_page <= 10, "per_page 必须介于 1-10"
         if season_year is not None:
             assert isinstance(season_year, int) and 1900 <= season_year <= 2100, (
@@ -101,6 +80,11 @@ class AniListAPI:
 
         normalized_season = self._normalize_season(season)
         normalized_sort = self._normalize_sort(sort)
+        search_value = query.strip()
+        if not search_value:
+            assert (
+                season_year is not None or normalized_season is not None
+            ), "query 为空时必须提供 season 或 season_year 作为过滤条件"
 
         query_text = """
         query (
@@ -188,7 +172,7 @@ class AniListAPI:
         data = self._post(
             query_text,
             {
-                "search": query.strip(),
+                "search": search_value,
                 "page": 1,
                 "perPage": per_page,
                 "season": normalized_season,
