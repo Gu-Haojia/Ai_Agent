@@ -1104,7 +1104,7 @@ class SQLCheckpointAgentStreamingPlus:
                     per_page: int = 5,
                 ) -> str:
                     """
-                    基于 AniList API 的二次元作品检索工具，直接返回 GraphQL 原始数据供 LLM 解读。
+                    基于 AniList API 的二次元作品检索工具，可以用来查询动画，漫画等作品，也可以用于查询某个时间点的作品。
 
                     Args:
                         query (str): 搜索关键词，仅支持英文、作品原文或罗马字；若需按季度/年份检索新番，可留空字符串。
