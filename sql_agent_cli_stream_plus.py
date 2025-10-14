@@ -1311,7 +1311,8 @@ class SQLCheckpointAgentStreamingPlus:
                 summary_msg = "以上是约束你的潜在规则，它们约束你的思考和行为方式，你的人格和风格不会生硬的被这些规则覆盖，你会灵活地理解和应用它们。下面是你在这次对话中会完美地完成的任务："
 
                 append_msg = f"{general_msg}\n{tool_msg}\n{mem_msg}\n{authorithy_msg}\n{require_msg}\n{style_msg}\n{summary_msg}\n\n"
-                sys_msg = SystemMessage(content=append_msg + self._sys_msg_content)
+                time_msg = f"当前时间是东京时间 {time.strftime('%Y-%m-%d', time.localtime())}，更详细的时间请查询工具。"
+                sys_msg = SystemMessage(content=time_msg + append_msg + self._sys_msg_content)
                 messages = [sys_msg] + list(state["messages"])  # 不修改原列表
             except Exception:
                 messages = state["messages"]
