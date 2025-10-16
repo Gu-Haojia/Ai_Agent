@@ -862,7 +862,7 @@ class SQLCheckpointAgentStreamingPlus:
                             check_in_date (str | None): 入住日期，YYYY-MM-DD 格式，默认为今天。
                             check_out_date (str | None): 离店日期，YYYY-MM-DD 格式，默认为明天。
                             adults (int): 入住成人数量，默认 1，必须大于等于 1。
-                            sort_by (str | None): 排序策略，支持 ``relevance``、``price_low_to_high``、``price_high_to_low``、``most_reviewed`` 或直接传 ``3``/``8``/``13``。
+                            sort_by (str | None): 排序策略，支持 ``relevance（默认）``、``price_low_to_high``、``price_high_to_low``、``most_reviewed``。
                             hl (str): Google 语言参数，默认 ``zh-CN``。
                             currency (str): 货币代码，默认 ``CNY``。
 
