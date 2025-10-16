@@ -39,6 +39,11 @@ from src.visual_crossing_weather import (
     VisualCrossingWeatherFormatter,
     VisualCrossingWeatherRequest,
 )
+from src.google_hotels_client import (
+    GoogleHotelsClient,
+    GoogleHotelsConsoleFormatter,
+    GoogleHotelsRequest,
+)
 from src.anilist_client import AniListAPI, ANILIST_MEDIA_SORTS
 
 ANILIST_SORT_CHOICES_TEXT: str = ", ".join(ANILIST_MEDIA_SORTS)
@@ -833,6 +838,74 @@ class SQLCheckpointAgentStreamingPlus:
                         return formatted
 
                     tools.append(visual_crossing_weather_tool)
+
+                serpapi_key = os.environ.get("SERPAPI_API_KEY", "").strip()
+                if serpapi_key:
+                    google_hotels_client = GoogleHotelsClient(api_key=serpapi_key)
+                    google_hotels_formatter = GoogleHotelsConsoleFormatter()
+
+                    @tool("google_hotels_search")
+                    def google_hotels_search(
+                        query: str,
+                        check_in_date: str | None = None,
+                        check_out_date: str | None = None,
+                        adults: int = 1,
+                        sort_by: str | None = None,
+                        hl: str = "zh-CN",
+                        currency: str = "CNY",
+                    ) -> str:
+                        """
+                        调用 Google Hotels SerpAPI 查询酒店数据。
+
+                        Args:
+                            query (str): 酒店或目的地关键词，必须为非空字符串。
+                            check_in_date (str | None): 入住日期，YYYY-MM-DD 格式，默认为今天。
+                            check_out_date (str | None): 离店日期，YYYY-MM-DD 格式，默认为明天。
+                            adults (int): 入住成人数量，默认 1，必须大于等于 1。
+                            sort_by (str | None): 排序策略，例如 ``relevance``、``price_low_to_high`` 等。
+                            hl (str): Google 语言参数，默认 ``zh-CN``。
+                            currency (str): 货币代码，默认 ``CNY``。
+
+                        Returns:
+                            str: SerpAPI 原始响应的 JSON 字符串。
+
+                        Raises:
+                            ValueError: 当参数非法或外部接口调用失败时抛出。
+                        """
+
+                        request_kwargs: dict[str, Any] = {
+                            "query": query,
+                            "adults": adults,
+                            "hl": hl,
+                            "currency": currency,
+                        }
+                        if check_in_date is not None:
+                            request_kwargs["check_in_date"] = check_in_date
+                        if check_out_date is not None:
+                            request_kwargs["check_out_date"] = check_out_date
+                        if sort_by is not None:
+                            request_kwargs["sort_by"] = sort_by
+
+                        request_model = GoogleHotelsRequest(**request_kwargs)
+                        payload = google_hotels_client.search(request_model)
+                        summary = google_hotels_formatter.summarize(payload)
+                        timestamp = time.strftime("[%m-%d %H:%M:%S]", time.localtime())
+                        if summary:
+                            console_text = json.dumps(
+                                summary, ensure_ascii=False, indent=2
+                            )
+                            print(
+                                f"\033[94m{timestamp}\033[0m [GoogleHotels Tool] 摘要：\n{console_text}",
+                                flush=True,
+                            )
+                        else:
+                            print(
+                                f"\033[94m{timestamp}\033[0m [GoogleHotels Tool] 摘要：暂无可用酒店信息。",
+                                flush=True,
+                            )
+                        return json.dumps(payload, ensure_ascii=False)
+
+                    tools.append(google_hotels_search)
 
                 from langchain.agents import Tool
                 from langchain_experimental.utilities import PythonREPL
