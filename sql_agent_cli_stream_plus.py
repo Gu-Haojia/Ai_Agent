@@ -890,6 +890,12 @@ class SQLCheckpointAgentStreamingPlus:
                         payload = google_hotels_client.search(request_model)
                         summary = google_hotels_formatter.summarize(payload)
                         timestamp = time.strftime("[%m-%d %H:%M:%S]", time.localtime())
+                        # 打印工具参数
+                        print(
+                            f"\033[94m{timestamp}\033[0m [GoogleHotels Tool] 参数：{json.dumps(request_kwargs, ensure_ascii=False)}",
+                            flush=True,
+                        )
+
                         if summary:
                             console_text = json.dumps(
                                 summary, ensure_ascii=False, indent=2
