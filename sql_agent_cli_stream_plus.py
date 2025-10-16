@@ -855,7 +855,7 @@ class SQLCheckpointAgentStreamingPlus:
                         currency: str = "CNY",
                     ) -> str:
                         """
-                        调用 Google Hotels SerpAPI 查询酒店数据。
+                        Google Hotels  查询酒店数据。
 
                         Args:
                             query (str): 酒店或目的地关键词，必须为非空字符串。
@@ -1128,44 +1128,45 @@ class SQLCheckpointAgentStreamingPlus:
                     else:
                         raise ValueError(f"汇率转换失败: {response.status_code}")
 
-                @tool
-                def hotel_search(city: str, limit: int = 5) -> str:
-                    """
-                    查询指定城市的热门酒店。你必须处理结果并以中文返回给用户，而不是直接返回 JSON。
+                if False:  # 暂时关闭该工具，避免误用
+                    @tool
+                    def hotel_search(city: str, limit: int = 5) -> str:
+                        """
+                        查询指定城市的热门酒店。你必须处理结果并以中文返回给用户，而不是直接返回 JSON。
 
-                    Args:
-                        city (str): 英语城市关键词，例如 "Shanghai" 或 "Tokyo"。
-                        limit (int): 返回酒店数量上限，默认 5，范围 1-10。
+                        Args:
+                            city (str): 英语城市关键词，例如 "Shanghai" 或 "Tokyo"。
+                            limit (int): 返回酒店数量上限，默认 5，范围 1-10。
 
-                    Returns:
-                        str: 酒店信息列表，按序号逐行包含名称、评分、价格与地址。你需要处理为自然语言，强制转换为中文，不准直接返回原始数据。
+                        Returns:
+                            str: 酒店信息列表，按序号逐行包含名称、评分、价格与地址。你需要处理为自然语言，强制转换为中文，不准直接返回原始数据。
 
-                    Raises:
-                        AssertionError: 当参数不合法时抛出。
-                        ValueError: 当外部接口调用失败时抛出。
-                    """
+                        Raises:
+                            AssertionError: 当参数不合法时抛出。
+                            ValueError: 当外部接口调用失败时抛出。
+                        """
 
-                    client = RapidAPIHotelSearchClient()
-                    results = client.search_hotels(city, limit)
-                    lines: list[str] = []
-                    for idx, item in enumerate(results, start=1):
-                        name = item["name"]
-                        # 去除name的*号
-                        name = name.replace("*", "")
-                        rating = item["rating"]
-                        price = item["price"]
-                        address = item["address"]
-                        lines.append(
-                            f"{idx}. {name} | 评分: {rating} | 价格: {price} | 地址: {address}"
+                        client = RapidAPIHotelSearchClient()
+                        results = client.search_hotels(city, limit)
+                        lines: list[str] = []
+                        for idx, item in enumerate(results, start=1):
+                            name = item["name"]
+                            # 去除name的*号
+                            name = name.replace("*", "")
+                            rating = item["rating"]
+                            price = item["price"]
+                            address = item["address"]
+                            lines.append(
+                                f"{idx}. {name} | 评分: {rating} | 价格: {price} | 地址: {address}"
+                            )
+                        print(
+                            f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [Hotel Tool] 查询结果：\n"
+                            + "\n".join(lines),
+                            flush=True,
                         )
-                    print(
-                        f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [Hotel Tool] 查询结果：\n"
-                        + "\n".join(lines),
-                        flush=True,
-                    )
-                    return "\n".join(lines)
+                        return "\n".join(lines)
 
-                tools.append(hotel_search)
+                    tools.append(hotel_search)
 
                 @tool
                 def anilist_lookup(
