@@ -13,6 +13,26 @@ import requests
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
+_SORT_BY_ALIASES: dict[str, str | None] = {
+    "relevance": None,
+    "default": None,
+    "0": None,
+    "price_low_to_high": "3",
+    "lowest_price": "3",
+    "low_price": "3",
+    "3": "3",
+    "price_high_to_low": "8",
+    "high_price": "8",
+    "highest_rating": "8",
+    "rating_high_to_low": "8",
+    "8": "8",
+    "most_reviewed": "13",
+    "most_reviews": "13",
+    "reviews": "13",
+    "13": "13",
+}
+
+
 def _today_iso() -> str:
     """
     返回今天的 ISO8601 日期字符串。
@@ -72,7 +92,7 @@ class GoogleHotelsRequest(BaseModel):
     )
     sort_by: str | None = Field(
         default=None,
-        description="排序策略，可选值包括 relevance、price_low_to_high 等。",
+        description="排序策略，支持 ``relevance``、``price_low_to_high``、``price_high_to_low``、``most_reviewed``，也可以直接传入 SerpAPI 的数值编码（3、8、13）。",
     )
 
     normalized_hl: str = Field(default="zh-CN", exclude=True)
@@ -124,12 +144,7 @@ class GoogleHotelsRequest(BaseModel):
         self.currency = self.normalized_currency
 
         if self.sort_by is not None:
-            if not isinstance(self.sort_by, str) or not self.sort_by.strip():
-                raise ValueError("sort_by 必须为非空字符串。")
-            normalized_sort = self.sort_by.strip().lower()
-            if not re.fullmatch(r"[a-z_]+", normalized_sort):
-                raise ValueError("sort_by 仅支持小写字母与下划线组合。")
-            self.sort_by = normalized_sort
+            self.sort_by = self._normalize_sort_by(self.sort_by)
 
         return self
 
@@ -159,6 +174,32 @@ class GoogleHotelsRequest(BaseModel):
         except ValueError as exc:
             raise ValueError(f"{field_name} 必须符合 YYYY-MM-DD 格式。") from exc
         return parsed.isoformat()
+
+    @staticmethod
+    def _normalize_sort_by(value: str | int | float) -> str | None:
+        """
+        将用户输入的排序字段映射为 SerpAPI 支持的编码。
+
+        Args:
+            value (str | int | float): 用户输入的排序标识，可以是字符串别名或数字编码。
+
+        Returns:
+            str | None: SerpAPI 期望的排序编码，None 表示默认相关性。
+
+        Raises:
+            ValueError: 当取值不在支持范围内时抛出。
+        """
+
+        if isinstance(value, (int, float)):
+            text = str(int(value))
+        else:
+            text = str(value or "").strip()
+        if not text:
+            raise ValueError("sort_by 不可为空字符串。")
+        key = text.lower()
+        if key not in _SORT_BY_ALIASES:
+            raise ValueError("sort_by 仅支持 relevance、price_low_to_high、price_high_to_low、most_reviewed 或对应编码 3/8/13。")
+        return _SORT_BY_ALIASES[key]
 
     def to_params(self) -> dict[str, str]:
         """
