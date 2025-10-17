@@ -320,7 +320,8 @@ def sanitize_hotels_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
     properties = sanitized.get("properties")
     if isinstance(properties, list):
-        for item in properties:
+        sanitized["properties"] = properties[:20]
+        for item in sanitized["properties"]:
             if isinstance(item, dict):
                 item.pop("images", None)
 
