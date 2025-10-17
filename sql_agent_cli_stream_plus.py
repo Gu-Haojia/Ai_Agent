@@ -865,13 +865,13 @@ class SQLCheckpointAgentStreamingPlus:
                         Google Hotels  查询酒店数据。
 
                         Args:
-                            query (str): 酒店或目的地关键词，必须为非空字符串。示例: ``"Kyoto hotel"``。
-                            check_in_date (str | None): 入住日期，YYYY-MM-DD 格式，默认为今天。示例: ``"2025-10-17"``。
-                            check_out_date (str | None): 离店日期，YYYY-MM-DD 格式，默认为明天。示例: ``"2025-10-18"``。
-                            adults (int): 入住成人数量，默认 1，必须大于等于 1。示例: ``1``。
-                            sort_by (str | None): 排序策略，支持 ``relevance（默认）``、``price_low_to_high``、``price_high_to_low``、``most_reviewed``。示例: ``"price_low_to_high"``。
-                            hl (str): Google 语言参数，默认 ``zh-CN``。示例: ``"zh-CN"``。
-                            currency (str): 货币代码，默认 ``CNY``。示例: ``"CNY"``。
+                            query (str): 酒店或目的地关键词，必须为非空字符串。
+                            check_in_date (str | None): 入住日期，YYYY-MM-DD 格式，默认为今天。
+                            check_out_date (str | None): 离店日期，YYYY-MM-DD 格式，默认为明天。
+                            adults (int): 入住成人数量，默认 1，必须大于等于 1。
+                            sort_by (str | None): 排序策略，支持 ``relevance（默认）``、``price_low_to_high``、``price_high_to_low``、``most_reviewed``。
+                            hl (str): Google 语言参数，默认 ``zh-CN``。
+                            currency (str): 货币代码，默认 ``CNY``。
 
                         Returns:
                             str: SerpAPI 原始响应的 JSON 字符串。
