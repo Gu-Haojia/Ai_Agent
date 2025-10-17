@@ -378,7 +378,6 @@ class GoogleFlightsConsoleFormatter:
         segments: list[str] = []
         airlines: set[str] = set()
         flight_numbers: set[str] = set()
-        flight_numbers: set[str] = set()
         for segment in segments_data:
             if not isinstance(segment, dict):
                 continue
@@ -388,9 +387,6 @@ class GoogleFlightsConsoleFormatter:
             segment_desc = GoogleFlightsConsoleFormatter._describe_segment(segment)
             if segment_desc:
                 segments.append(segment_desc)
-            flight_no = segment.get("flight_number")
-            if isinstance(flight_no, str) and flight_no.strip():
-                flight_numbers.add(flight_no.strip())
             flight_no = segment.get("flight_number")
             if isinstance(flight_no, str) and flight_no.strip():
                 flight_numbers.add(flight_no.strip())
