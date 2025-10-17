@@ -12,46 +12,19 @@ import requests
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
-_SORT_BY_ALIASES: dict[str, str | None] = {
-    "top": "1",
+_SORT_BY_ALIASES: dict[str, str] = {
     "top_flights": "1",
-    "best": "1",
-    "recommended": "1",
-    "default": "1",
-    "1": "1",
     "price": "2",
-    "cheapest": "2",
-    "low_price": "2",
-    "2": "2",
     "departure_time": "3",
-    "earliest_departure": "3",
-    "depart_early": "3",
-    "3": "3",
     "arrival_time": "4",
-    "earliest_arrival": "4",
-    "arrive_early": "4",
-    "4": "4",
     "duration": "5",
-    "shortest_duration": "5",
-    "fastest": "5",
-    "5": "5",
     "emissions": "6",
-    "lowest_emissions": "6",
-    "6": "6",
 }
 """排序别名到 SerpAPI 枚举值的映射。"""
 
 _TYPE_ALIASES: dict[str, str] = {
     "round_trip": "1",
-    "roundtrip": "1",
-    "return": "1",
-    "往返": "1",
-    "1": "1",
     "one_way": "2",
-    "oneway": "2",
-    "single": "2",
-    "单程": "2",
-    "2": "2",
 }
 """航班类型别名到 SerpAPI 枚举值的映射（仅支持往返与单程）。"""
 
@@ -93,7 +66,7 @@ class GoogleFlightsRequest(BaseModel):
         outbound_date (str): 去程日期，以 ``YYYY-MM-DD`` 表示。
         return_date (str | None): 返程日期，以 ``YYYY-MM-DD`` 表示；往返行程时必填。
         adults (int): 成人旅客数量，默认 1。
-        sort_by (str | None): 排序策略，支持 ``top_flights``、``price``、``departure_time``、``arrival_time``、``duration``、``emissions`` 或对应枚举别名。
+        sort_by (str | None): 排序策略，支持 ``top_flights``（默认）、``price``、``departure_time``、``arrival_time``、``duration``、``emissions``。
         trip_type (str): 行程类型，支持 ``round_trip``（默认）或 ``one_way``。
     """
 
@@ -107,7 +80,7 @@ class GoogleFlightsRequest(BaseModel):
     sort_by: str | None = Field(
         None,
         description=(
-            "排序策略，支持 top_flights、price、departure_time、arrival_time、duration、emissions 或对应别名。"
+            "排序策略，支持 top_flights（默认）、price、departure_time、arrival_time、duration、emissions。"
         ),
     )
     trip_type: str = Field(
@@ -142,18 +115,17 @@ class GoogleFlightsRequest(BaseModel):
         if not isinstance(self.adults, int) or self.adults < 1:
             raise ValueError("adults 必须为 >=1 的整数。")
 
-        self.type_code = self._normalize_type(self.trip_type)
+        type_key, self.type_code = self._normalize_type(self.trip_type)
+        self.trip_type = type_key
         if self.type_code == "1" and self.return_date is None:
             raise ValueError("往返行程必须提供 return_date。")
         if self.type_code == "2" and self.return_date is None:
             # 单程行程不要求返程日期；保持 None
             pass
 
-        if self.trip_type.strip().lower() in {"multi_city", "multi-city", "3"}:
-            raise ValueError("当前工具不支持 multi city 行程。")
-
         if self.sort_by is not None:
-            self.sort_code = self._normalize_sort(self.sort_by)
+            sort_key, self.sort_code = self._normalize_sort(self.sort_by)
+            self.sort_by = sort_key
         else:
             self.sort_code = None
 
@@ -183,7 +155,7 @@ class GoogleFlightsRequest(BaseModel):
         return text
 
     @staticmethod
-    def _normalize_type(value: str) -> str:
+    def _normalize_type(value: str) -> tuple[str, str]:
         """
         将行程类型转换为 SerpAPI 枚举。
 
@@ -191,7 +163,7 @@ class GoogleFlightsRequest(BaseModel):
             value (str): 用户输入的类型别名。
 
         Returns:
-            str: SerpAPI 类型编码。
+            tuple[str, str]: 规范化后的类型文本与对应的 SerpAPI 类型编码。
 
         Raises:
             ValueError: 当别名不受支持或为 multi city 时抛出。
@@ -204,34 +176,33 @@ class GoogleFlightsRequest(BaseModel):
             raise ValueError("当前工具不支持 multi city 行程。")
         if key not in _TYPE_ALIASES:
             raise ValueError("trip_type 仅支持 round_trip 或 one_way。")
-        return _TYPE_ALIASES[key]
+        return key, _TYPE_ALIASES[key]
 
     @staticmethod
-    def _normalize_sort(value: str | int | float) -> str:
+    def _normalize_sort(value: str) -> tuple[str, str]:
         """
         将排序方式转换为 SerpAPI 枚举。
 
         Args:
-            value (str | int | float): 排序别名或数字编码。
+            value (str): 排序别名。
 
         Returns:
-            str: SerpAPI 排序枚举字符串。
+            tuple[str, str]: 规范化后的排序文本与对应的 SerpAPI 枚举字符串。
 
         Raises:
             ValueError: 当取值不在支持范围内时抛出。
         """
 
-        if isinstance(value, (int, float)):
-            key = str(int(value))
-        else:
-            key = str(value or "").strip().lower()
+        if not isinstance(value, str):
+            raise ValueError("sort_by 必须为字符串。")
+        key = value.strip().lower()
         if not key:
             raise ValueError("sort_by 不可为空字符串。")
         if key not in _SORT_BY_ALIASES:
             raise ValueError(
-                "sort_by 仅支持 top_flights、price、departure_time、arrival_time、duration、emissions 及对应别名。"
+                "sort_by 仅支持 top_flights、price、departure_time、arrival_time、duration、emissions。"
             )
-        return _SORT_BY_ALIASES[key] or "1"
+        return key, _SORT_BY_ALIASES[key]
 
     def to_params(self) -> dict[str, str]:
         """

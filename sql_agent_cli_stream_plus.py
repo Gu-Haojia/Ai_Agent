@@ -939,9 +939,9 @@ class SQLCheckpointAgentStreamingPlus:
                             arrival_id (str): 到达机场/城市标识，可填 IATA 代码或 kgmid。
                             outbound_date (str): 出发日期，格式 YYYY-MM-DD。
                             return_date (str | None): 返程日期，格式 YYYY-MM-DD；往返行程必填。
-                            sort_by (str | None): 排序方式，支持 ``top_flights``、``price``、``departure_time``、``arrival_time``、``duration``、``emissions`` 或对应数字枚举。
+                            sort_by (str | None): 排序方式，支持 ``top_flights``（默认）、``price``、``departure_time``、``arrival_time``、``duration``、``emissions``。
                             adults (int): 成人数量，默认 1。
-                            type (str): 行程类型，支持 ``round_trip`` 或 ``one_way``，默认 ``round_trip``。
+                            type (str): 行程类型，支持 ``round_trip``（默认）或 ``one_way``。
 
                         Returns:
                             str: SerpAPI 原始响应的 JSON 字符串。

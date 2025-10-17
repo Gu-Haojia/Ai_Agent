@@ -15,21 +15,9 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 _SORT_BY_ALIASES: dict[str, str | None] = {
     "relevance": None,
-    "default": None,
-    "0": None,
     "price_low_to_high": "3",
-    "lowest_price": "3",
-    "low_price": "3",
-    "3": "3",
     "price_high_to_low": "8",
-    "high_price": "8",
-    "highest_rating": "8",
-    "rating_high_to_low": "8",
-    "8": "8",
     "most_reviewed": "13",
-    "most_reviews": "13",
-    "reviews": "13",
-    "13": "13",
 }
 
 
@@ -92,8 +80,11 @@ class GoogleHotelsRequest(BaseModel):
     )
     sort_by: str | None = Field(
         default=None,
-        description="排序策略，支持 ``relevance``、``price_low_to_high``、``price_high_to_low``、``most_reviewed``，也可以直接传入 SerpAPI 的数值编码（3、8、13）。",
+        description=(
+            "排序策略，支持以下取值：``relevance``（默认）、``price_low_to_high``、``price_high_to_low``、``most_reviewed``。"
+        ),
     )
+    sort_code: str | None = Field(default=None, exclude=True)
 
     normalized_hl: str = Field(default="zh-CN", exclude=True)
     normalized_currency: str = Field(default="CNY", exclude=True)
@@ -144,7 +135,11 @@ class GoogleHotelsRequest(BaseModel):
         self.currency = self.normalized_currency
 
         if self.sort_by is not None:
-            self.sort_by = self._normalize_sort_by(self.sort_by)
+            sort_key = str(self.sort_by or "").strip().lower()
+            self.sort_code = self._normalize_sort_by(sort_key)
+            self.sort_by = sort_key
+        else:
+            self.sort_code = None
 
         return self
 
@@ -176,12 +171,12 @@ class GoogleHotelsRequest(BaseModel):
         return parsed.isoformat()
 
     @staticmethod
-    def _normalize_sort_by(value: str | int | float) -> str | None:
+    def _normalize_sort_by(value: str) -> str | None:
         """
         将用户输入的排序字段映射为 SerpAPI 支持的编码。
 
         Args:
-            value (str | int | float): 用户输入的排序标识，可以是字符串别名或数字编码。
+            value (str): 归一化后的小写排序标识。
 
         Returns:
             str | None: SerpAPI 期望的排序编码，None 表示默认相关性。
@@ -190,15 +185,15 @@ class GoogleHotelsRequest(BaseModel):
             ValueError: 当取值不在支持范围内时抛出。
         """
 
-        if isinstance(value, (int, float)):
-            text = str(int(value))
-        else:
-            text = str(value or "").strip()
-        if not text:
+        if not isinstance(value, str):
+            raise ValueError("sort_by 必须为字符串。")
+        key = value.strip().lower()
+        if not key:
             raise ValueError("sort_by 不可为空字符串。")
-        key = text.lower()
         if key not in _SORT_BY_ALIASES:
-            raise ValueError("sort_by 仅支持 relevance、price_low_to_high、price_high_to_low、most_reviewed 或对应编码 3/8/13。")
+            raise ValueError(
+                "sort_by 仅支持 relevance、price_low_to_high、price_high_to_low、most_reviewed。"
+            )
         return _SORT_BY_ALIASES[key]
 
     def to_params(self) -> dict[str, str]:
@@ -217,8 +212,8 @@ class GoogleHotelsRequest(BaseModel):
             "check_out_date": self.check_out_date,
             "adults": str(self.adults),
         }
-        if self.sort_by:
-            params["sort_by"] = self.sort_by
+        if self.sort_code:
+            params["sort_by"] = self.sort_code
         return params
 
 
