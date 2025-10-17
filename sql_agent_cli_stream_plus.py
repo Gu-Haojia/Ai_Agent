@@ -865,22 +865,13 @@ class SQLCheckpointAgentStreamingPlus:
                         Google Hotels  查询酒店数据。
 
                         Args:
-                            query (str): 酒店或目的地关键词，必须为非空字符串。
-                            check_in_date (str | None): 入住日期，YYYY-MM-DD 格式，默认为今天。
-                            check_out_date (str | None): 离店日期，YYYY-MM-DD 格式，默认为明天。
-                            adults (int): 入住成人数量，默认 1，必须大于等于 1。
-                            sort_by (str | None): 排序策略，支持 ``relevance（默认）``、``price_low_to_high``、``price_high_to_low``、``most_reviewed``。
-                            hl (str): Google 语言参数，默认 ``zh-CN``。
-                            currency (str): 货币代码，默认 ``CNY``。
-
-                        示例:
-                            ``google_hotels_search(
-                                query="Kyoto hotel",
-                                check_in_date="2025-10-17",
-                                check_out_date="2025-10-18",
-                                sort_by="price_low_to_high",
-                                adults=1,
-                            )``
+                            query (str): 酒店或目的地关键词，必须为非空字符串。示例: ``"Kyoto hotel"``。
+                            check_in_date (str | None): 入住日期，YYYY-MM-DD 格式，默认为今天。示例: ``"2025-10-17"``。
+                            check_out_date (str | None): 离店日期，YYYY-MM-DD 格式，默认为明天。示例: ``"2025-10-18"``。
+                            adults (int): 入住成人数量，默认 1，必须大于等于 1。示例: ``1``。
+                            sort_by (str | None): 排序策略，支持 ``relevance（默认）``、``price_low_to_high``、``price_high_to_low``、``most_reviewed``。示例: ``"price_low_to_high"``。
+                            hl (str): Google 语言参数，默认 ``zh-CN``。示例: ``"zh-CN"``。
+                            currency (str): 货币代码，默认 ``CNY``。示例: ``"CNY"``。
 
                         Returns:
                             str: SerpAPI 原始响应的 JSON 字符串。
@@ -944,24 +935,13 @@ class SQLCheckpointAgentStreamingPlus:
                         Google Flights 航班查询工具。
 
                         Args:
-                            departure_id (str): 出发机场/城市标识，可填 IATA 代码或 kgmid，多个值用逗号分隔。
-                            arrival_id (str): 到达机场/城市标识，可填 IATA 代码或 kgmid，多个值用逗号分隔。
-                            outbound_date (str): 出发日期，格式 YYYY-MM-DD。
-                            return_date (str | None): 返程日期，格式 YYYY-MM-DD；往返行程必填。
-                            sort_by (str | None): 排序方式，支持 ``top_flights``（默认）、``price``、``departure_time``、``arrival_time``、``duration``、``emissions``。
-                            adults (int): 成人数量，默认 1。
-                            type (str): 行程类型，支持 ``round_trip``（默认）或 ``one_way``。
-
-                        示例:
-                            ``google_flights_search(
-                                departure_id="PEK,PKX",
-                                arrival_id="KIX,ITM",
-                                outbound_date="2026-01-22",
-                                return_date="2026-01-29",
-                                sort_by="price",
-                                adults=1,
-                                type="round_trip",
-                            )``
+                            departure_id (str): 出发机场/城市标识，可填 IATA 代码或 kgmid，多个值用逗号分隔。示例: ``"PEK,PKX"``。
+                            arrival_id (str): 到达机场/城市标识，可填 IATA 代码或 kgmid，多个值用逗号分隔。示例: ``"KIX,ITM"``。
+                            outbound_date (str): 出发日期，格式 YYYY-MM-DD。示例: ``"2026-01-22"``。
+                            return_date (str | None): 返程日期，格式 YYYY-MM-DD；往返行程必填。示例: ``"2026-01-29"``。
+                            sort_by (str | None): 排序方式，支持 ``top_flights``（默认）、``price``、``departure_time``、``arrival_time``、``duration``、``emissions``。示例: ``"price"``。
+                            adults (int): 成人数量，默认 1。示例: ``1``。
+                            type (str): 行程类型，支持 ``round_trip``（默认）或 ``one_way``。示例: ``"round_trip"``。
 
                         Returns:
                             str: SerpAPI 原始响应的 JSON 字符串。
