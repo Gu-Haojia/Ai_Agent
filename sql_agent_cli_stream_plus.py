@@ -43,6 +43,7 @@ from src.google_hotels_client import (
     GoogleHotelsClient,
     GoogleHotelsConsoleFormatter,
     GoogleHotelsRequest,
+    sanitize_hotels_payload,
 )
 from src.google_flights_client import (
     GoogleFlightsClient,
@@ -895,7 +896,8 @@ class SQLCheckpointAgentStreamingPlus:
                             request_kwargs["sort_by"] = sort_by
 
                         request_model = GoogleHotelsRequest(**request_kwargs)
-                        payload = google_hotels_client.search(request_model)
+                        raw_payload = google_hotels_client.search(request_model)
+                        payload = sanitize_hotels_payload(raw_payload)
                         summary = google_hotels_formatter.summarize(payload)
                         timestamp = time.strftime("[%m-%d %H:%M:%S]", time.localtime())
                         # 打印工具参数（包含排序映射后的结果）

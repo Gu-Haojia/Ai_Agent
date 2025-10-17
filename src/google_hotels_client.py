@@ -4,6 +4,7 @@ Google Hotels 工具支持模块。
 
 from __future__ import annotations
 
+import copy
 import re
 from dataclasses import dataclass, field
 from datetime import date, timedelta
@@ -297,6 +298,33 @@ class GoogleHotelsClient:
             raise ValueError("SerpAPI 返回数据格式异常。")
 
         return payload
+
+
+def sanitize_hotels_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """
+    清理 Google Hotels 原始返回，移除冗余字段并裁剪属性列表。
+
+    Args:
+        payload (dict[str, Any]): 原始 JSON 数据。
+
+    Returns:
+        dict[str, Any]: 清理后的 JSON。
+    """
+
+    if not isinstance(payload, dict):
+        return payload
+
+    sanitized = copy.deepcopy(payload)
+    for key in ("search_parameters", "brands", "ads"):
+        sanitized.pop(key, None)
+
+    properties = sanitized.get("properties")
+    if isinstance(properties, list):
+        for item in properties:
+            if isinstance(item, dict):
+                item.pop("images", None)
+
+    return sanitized
 
 
 @dataclass
