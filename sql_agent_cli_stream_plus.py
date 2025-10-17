@@ -935,8 +935,8 @@ class SQLCheckpointAgentStreamingPlus:
                         Google Flights 航班查询工具。
 
                         Args:
-                            departure_id (str): 出发机场/城市标识，可填 IATA 代码或 kgmid。
-                            arrival_id (str): 到达机场/城市标识，可填 IATA 代码或 kgmid。
+                            departure_id (str): 出发机场/城市标识，可填 IATA 代码或 kgmid，多个值用逗号分隔。
+                            arrival_id (str): 到达机场/城市标识，可填 IATA 代码或 kgmid，多个值用逗号分隔。
                             outbound_date (str): 出发日期，格式 YYYY-MM-DD。
                             return_date (str | None): 返程日期，格式 YYYY-MM-DD；往返行程必填。
                             sort_by (str | None): 排序方式，支持 ``top_flights``（默认）、``price``、``departure_time``、``arrival_time``、``duration``、``emissions``。

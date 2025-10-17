@@ -61,8 +61,8 @@ class GoogleFlightsRequest(BaseModel):
     表示一次 Google Flights 查询的参数集合。
 
     Args:
-        departure_id (str): 出发机场或地点标识，可传 IATA 代码或 Freebase kgmid。
-        arrival_id (str): 到达机场或地点标识，可传 IATA 代码或 Freebase kgmid。
+        departure_id (str): 出发机场或地点标识，可传 IATA 代码或 Freebase kgmid，多个值以逗号分隔。
+        arrival_id (str): 到达机场或地点标识，可传 IATA 代码或 Freebase kgmid，多个值以逗号分隔。
         outbound_date (str): 去程日期，以 ``YYYY-MM-DD`` 表示。
         return_date (str | None): 返程日期，以 ``YYYY-MM-DD`` 表示；往返行程时必填。
         adults (int): 成人旅客数量，默认 1。
@@ -152,7 +152,10 @@ class GoogleFlightsRequest(BaseModel):
         text = value.strip()
         if not text:
             raise ValueError(f"{field_name} 不可为空。")
-        return text
+        parts = [part.strip() for part in text.split(",") if part.strip()]
+        if not parts:
+            raise ValueError(f"{field_name} 至少需要一个有效标识。")
+        return ",".join(parts)
 
     @staticmethod
     def _normalize_type(value: str) -> tuple[str, str]:
