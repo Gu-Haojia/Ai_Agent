@@ -48,6 +48,7 @@ from src.google_flights_client import (
     GoogleFlightsClient,
     GoogleFlightsConsoleFormatter,
     GoogleFlightsRequest,
+    sanitize_flights_payload,
 )
 from src.anilist_client import AniListAPI, ANILIST_MEDIA_SORTS
 
@@ -960,7 +961,8 @@ class SQLCheckpointAgentStreamingPlus:
                             "trip_type": type,
                         }
                         request_model = GoogleFlightsRequest(**request_kwargs)
-                        payload = google_flights_client.search(request_model)
+                        raw_payload = google_flights_client.search(request_model)
+                        payload = sanitize_flights_payload(raw_payload)
                         summary = google_flights_formatter.summarize(payload)
                         timestamp = time.strftime("[%m-%d %H:%M:%S]", time.localtime())
                         normalized_args = request_model.model_dump(exclude_none=True)

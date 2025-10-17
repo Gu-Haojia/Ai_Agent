@@ -4,6 +4,7 @@ Google Flights 工具支持模块。
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
@@ -377,6 +378,7 @@ class GoogleFlightsConsoleFormatter:
         segments: list[str] = []
         airlines: set[str] = set()
         flight_numbers: set[str] = set()
+        flight_numbers: set[str] = set()
         for segment in segments_data:
             if not isinstance(segment, dict):
                 continue
@@ -386,6 +388,9 @@ class GoogleFlightsConsoleFormatter:
             segment_desc = GoogleFlightsConsoleFormatter._describe_segment(segment)
             if segment_desc:
                 segments.append(segment_desc)
+            flight_no = segment.get("flight_number")
+            if isinstance(flight_no, str) and flight_no.strip():
+                flight_numbers.add(flight_no.strip())
             flight_no = segment.get("flight_number")
             if isinstance(flight_no, str) and flight_no.strip():
                 flight_numbers.add(flight_no.strip())
@@ -529,3 +534,48 @@ class GoogleFlightsConsoleFormatter:
             if isinstance(time_text, str) and time_text.strip():
                 return time_text.strip()
         return "时间未知"
+
+
+def sanitize_flights_payload(
+    payload: dict[str, Any], max_other_flights: int = 15
+) -> dict[str, Any]:
+    """
+    清理 Google Flights 原始返回，删除无用字段并限制备选航班数量。
+
+    Args:
+        payload (dict[str, Any]): 原始接口返回的字典对象。
+        max_other_flights (int): ``other_flights`` 保留的最大航班条数。
+
+    Returns:
+        dict[str, Any]: 清理后的字典，字段已裁剪且 ``other_flights`` 至多保留指定数量。
+    """
+
+    if not isinstance(payload, dict):
+        return payload
+
+    sanitized = copy.deepcopy(payload)
+
+    def _strip_flight_item(item: Any) -> None:
+        if not isinstance(item, dict):
+            return
+        item.pop("carbon_emissions", None)
+        item.pop("airline_logo", None)
+        item.pop("departure_token", None)
+        segments = item.get("flights")
+        if isinstance(segments, list):
+            for segment in segments:
+                if isinstance(segment, dict):
+                    segment.pop("airline_logo", None)
+
+    best_flights = sanitized.get("best_flights")
+    if isinstance(best_flights, list):
+        for entry in best_flights:
+            _strip_flight_item(entry)
+
+    other_flights = sanitized.get("other_flights")
+    if isinstance(other_flights, list):
+        sanitized["other_flights"] = other_flights[:max_other_flights]
+        for entry in sanitized["other_flights"]:
+            _strip_flight_item(entry)
+
+    return sanitized
