@@ -315,7 +315,7 @@ def sanitize_hotels_payload(payload: dict[str, Any]) -> dict[str, Any]:
         return payload
 
     sanitized = copy.deepcopy(payload)
-    for key in ("search_parameters", "brands", "ads", "search_metadata", "serpapi_pagination"):
+    for key in ("brands", "ads", "search_metadata", "serpapi_pagination"):
         sanitized.pop(key, None)
 
     def _strip_property(item: dict[str, Any]) -> None:
