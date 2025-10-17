@@ -933,7 +933,7 @@ class SQLCheckpointAgentStreamingPlus:
                         type: str = "round_trip",
                     ) -> str:
                         """
-                        Google Flights 航班查询工具。
+                        Google Flights 航班查询工具，回答必须带有航班号。
 
                         Args:
                             departure_id (str): 出发机场/城市标识，可填 IATA 代码或 /m/+kgmid，多个值用逗号分隔。示例: "PEK,PKX"; "/m/0vzm"。
