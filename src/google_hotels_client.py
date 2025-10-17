@@ -323,15 +323,16 @@ def sanitize_hotels_payload(payload: dict[str, Any]) -> dict[str, Any]:
         item.pop("ratings", None)
         item.pop("property_token", None)
         item.pop("serpapi_property_details_link", None)
+        item.pop("link", None)
         item.pop("location_rating", None)
         item.pop("reviews_breakdown", None)
         nearby = item.get("nearby_places")
         if isinstance(nearby, list):
-            item["nearby_places"] = nearby[:2]
+            item["nearby_places"] = nearby[:1]
 
     properties = sanitized.get("properties")
     if isinstance(properties, list):
-        sanitized["properties"] = properties[:20]
+        sanitized["properties"] = properties[:15]
         for item in sanitized["properties"]:
             if isinstance(item, dict):
                 _strip_property(item)
