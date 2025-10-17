@@ -44,6 +44,11 @@ from src.google_hotels_client import (
     GoogleHotelsConsoleFormatter,
     GoogleHotelsRequest,
 )
+from src.google_flights_client import (
+    GoogleFlightsClient,
+    GoogleFlightsConsoleFormatter,
+    GoogleFlightsRequest,
+)
 from src.anilist_client import AniListAPI, ANILIST_MEDIA_SORTS
 
 ANILIST_SORT_CHOICES_TEXT: str = ", ".join(ANILIST_MEDIA_SORTS)
@@ -843,6 +848,8 @@ class SQLCheckpointAgentStreamingPlus:
                 if serpapi_key:
                     google_hotels_client = GoogleHotelsClient(api_key=serpapi_key)
                     google_hotels_formatter = GoogleHotelsConsoleFormatter()
+                    google_flights_client = GoogleFlightsClient(api_key=serpapi_key)
+                    google_flights_formatter = GoogleFlightsConsoleFormatter()
 
                     @tool("google_hotels_search")
                     def google_hotels_search(
@@ -913,6 +920,70 @@ class SQLCheckpointAgentStreamingPlus:
                         return json.dumps(payload, ensure_ascii=False)
 
                     tools.append(google_hotels_search)
+
+                    @tool("google_flights_search")
+                    def google_flights_search(
+                        departure_id: str,
+                        arrival_id: str,
+                        outbound_date: str,
+                        return_date: str | None = None,
+                        sort_by: str | None = None,
+                        adults: int = 1,
+                        type: str = "round_trip",
+                    ) -> str:
+                        """
+                        Google Flights 航班查询工具。
+
+                        Args:
+                            departure_id (str): 出发机场/城市标识，可填 IATA 代码或 kgmid。
+                            arrival_id (str): 到达机场/城市标识，可填 IATA 代码或 kgmid。
+                            outbound_date (str): 出发日期，格式 YYYY-MM-DD。
+                            return_date (str | None): 返程日期，格式 YYYY-MM-DD；往返行程必填。
+                            sort_by (str | None): 排序方式，支持 ``top_flights``、``price``、``departure_time``、``arrival_time``、``duration``、``emissions`` 或对应数字枚举。
+                            adults (int): 成人数量，默认 1。
+                            type (str): 行程类型，支持 ``round_trip`` 或 ``one_way``，默认 ``round_trip``。
+
+                        Returns:
+                            str: SerpAPI 原始响应的 JSON 字符串。
+
+                        Raises:
+                            ValueError: 当参数非法或外部接口调用失败时抛出。
+                        """
+
+                        request_kwargs: dict[str, Any] = {
+                            "departure_id": departure_id,
+                            "arrival_id": arrival_id,
+                            "outbound_date": outbound_date,
+                            "return_date": return_date,
+                            "adults": adults,
+                            "sort_by": sort_by,
+                            "trip_type": type,
+                        }
+                        request_model = GoogleFlightsRequest(**request_kwargs)
+                        payload = google_flights_client.search(request_model)
+                        summary = google_flights_formatter.summarize(payload)
+                        timestamp = time.strftime("[%m-%d %H:%M:%S]", time.localtime())
+                        normalized_args = request_model.model_dump(exclude_none=True)
+                        print(
+                            f"\033[94m{timestamp}\033[0m [GoogleFlights Tool] 参数：{json.dumps(normalized_args, ensure_ascii=False)}",
+                            flush=True,
+                        )
+                        if summary:
+                            console_text = json.dumps(
+                                summary, ensure_ascii=False, indent=2
+                            )
+                            print(
+                                f"\033[94m{timestamp}\033[0m [GoogleFlights Tool] 摘要：\n{console_text}",
+                                flush=True,
+                            )
+                        else:
+                            print(
+                                f"\033[94m{timestamp}\033[0m [GoogleFlights Tool] 摘要：暂无可用航班信息。",
+                                flush=True,
+                            )
+                        return json.dumps(payload, ensure_ascii=False)
+
+                    tools.append(google_flights_search)
 
                 from langchain.agents import Tool
                 from langchain_experimental.utilities import PythonREPL
