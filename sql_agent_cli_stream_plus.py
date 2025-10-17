@@ -873,6 +873,15 @@ class SQLCheckpointAgentStreamingPlus:
                             hl (str): Google 语言参数，默认 ``zh-CN``。
                             currency (str): 货币代码，默认 ``CNY``。
 
+                        示例:
+                            ``google_hotels_search(
+                                query="Kyoto hotel",
+                                check_in_date="2025-10-17",
+                                check_out_date="2025-10-18",
+                                sort_by="price_low_to_high",
+                                adults=1,
+                            )``
+
                         Returns:
                             str: SerpAPI 原始响应的 JSON 字符串。
 
@@ -942,6 +951,17 @@ class SQLCheckpointAgentStreamingPlus:
                             sort_by (str | None): 排序方式，支持 ``top_flights``（默认）、``price``、``departure_time``、``arrival_time``、``duration``、``emissions``。
                             adults (int): 成人数量，默认 1。
                             type (str): 行程类型，支持 ``round_trip``（默认）或 ``one_way``。
+
+                        示例:
+                            ``google_flights_search(
+                                departure_id="PEK,PKX",
+                                arrival_id="KIX,ITM",
+                                outbound_date="2026-01-22",
+                                return_date="2026-01-29",
+                                sort_by="price",
+                                adults=1,
+                                type="round_trip",
+                            )``
 
                         Returns:
                             str: SerpAPI 原始响应的 JSON 字符串。
