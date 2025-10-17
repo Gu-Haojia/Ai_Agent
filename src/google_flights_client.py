@@ -335,13 +335,17 @@ class GoogleFlightsConsoleFormatter:
         if not isinstance(payload, dict):
             return []
 
+        currency = ""
+        if isinstance(payload.get("search_parameters"), dict):
+            currency = str(payload["search_parameters"].get("currency") or "").upper()
+
         collected: list[dict[str, Any]] = []
         for key in ("best_flights", "other_flights"):
             flights = payload.get(key)
             if not isinstance(flights, list):
                 continue
             for item in flights:
-                summary = self._summarize_flight(item)
+                summary = self._summarize_flight(item, currency)
                 if summary:
                     collected.append(summary)
                 if len(collected) >= self.max_items:
@@ -349,7 +353,7 @@ class GoogleFlightsConsoleFormatter:
         return collected
 
     @staticmethod
-    def _summarize_flight(item: Any) -> dict[str, Any] | None:
+    def _summarize_flight(item: Any, currency: str) -> dict[str, Any] | None:
         """
         汇总单条航班信息。
 
@@ -363,7 +367,7 @@ class GoogleFlightsConsoleFormatter:
         if not isinstance(item, dict):
             return None
 
-        price_text = GoogleFlightsConsoleFormatter._extract_price(item)
+        price_text = GoogleFlightsConsoleFormatter._extract_price(item, currency)
         duration_text = GoogleFlightsConsoleFormatter._extract_duration(item)
         segments_data = item.get("flights")
 
@@ -393,7 +397,7 @@ class GoogleFlightsConsoleFormatter:
         }
 
     @staticmethod
-    def _extract_price(item: dict[str, Any]) -> str:
+    def _extract_price(item: dict[str, Any], currency: str) -> str:
         """
         提取价格文本。
         """
@@ -401,6 +405,11 @@ class GoogleFlightsConsoleFormatter:
         price = item.get("price")
         if isinstance(price, str) and price.strip():
             return price.strip()
+        if isinstance(price, (int, float)):
+            currency_prefix = (currency or "").strip()
+            if currency_prefix:
+                return f"{currency_prefix} {price:.0f}"
+            return f"{price:.0f}"
         price_raw = item.get("price_raw")
         if isinstance(price_raw, (int, float)):
             return f"¥{price_raw}"
@@ -415,6 +424,14 @@ class GoogleFlightsConsoleFormatter:
         duration = item.get("total_duration") or item.get("duration")
         if isinstance(duration, str) and duration.strip():
             return duration.strip()
+        if isinstance(duration, (int, float)):
+            total_minutes = int(duration)
+            hours, minutes = divmod(total_minutes, 60)
+            if hours and minutes:
+                return f"{hours}小时{minutes}分"
+            if hours:
+                return f"{hours}小时"
+            return f"{minutes}分钟"
         return "时长未知"
 
     @staticmethod
@@ -446,14 +463,29 @@ class GoogleFlightsConsoleFormatter:
         departure = segment.get("departure") or {}
         arrival = segment.get("arrival") or {}
         dep_time = GoogleFlightsConsoleFormatter._safe_time(departure)
+        if dep_time == "时间未知":
+            dep_time = GoogleFlightsConsoleFormatter._safe_time(dep_airport)
         arr_time = GoogleFlightsConsoleFormatter._safe_time(arrival)
+        if arr_time == "时间未知":
+            arr_time = GoogleFlightsConsoleFormatter._safe_time(arr_airport)
 
         segment_duration = segment.get("duration")
         duration_text = (
-            segment_duration.strip()
-            if isinstance(segment_duration, str) and segment_duration.strip()
-            else ""
+            (
+                segment_duration.strip()
+                if isinstance(segment_duration, str) and segment_duration.strip()
+                else ""
+            )
         )
+        if not duration_text and isinstance(segment_duration, (int, float)):
+            total_minutes = int(segment_duration)
+            hours, minutes = divmod(total_minutes, 60)
+            if hours and minutes:
+                duration_text = f"{hours}小时{minutes}分"
+            elif hours:
+                duration_text = f"{hours}小时"
+            else:
+                duration_text = f"{minutes}分钟"
 
         parts = [f"{dep_code}->{arr_code}", f"{dep_time}-{arr_time}"]
         if duration_text:
@@ -467,7 +499,7 @@ class GoogleFlightsConsoleFormatter:
         """
 
         if isinstance(airport, dict):
-            code = airport.get("code")
+            code = airport.get("code") or airport.get("id")
             if isinstance(code, str) and code.strip():
                 return code.strip()
             name = airport.get("name")
