@@ -873,10 +873,10 @@ class SQLCheckpointAgentStreamingPlus:
                             adults (int): 入住成人数量，默认 1，必须大于等于 1。
                             sort_by (str | None): 排序策略，支持 ``relevance（默认）``、``price_low_to_high``、``price_high_to_low``、``most_reviewed``。
                             hl (str): Google 语言参数，默认 ``zh-CN``。
-                            currency (str): 货币代码，默认 ``CNY``。
+                            currency (str): 货币代码，例如``CNY``、``USD``。
 
                         Returns:
-                            str: SerpAPI 原始响应的 JSON 字符串。注意核对请求货币单位。
+                            str: SerpAPI 原始响应的 JSON 字符串。注意核对货币单位默认是人民币（CNY）。
 
                         Raises:
                             ValueError: 当参数非法或外部接口调用失败时抛出。
