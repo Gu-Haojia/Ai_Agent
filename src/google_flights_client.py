@@ -574,4 +574,10 @@ def sanitize_flights_payload(
         for entry in sanitized["other_flights"]:
             _strip_flight_item(entry)
 
+    price_insights = sanitized.get("price_insights")
+    if isinstance(price_insights, dict):
+        price_insights.pop("price_history", None)
+    sanitized.pop("price_history", None)
+    sanitized.pop("airports", None)
+
     return sanitized
