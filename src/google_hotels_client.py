@@ -318,12 +318,21 @@ def sanitize_hotels_payload(payload: dict[str, Any]) -> dict[str, Any]:
     for key in ("search_parameters", "brands", "ads"):
         sanitized.pop(key, None)
 
+    def _strip_property(item: dict[str, Any]) -> None:
+        item.pop("images", None)
+        item.pop("ratings", None)
+        item.pop("location_rating", None)
+        item.pop("reviews_breakdown", None)
+        nearby = item.get("nearby_places")
+        if isinstance(nearby, list):
+            item["nearby_places"] = nearby[:2]
+
     properties = sanitized.get("properties")
     if isinstance(properties, list):
         sanitized["properties"] = properties[:20]
         for item in sanitized["properties"]:
             if isinstance(item, dict):
-                item.pop("images", None)
+                _strip_property(item)
 
     return sanitized
 
