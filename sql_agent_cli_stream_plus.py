@@ -935,13 +935,13 @@ class SQLCheckpointAgentStreamingPlus:
                         Google Flights 航班查询工具。
 
                         Args:
-                            departure_id (str): 出发机场/城市标识，可填 IATA 代码或 kgmid，多个值用逗号分隔。示例: ``"PEK,PKX"``。
-                            arrival_id (str): 到达机场/城市标识，可填 IATA 代码或 kgmid，多个值用逗号分隔。示例: ``"KIX,ITM"``。
+                            departure_id (str): 出发机场/城市标识，可填 IATA 代码或 /m/+kgmid，多个值用逗号分隔。示例: "PEK,PKX"; "/m/0vzm"。
+                            arrival_id (str): 到达机场/城市标识，可填 IATA 代码或 /m/+kgmid，多个值用逗号分隔。示例: "KIX,ITM"; "/m/0vzn"。
                             outbound_date (str): 出发日期，格式 YYYY-MM-DD。示例: ``"2026-01-22"``。
                             return_date (str | None): 返程日期，格式 YYYY-MM-DD；往返行程必填。示例: ``"2026-01-29"``。
-                            sort_by (str | None): 排序方式，支持 ``top_flights``（默认）、``price``、``departure_time``、``arrival_time``、``duration``、``emissions``。示例: ``"price"``。
-                            adults (int): 成人数量，默认 1。示例: ``1``。
-                            type (str): 行程类型，支持 ``round_trip``（默认）或 ``one_way``。示例: ``"round_trip"``。
+                            sort_by (str | None): 排序方式，支持 ``top_flights``（默认）、``price``、``departure_time``、``arrival_time``、``duration``、``emissions``。
+                            adults (int): 成人数量，默认 1。
+                            type (str): 行程类型，支持 ``round_trip``（默认）或 ``one_way``。
 
                         Returns:
                             str: SerpAPI 原始响应的 JSON 字符串。
