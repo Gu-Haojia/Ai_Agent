@@ -321,6 +321,8 @@ def sanitize_hotels_payload(payload: dict[str, Any]) -> dict[str, Any]:
     def _strip_property(item: dict[str, Any]) -> None:
         item.pop("images", None)
         item.pop("ratings", None)
+        item.pop("property_token", None)
+        item.pop("serpapi_property_details_link", None)
         item.pop("location_rating", None)
         item.pop("reviews_breakdown", None)
         nearby = item.get("nearby_places")
