@@ -376,6 +376,7 @@ class GoogleFlightsConsoleFormatter:
 
         segments: list[str] = []
         airlines: set[str] = set()
+        flight_numbers: set[str] = set()
         for segment in segments_data:
             if not isinstance(segment, dict):
                 continue
@@ -385,6 +386,9 @@ class GoogleFlightsConsoleFormatter:
             segment_desc = GoogleFlightsConsoleFormatter._describe_segment(segment)
             if segment_desc:
                 segments.append(segment_desc)
+            flight_no = segment.get("flight_number")
+            if isinstance(flight_no, str) and flight_no.strip():
+                flight_numbers.add(flight_no.strip())
 
         if not segments:
             return None
@@ -393,6 +397,7 @@ class GoogleFlightsConsoleFormatter:
             "price": price_text,
             "duration": duration_text,
             "airlines": ", ".join(sorted(airlines)) or "未知航司",
+            "flight_numbers": sorted(flight_numbers),
             "segments": segments,
         }
 
@@ -487,9 +492,15 @@ class GoogleFlightsConsoleFormatter:
             else:
                 duration_text = f"{minutes}分钟"
 
+        flight_no = ""
+        if isinstance(segment.get("flight_number"), str):
+            flight_no = segment["flight_number"].strip()
+
         parts = [f"{dep_code}->{arr_code}", f"{dep_time}-{arr_time}"]
         if duration_text:
             parts.append(duration_text)
+        if flight_no:
+            parts.append(f"航班号:{flight_no}")
         return " ".join(parts).strip()
 
     @staticmethod
