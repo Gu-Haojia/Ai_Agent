@@ -315,8 +315,19 @@ def sanitize_hotels_payload(payload: dict[str, Any]) -> dict[str, Any]:
         return payload
 
     sanitized = copy.deepcopy(payload)
-    for key in ("brands", "ads", "search_metadata", "serpapi_pagination"):
+    for key in (
+        "search_parameters",
+        "brands",
+        "ads",
+        "search_metadata",
+        "serpapi_pagination",
+    ):
         sanitized.pop(key, None)
+
+    currency_norm = ""
+    search_params = payload.get("search_parameters")
+    if isinstance(search_params, dict):
+        currency_norm = str(search_params.get("currency") or "").strip().upper()
 
     def _strip_property(item: dict[str, Any]) -> None:
         item.pop("images", None)
@@ -329,6 +340,18 @@ def sanitize_hotels_payload(payload: dict[str, Any]) -> dict[str, Any]:
         nearby = item.get("nearby_places")
         if isinstance(nearby, list):
             item["nearby_places"] = nearby[:1]
+
+        def _prefix_rate(rate: Any) -> None:
+            if not (currency_norm and isinstance(rate, dict)):
+                return
+            lowest = rate.get("lowest")
+            if isinstance(lowest, str):
+                text = lowest.strip()
+                if text and not text.upper().startswith(currency_norm):
+                    rate["lowest"] = f"{currency_norm} {text}"
+
+        _prefix_rate(item.get("rate_per_night"))
+        _prefix_rate(item.get("total_rate"))
 
     properties = sanitized.get("properties")
     if isinstance(properties, list):
