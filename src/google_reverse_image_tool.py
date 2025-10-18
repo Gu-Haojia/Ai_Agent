@@ -100,10 +100,32 @@ class GoogleReverseImageTool:
         ), "image_url_or_name 不能为空。"
 
         target_url = self._prepare_image_url(image_url_or_name.strip())
-        payload = self.client.search(target_url)
-        sanitized = self._sanitize_payload(payload)
-        sanitized["source_image_url"] = target_url
-        return sanitized
+        first_page = self.client.search(target_url, start=0)
+        first_payload = self._sanitize_payload(first_page)
+
+        image_results = first_payload.get("image_results")
+        total_results = self._extract_total_results(first_payload)
+        results_list: list[Any] = []
+        if isinstance(image_results, list):
+            results_list = list(image_results)
+
+        should_request_next = False
+        if results_list:
+            if total_results is None:
+                should_request_next = True
+            else:
+                should_request_next = len(results_list) < total_results
+
+        if should_request_next:
+            second_page = self.client.search(target_url, start=10)
+            second_payload = self._sanitize_payload(second_page)
+            second_results = second_payload.get("image_results")
+            if isinstance(second_results, list) and second_results:
+                results_list.extend(second_results)
+                first_payload["image_results"] = results_list
+
+        first_payload["source_image_url"] = target_url
+        return first_payload
 
     def _prepare_image_url(self, image_identifier: str) -> str:
         """
@@ -142,3 +164,28 @@ class GoogleReverseImageTool:
                 continue
             retained[key] = value
         return retained
+
+    @staticmethod
+    def _extract_total_results(payload: dict[str, Any]) -> int | None:
+        """
+        尝试从返回数据中解析总结果数量。
+
+        Args:
+            payload (dict[str, Any]): 经过过滤的 SerpAPI 返回数据。
+
+        Returns:
+            int | None: 成功解析时返回整数，否则返回 None。
+        """
+
+        info = payload.get("search_information")
+        if not isinstance(info, dict):
+            return None
+
+        total_value = info.get("total_results") or info.get("total_images")
+        if isinstance(total_value, int):
+            return total_value
+        if isinstance(total_value, str):
+            digits = "".join(ch for ch in total_value if ch.isdigit())
+            if digits:
+                return int(digits)
+        return None

@@ -25,12 +25,13 @@ class GoogleReverseImageClient:
     endpoint: str = "https://serpapi.com/search"
     timeout_seconds: int = 30
 
-    def search(self, image_url: str) -> dict[str, Any]:
+    def search(self, image_url: str, start: int | None = None) -> dict[str, Any]:
         """
         使用指定图片 URL 发起反向图片搜索。
 
         Args:
             image_url (str): 待搜索的图片 URL。
+            start (int | None): 结果偏移量，用于分页；None 表示默认第一页。
 
         Returns:
             dict[str, Any]: SerpAPI 返回的 JSON 数据。
@@ -47,6 +48,10 @@ class GoogleReverseImageClient:
             "image_url": image_url,
             "api_key": self.api_key,
         }
+
+        if start is not None:
+            assert isinstance(start, int) and start >= 0, "start 必须为非负整数。"
+            params["start"] = start
 
         try:
             response = requests.get(
