@@ -61,9 +61,10 @@ class ReverseImageUploader:
             raise ValueError(f"上传服务返回异常状态码：HTTP {response.status_code}。")
 
         uploaded_url = response.text.strip()
-        if not uploaded_url.startswith("http"):
+        clean_url, _, _fragment = uploaded_url.partition("#")
+        if not clean_url.startswith("http"):
             raise ValueError("上传服务返回内容异常，未提供可访问的 URL。")
-        return uploaded_url
+        return clean_url
 
 
 @dataclass
