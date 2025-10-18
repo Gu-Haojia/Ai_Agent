@@ -160,9 +160,23 @@ class GoogleReverseImageTool:
 
         retained: dict[str, Any] = {}
         for key, value in payload.items():
-            if key in {"search_metadata", "search_parameters"}:
+            if key in {"search_metadata", "search_parameters", "image_sizes"}:
                 continue
-            retained[key] = value
+            if key == "image_results" and isinstance(value, list):
+                simplified: list[dict[str, Any]] = []
+                for item in value:
+                    if not isinstance(item, dict):
+                        continue
+                    reduced = {
+                        field: item.get(field)
+                        for field in ("title", "link", "snippet", "source")
+                        if item.get(field)
+                    }
+                    if reduced:
+                        simplified.append(reduced)
+                retained[key] = simplified
+            else:
+                retained[key] = value
         return retained
 
     @staticmethod
