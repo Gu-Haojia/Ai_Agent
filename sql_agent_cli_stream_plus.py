@@ -1002,7 +1002,9 @@ class SQLCheckpointAgentStreamingPlus:
                         Google 反向搜图工具。
 
                         Args:
-                            image_url (str): 图片的在线 URL 或本地文件名。
+                            image_url (str): 图片的在线 URL 或本地文件名。例如：
+                                - URL 示例: "https://example.com/image.jpg"
+                                - 本地文件名示例: "my_photo.png"
 
                         Returns:
                             str: 过滤后的 SerpAPI 响应 JSON 字符串。
