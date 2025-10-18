@@ -555,6 +555,7 @@ class ImageStorageManager:
         else:
             parts_data = None
         if not parts_data:
+            print(f"ERROR: 完整 Gemini 响应内容: {data}", flush=True)
             raise RuntimeError("Gemini 响应缺少内容片段")
 
         inline_data = None
