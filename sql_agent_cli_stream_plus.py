@@ -52,11 +52,7 @@ from src.google_flights_client import (
     sanitize_flights_payload,
 )
 from src.google_reverse_image_client import GoogleReverseImageClient
-from src.google_reverse_image_tool import (
-    GoogleReverseImageTool,
-    ReverseImageLocalResolver,
-    ReverseImageUploader,
-)
+from src.google_reverse_image_tool import GoogleReverseImageTool, ReverseImageUploader
 from src.anilist_client import AniListAPI, ANILIST_MEDIA_SORTS
 
 ANILIST_SORT_CHOICES_TEXT: str = ", ".join(ANILIST_MEDIA_SORTS)
@@ -862,7 +858,6 @@ class SQLCheckpointAgentStreamingPlus:
                     reverse_image_tool = GoogleReverseImageTool(
                         client=reverse_image_client,
                         uploader=ReverseImageUploader(),
-                        resolver=ReverseImageLocalResolver(image_root=Path("images")),
                     )
 
                     @tool("google_hotels_search")

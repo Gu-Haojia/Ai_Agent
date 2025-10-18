@@ -67,65 +67,6 @@ class ReverseImageUploader:
 
 
 @dataclass
-class ReverseImageLocalResolver:
-    """
-    根据文件名在本地图片目录中定位真实路径的解析器。
-
-    Args:
-        image_root (Path): 图像根目录，默认 ``images``。
-        categories (tuple[str, ...]): 支持的子目录类别，默认 ``(\"incoming\", \"generated\")``。
-    """
-
-    image_root: Path = Path("images")
-    categories: tuple[str, ...] = ("incoming", "generated")
-
-    def resolve(self, file_name: str) -> Path:
-        """
-        查找文件名对应的本地图片路径。
-
-        Args:
-            file_name (str): 图片文件名，仅包含文件名部分。
-
-        Returns:
-            Path: 匹配到的图片绝对路径。
-
-        Raises:
-            AssertionError: 当 ``file_name`` 为空字符串时抛出。
-            FileNotFoundError: 当未找到对应文件时抛出。
-            ValueError: 当找到多个匹配文件时抛出。
-        """
-
-        assert isinstance(file_name, str) and file_name.strip(), "file_name 不能为空。"
-
-        normalized_name = Path(file_name).name
-        candidates: list[Path] = []
-        if not self.image_root.exists():
-            raise FileNotFoundError(f"本地图像根目录不存在：{self.image_root}")
-
-        run_directories = sorted(
-            (
-                path
-                for path in self.image_root.iterdir()
-                if path.is_dir() and path.name.endswith("~run")
-            ),
-            reverse=True,
-        )
-
-        for run_dir in run_directories:
-            for category in self.categories:
-                candidate = run_dir / category / normalized_name
-                if candidate.is_file():
-                    candidates.append(candidate)
-
-        if not candidates:
-            raise FileNotFoundError(f"未找到匹配的本地图片：{normalized_name}")
-        if len(candidates) > 1:
-            locations = ", ".join(str(path) for path in candidates)
-            raise ValueError(f"找到多个同名图片，请确认文件名：{locations}")
-        return candidates[0].resolve()
-
-
-@dataclass
 class GoogleReverseImageTool:
     """
     整合上传、路径解析与 SerpAPI 调用的反向搜图工具。
@@ -133,14 +74,12 @@ class GoogleReverseImageTool:
     Args:
         client (GoogleReverseImageClient): 已配置 API Key 的 SerpAPI 客户端。
         uploader (ReverseImageUploader): 本地图片上传器。
-        resolver (ReverseImageLocalResolver | None): 可选的本地路径解析器。
         locale (str): 请求使用的语言参数，默认 ``zh-CN``。
         max_results (int): ``image_results`` 保留的最大条目数，默认 7。
     """
 
     client: GoogleReverseImageClient
     uploader: ReverseImageUploader
-    resolver: ReverseImageLocalResolver | None = None
     locale: str = "zh-CN"
     max_results: int = 7
 
@@ -187,10 +126,6 @@ class GoogleReverseImageTool:
         path_candidate = Path(image_identifier).expanduser()
         if path_candidate.is_file():
             return self.uploader.upload(path_candidate)
-
-        if self.resolver is not None:
-            local_path = self.resolver.resolve(image_identifier)
-            return self.uploader.upload(local_path)
 
         raise FileNotFoundError(f"本地图片不存在：{image_identifier}")
 
