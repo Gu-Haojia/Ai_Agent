@@ -74,14 +74,12 @@ class GoogleReverseImageTool:
     Args:
         client (GoogleReverseImageClient): 已配置 API Key 的 SerpAPI 客户端。
         uploader (ReverseImageUploader): 本地图片上传器。
-        locale (str): 请求使用的语言参数，默认 ``zh-CN``。
-        max_results (int): ``image_results`` 保留的最大条目数，默认 7。
+        max_results (int): ``image_results`` 保留的最大条目数，默认 10。
     """
 
     client: GoogleReverseImageClient
     uploader: ReverseImageUploader
-    locale: str = "zh-CN"
-    max_results: int = 7
+    max_results: int = 10
 
     def run(self, image_url_or_name: str) -> dict[str, Any]:
         """
@@ -104,7 +102,7 @@ class GoogleReverseImageTool:
         ), "image_url_or_name 不能为空。"
 
         target_url = self._prepare_image_url(image_url_or_name.strip())
-        payload = self.client.search(target_url, hl=self.locale)
+        payload = self.client.search(target_url)
         sanitized = self._sanitize_payload(payload)
         sanitized["source_image_url"] = target_url
         return sanitized
