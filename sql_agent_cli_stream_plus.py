@@ -51,6 +51,12 @@ from src.google_flights_client import (
     GoogleFlightsRequest,
     sanitize_flights_payload,
 )
+from src.google_reverse_image_client import GoogleReverseImageClient
+from src.google_reverse_image_tool import (
+    GoogleReverseImageTool,
+    ReverseImageLocalResolver,
+    ReverseImageUploader,
+)
 from src.anilist_client import AniListAPI, ANILIST_MEDIA_SORTS
 
 ANILIST_SORT_CHOICES_TEXT: str = ", ".join(ANILIST_MEDIA_SORTS)
@@ -852,6 +858,12 @@ class SQLCheckpointAgentStreamingPlus:
                     google_hotels_formatter = GoogleHotelsConsoleFormatter()
                     google_flights_client = GoogleFlightsClient(api_key=serpapi_key)
                     google_flights_formatter = GoogleFlightsConsoleFormatter()
+                    reverse_image_client = GoogleReverseImageClient(api_key=serpapi_key)
+                    reverse_image_tool = GoogleReverseImageTool(
+                        client=reverse_image_client,
+                        uploader=ReverseImageUploader(),
+                        resolver=ReverseImageLocalResolver(image_root=Path("images")),
+                    )
 
                     @tool("google_hotels_search")
                     def google_hotels_search(
@@ -988,6 +1000,33 @@ class SQLCheckpointAgentStreamingPlus:
                         return json.dumps(payload, ensure_ascii=False)
 
                     tools.append(google_flights_search)
+
+                    @tool("google_reverse_image_search")
+                    def google_reverse_image_search(image_url: str) -> str:
+                        """
+                        Google 反向搜图工具。
+
+                        Args:
+                            image_url (str): 图片的在线 URL 或本地文件名。
+
+                        Returns:
+                            str: 过滤后的 SerpAPI 响应 JSON 字符串。
+
+                        Raises:
+                            ValueError: 当上传或 SerpAPI 调用失败时抛出。
+                            FileNotFoundError: 当本地图片不存在时抛出。
+                        """
+
+                        result = reverse_image_tool.run(image_url)
+                        timestamp = time.strftime("[%m-%d %H:%M:%S]", time.localtime())
+                        results_count = len(result.get("image_results", []))
+                        print(
+                            f"\033[94m{timestamp}\033[0m [GoogleReverseImage Tool] URL：{result.get('source_image_url')}，命中数量：{results_count}",
+                            flush=True,
+                        )
+                        return json.dumps(result, ensure_ascii=False)
+
+                    tools.append(google_reverse_image_search)
 
                 from langchain.agents import Tool
                 from langchain_experimental.utilities import PythonREPL
