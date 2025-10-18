@@ -51,6 +51,7 @@ from src.google_flights_client import (
     GoogleFlightsRequest,
     sanitize_flights_payload,
 )
+from src.google_directions_client import GoogleDirectionsClient
 from src.google_reverse_image_client import GoogleReverseImageClient
 from src.google_reverse_image_tool import GoogleReverseImageTool, ReverseImageUploader
 from src.anilist_client import AniListAPI, ANILIST_MEDIA_SORTS
@@ -854,6 +855,7 @@ class SQLCheckpointAgentStreamingPlus:
                     google_hotels_formatter = GoogleHotelsConsoleFormatter()
                     google_flights_client = GoogleFlightsClient(api_key=serpapi_key)
                     google_flights_formatter = GoogleFlightsConsoleFormatter()
+                    google_directions_client = GoogleDirectionsClient(api_key=serpapi_key)
                     reverse_image_client = GoogleReverseImageClient(api_key=serpapi_key)
                     reverse_image_tool = GoogleReverseImageTool(
                         client=reverse_image_client,
@@ -995,6 +997,49 @@ class SQLCheckpointAgentStreamingPlus:
                         return json.dumps(payload, ensure_ascii=False)
 
                     tools.append(google_flights_search)
+
+                    def _trim_directions_payload(payload: dict[str, Any]) -> dict[str, Any]:
+                        """裁剪路线结果，仅保留前两段 directions。"""
+
+                        if not isinstance(payload, dict):
+                            return {}
+                        trimmed = {key: value for key, value in payload.items()}
+                        directions = trimmed.get("directions")
+                        if isinstance(directions, list):
+                            trimmed["directions"] = directions[:2]
+                        else:
+                            trimmed["directions"] = []
+                        return trimmed
+
+                    @tool("google_maps_directions")
+                    def google_maps_directions(
+                        start_addr: str,
+                        end_addr: str,
+                    ) -> str:
+                        """
+                        查询 Google Maps 路线。
+
+                        Args:
+                            start_addr (str): 起点地址（字符串格式）。
+                            end_addr (str): 终点地址（字符串格式）。
+
+                        Returns:
+                            str: 裁剪后的路线 JSON 字符串，仅包含前两段 directions。
+
+                        Raises:
+                            ValueError: 当 SerpAPI 调用失败时抛出。
+                        """
+
+                        result = google_directions_client.search(start_addr, end_addr)
+                        trimmed = _trim_directions_payload(result)
+                        timestamp = time.strftime("[%m-%d %H:%M:%S]", time.localtime())
+                        print(
+                            f"\033[94m{timestamp}\033[0m [GoogleDirections Tool] 起点：{start_addr} 终点：{end_addr} 返回段数：{len(trimmed.get('directions', []))}",
+                            flush=True,
+                        )
+                        return json.dumps(trimmed, ensure_ascii=False)
+
+                    tools.append(google_maps_directions)
 
                     @tool("google_reverse_image_search")
                     def google_reverse_image_search(image_url: str) -> str:
