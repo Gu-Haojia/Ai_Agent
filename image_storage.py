@@ -390,6 +390,32 @@ class ImageStorageManager:
 
         raise AssertionError(f"找不到已保存的图像文件: {normalized}")
 
+    def resolve_image_path(self, filename: str) -> Path:
+        """
+        根据文件名获取图像的绝对路径。
+
+        Args:
+            filename (str): 图像文件名，仅支持纯文件名。
+
+        Returns:
+            Path: 匹配到的本地图像绝对路径。
+
+        Raises:
+            AssertionError: 当文件名为空或包含路径分隔符时抛出。
+            FileNotFoundError: 当未找到对应图像时抛出。
+        """
+
+        assert isinstance(filename, str) and filename.strip(), "filename 不能为空"
+        normalized = filename.strip()
+        assert Path(normalized).name == normalized, "filename 不允许包含路径"
+
+        for directory in (self._incoming_dir, self._generated_dir):
+            candidate = directory / normalized
+            if candidate.is_file():
+                return candidate.resolve()
+
+        raise FileNotFoundError(f"找不到图像文件: {normalized}")
+
     def generate_image_via_openai(self, prompt: str, size: str = "1024x1024") -> GeneratedImage:
         """
         使用 OpenAI Images API 生成图像并保存。

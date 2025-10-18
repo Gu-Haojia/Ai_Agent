@@ -133,14 +133,14 @@ class GoogleReverseImageTool:
     Args:
         client (GoogleReverseImageClient): 已配置 API Key 的 SerpAPI 客户端。
         uploader (ReverseImageUploader): 本地图片上传器。
-        resolver (ReverseImageLocalResolver): 本地路径解析器。
+        resolver (ReverseImageLocalResolver | None): 可选的本地路径解析器。
         locale (str): 请求使用的语言参数，默认 ``zh-CN``。
         max_results (int): ``image_results`` 保留的最大条目数，默认 7。
     """
 
     client: GoogleReverseImageClient
     uploader: ReverseImageUploader
-    resolver: ReverseImageLocalResolver
+    resolver: ReverseImageLocalResolver | None = None
     locale: str = "zh-CN"
     max_results: int = 7
 
@@ -184,8 +184,15 @@ class GoogleReverseImageTool:
         if image_identifier.lower().startswith(("http://", "https://")):
             return image_identifier
 
-        local_path = self.resolver.resolve(image_identifier)
-        return self.uploader.upload(local_path)
+        path_candidate = Path(image_identifier).expanduser()
+        if path_candidate.is_file():
+            return self.uploader.upload(path_candidate)
+
+        if self.resolver is not None:
+            local_path = self.resolver.resolve(image_identifier)
+            return self.uploader.upload(local_path)
+
+        raise FileNotFoundError(f"本地图片不存在：{image_identifier}")
 
     def _sanitize_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         """

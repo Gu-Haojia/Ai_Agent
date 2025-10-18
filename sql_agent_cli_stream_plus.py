@@ -1017,7 +1017,16 @@ class SQLCheckpointAgentStreamingPlus:
                             FileNotFoundError: 当本地图片不存在时抛出。
                         """
 
-                        result = reverse_image_tool.run(image_url)
+                        assert isinstance(image_url, str) and image_url.strip(), "image_url 不能为空"
+                        normalized_input = image_url.strip()
+                        if normalized_input.lower().startswith(("http://", "https://")):
+                            prepared = normalized_input
+                        else:
+                            manager = self._require_image_manager()
+                            image_path = manager.resolve_image_path(normalized_input)
+                            prepared = str(image_path)
+
+                        result = reverse_image_tool.run(prepared)
                         timestamp = time.strftime("[%m-%d %H:%M:%S]", time.localtime())
                         results_count = len(result.get("image_results", []))
                         print(
