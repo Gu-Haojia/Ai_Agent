@@ -1020,8 +1020,8 @@ class SQLCheckpointAgentStreamingPlus:
                         查询 Google Maps 路线。
 
                         Args:
-                            start_addr (str): 起点地址（字符串格式）。
-                            end_addr (str): 终点地址（字符串格式）。
+                            start_addr (str): 起点地址（字符串格式，尽量使用地点当地语言），例如“東京駅”.
+                            end_addr (str): 终点地址（字符串格式，尽量使用地点当地语言），例如“新宿駅”。
 
                         Returns:
                             str: 裁剪后的路线 JSON 字符串，仅包含前两段 directions。
