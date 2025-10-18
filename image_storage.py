@@ -540,6 +540,7 @@ class ImageStorageManager:
         #print(f"Gemini 响应: {data}", flush=True)
         candidates = data.get("candidates") or []
         if not candidates:
+            print(f"ERROR: 完整 Gemini 响应内容: {data}", flush=True)
             raise RuntimeError("Gemini 响应缺少候选结果")
         first_candidate = candidates[0] if len(candidates) > 0 else None
         if isinstance(first_candidate, dict):
@@ -570,11 +571,13 @@ class ImageStorageManager:
                 break
 
         if not inline_data:
+            print(f"ERROR: 完整 Gemini 响应内容: {data}", flush=True)
             raise RuntimeError("Gemini 响应未返回图像数据")
 
         b64_data = inline_data.get("data")
         mime_type = inline_data.get("mimeType") or inline_data.get("mime_type")
         if not b64_data:
+            print(f"ERROR: 完整 Gemini 响应内容: {data}", flush=True)
             raise RuntimeError("Gemini 图像数据为空")
         if not mime_type:
             mime_type = "image/png"
