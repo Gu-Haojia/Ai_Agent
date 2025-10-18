@@ -19,21 +19,18 @@ class GoogleReverseImageClient:
         api_key (str): SerpAPI API Key。
         endpoint (str): SerpAPI 接口地址，默认 ``https://serpapi.com/search``。
         timeout_seconds (int): 请求超时时间（秒），默认 30。
-        default_hl (str): 默认语言参数，默认 ``zh-CN``。
     """
 
     api_key: str
     endpoint: str = "https://serpapi.com/search"
     timeout_seconds: int = 30
-    default_hl: str = "zh-CN"
 
-    def search(self, image_url: str, hl: str | None = None) -> dict[str, Any]:
+    def search(self, image_url: str) -> dict[str, Any]:
         """
         使用指定图片 URL 发起反向图片搜索。
 
         Args:
             image_url (str): 待搜索的图片 URL。
-            hl (str | None): Google 搜索语言参数，默认使用 ``default_hl``。
 
         Returns:
             dict[str, Any]: SerpAPI 返回的 JSON 数据。
@@ -49,7 +46,6 @@ class GoogleReverseImageClient:
             "engine": "google_reverse_image",
             "image_url": image_url,
             "api_key": self.api_key,
-            "hl": hl or self.default_hl,
         }
 
         try:
