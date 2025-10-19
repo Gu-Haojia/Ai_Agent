@@ -1090,7 +1090,7 @@ class SQLCheckpointAgentStreamingPlus:
                         Args:
                             start_addr (str): 起点地址（字符串格式，尽量使用地点当地语言），例如“東京駅”.
                             end_addr (str): 终点地址（字符串格式，尽量使用地点当地语言），例如“新宿駅”。
-                            travel_time (str | None): 可选出发/到达时间，东京时区，格式 ``depart_at:YYYY-MM-DDTHH:MM`` 或 ``arrive_by:YYYY-MM-DDTHH:MM``。
+                            travel_time (str | None): 可选，出发/到达的当地时间，格式 ``depart_at:2024-12-16T13:56`` 或 ``arrive_by:2024-12-16T13:56``。
 
                         Returns:
                             str: 裁剪后的路线 JSON 字符串，仅包含前两段 directions。
