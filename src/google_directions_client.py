@@ -24,12 +24,18 @@ class GoogleDirectionsClient:
     endpoint: str = "https://serpapi.com/search"
     timeout_seconds: int = 30
 
-    def search(self, start_addr: str, end_addr: str) -> dict[str, Any]:
+    def search(
+        self,
+        start_addr: str,
+        end_addr: str,
+        time: str | None = None,
+    ) -> dict[str, Any]:
         """查询两地之间的 Google Maps 路线。
 
         Args:
             start_addr (str): 起点地址。
             end_addr (str): 终点地址。
+            time (str | None): SerpAPI 要求的时间参数，例如 ``depart_at:1698229538``。
 
         Returns:
             dict[str, Any]: SerpAPI 返回的 JSON 数据。
@@ -41,6 +47,10 @@ class GoogleDirectionsClient:
 
         assert isinstance(start_addr, str) and start_addr.strip(), "start_addr 必须为非空字符串。"
         assert isinstance(end_addr, str) and end_addr.strip(), "end_addr 必须为非空字符串。"
+        if time is not None:
+            assert isinstance(time, str) and time.strip(), "time 参数必须为非空字符串。"
+
+        normalized_time = time.strip() if isinstance(time, str) else None
 
         params = {
             "engine": "google_maps_directions",
@@ -51,6 +61,9 @@ class GoogleDirectionsClient:
             "distance_unit": "0",
             "api_key": self.api_key,
         }
+
+        if normalized_time:
+            params["time"] = normalized_time
 
         try:
             response = requests.get(self.endpoint, params=params, timeout=self.timeout_seconds)
