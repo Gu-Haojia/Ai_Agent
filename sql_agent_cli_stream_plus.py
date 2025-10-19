@@ -17,7 +17,7 @@ import re
 import sys
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Callable, Iterable, Match, Optional, Sequence, Union, Any
 from zoneinfo import ZoneInfo
@@ -1076,8 +1076,8 @@ class SQLCheckpointAgentStreamingPlus:
                         else:
                             dt = dt.astimezone(tokyo_tz)
 
-                        utc_tz = ZoneInfo("UTC")
-                        timestamp = int(dt.astimezone(utc_tz).timestamp())
+                        offset = dt.utcoffset() or timedelta(0)
+                        timestamp = int(dt.timestamp() + offset.total_seconds())
                         return f"{mode}:{timestamp}"
 
                     @tool("google_maps_directions")
