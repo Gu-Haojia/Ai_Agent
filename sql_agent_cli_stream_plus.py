@@ -1072,7 +1072,9 @@ class SQLCheckpointAgentStreamingPlus:
 
                         tokyo_tz = ZoneInfo("Asia/Tokyo")
                         if dt.tzinfo is not None:
-                            dt = dt.astimezone(tokyo_tz)
+                            dt = dt.astimezone(ZoneInfo("UTC"))
+                        else:
+                            dt = dt.replace(tzinfo=ZoneInfo("UTC"))
                         timestamp = int(dt.timestamp())
                         return f"{mode}:{timestamp}"
 
