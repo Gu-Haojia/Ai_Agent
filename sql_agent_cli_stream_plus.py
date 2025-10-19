@@ -1008,6 +1008,8 @@ class SQLCheckpointAgentStreamingPlus:
                         "gps_coordinates",
                         "data_id",
                         "service_run_by",
+                        "action",
+                        "stops",
                     }
 
                     def _prune_directions_fields(value: Any) -> Any:
