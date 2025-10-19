@@ -1071,13 +1071,8 @@ class SQLCheckpointAgentStreamingPlus:
                             ) from exc
 
                         tokyo_tz = ZoneInfo("Asia/Tokyo")
-                        if dt.tzinfo is None:
-                            raise ValueError(
-                                "time 参数必须包含时区信息，例如 2025-10-18T18:30+09:00。"
-                            )
-
-                        dt = dt.astimezone(tokyo_tz)
-
+                        if dt.tzinfo is not None:
+                            dt = dt.astimezone(tokyo_tz)
                         timestamp = int(dt.timestamp())
                         return f"{mode}:{timestamp}"
 
