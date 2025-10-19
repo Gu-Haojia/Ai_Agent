@@ -17,7 +17,7 @@ import re
 import sys
 import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Callable, Iterable, Match, Optional, Sequence, Union, Any
 from zoneinfo import ZoneInfo
@@ -1072,12 +1072,13 @@ class SQLCheckpointAgentStreamingPlus:
 
                         tokyo_tz = ZoneInfo("Asia/Tokyo")
                         if dt.tzinfo is None:
-                            dt = dt.replace(tzinfo=tokyo_tz)
-                        else:
-                            dt = dt.astimezone(tokyo_tz)
+                            raise ValueError(
+                                "time 参数必须包含时区信息，例如 2025-10-18T18:30+09:00。"
+                            )
 
-                        offset = dt.utcoffset() or timedelta(0)
-                        timestamp = int(dt.timestamp() + offset.total_seconds())
+                        dt = dt.astimezone(tokyo_tz)
+
+                        timestamp = int(dt.timestamp())
                         return f"{mode}:{timestamp}"
 
                     @tool("google_maps_directions")
