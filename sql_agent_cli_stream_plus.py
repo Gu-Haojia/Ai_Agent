@@ -1046,7 +1046,8 @@ class SQLCheckpointAgentStreamingPlus:
                         else:
                             dt = dt.astimezone(tokyo_tz)
 
-                        timestamp = int(dt.timestamp())
+                        utc_tz = ZoneInfo("UTC")
+                        timestamp = int(dt.astimezone(utc_tz).timestamp())
                         return f"{mode}:{timestamp}"
 
                     @tool("google_maps_directions")
@@ -1061,7 +1062,7 @@ class SQLCheckpointAgentStreamingPlus:
                         Args:
                             start_addr (str): 起点地址（字符串格式，尽量使用地点当地语言），例如“東京駅”.
                             end_addr (str): 终点地址（字符串格式，尽量使用地点当地语言），例如“新宿駅”。
-                            travel_time (str | None): 可选出发/到达时间，格式 ``depart_at:YYYY-MM-DDTHH:MM`` 或 ``arrive_by:YYYY-MM-DDTHH:MM``。
+                            travel_time (str | None): 可选出发/到达时间，东京时区，格式 ``depart_at:YYYY-MM-DDTHH:MM`` 或 ``arrive_by:YYYY-MM-DDTHH:MM``。
 
                         Returns:
                             str: 裁剪后的路线 JSON 字符串，仅包含前两段 directions。
@@ -1079,7 +1080,7 @@ class SQLCheckpointAgentStreamingPlus:
                         trimmed = _trim_directions_payload(result)
                         timestamp = time.strftime("[%m-%d %H:%M:%S]", time.localtime())
                         print(
-                            f"\033[94m{timestamp}\033[0m [GoogleDirections Tool] 起点：{start_addr} 终点：{end_addr} 返回段数：{len(trimmed.get('directions', []))}",
+                            f"\033[94m{timestamp}\033[0m [GoogleDirections Tool] 起点：{start_addr} 终点：{end_addr} 时间：{travel_time} 返回段数：{len(trimmed.get('directions', []))}",
                             flush=True,
                         )
                         return json.dumps(trimmed, ensure_ascii=False)
