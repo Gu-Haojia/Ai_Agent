@@ -1000,12 +1000,40 @@ class SQLCheckpointAgentStreamingPlus:
 
                     tools.append(google_flights_search)
 
+                    _DIRECTIONS_REMOVED_FIELDS = {
+                        "distance",
+                        "duration",
+                        "icon",
+                        "geo_photo",
+                        "gps_coordinates",
+                        "data_id",
+                        "service_run_by",
+                    }
+
+                    def _prune_directions_fields(value: Any) -> Any:
+                        """移除指定字段，保持原有结构。"""
+
+                        if isinstance(value, dict):
+                            pruned: dict[str, Any] = {}
+                            for key, item in value.items():
+                                if key in _DIRECTIONS_REMOVED_FIELDS:
+                                    continue
+                                pruned[key] = _prune_directions_fields(item)
+                            return pruned
+                        if isinstance(value, list):
+                            return [_prune_directions_fields(item) for item in value]
+                        return value
+
                     def _trim_directions_payload(payload: dict[str, Any]) -> dict[str, Any]:
-                        """裁剪路线结果，仅保留前两段 directions。"""
+                        """裁剪路线结果，仅保留前两段 directions，并清理冗余字段。"""
 
                         if not isinstance(payload, dict):
                             return {}
-                        trimmed = {key: value for key, value in payload.items()}
+                        trimmed = {
+                            key: _prune_directions_fields(value)
+                            for key, value in payload.items()
+                            if key not in {"search_metadata", "search_parameters"}
+                        }
                         directions = trimmed.get("directions")
                         if isinstance(directions, list):
                             trimmed["directions"] = directions[:2]
