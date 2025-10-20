@@ -174,6 +174,7 @@ from sql_agent_cli_stream_plus import (
     SQLCheckpointAgentStreamingPlus,
 )
 from image_storage import GeneratedImage, ImageStorageManager, StoredImage
+from daily_weather_task import DailyWeatherTask, parse_daily_task_groups
 
 
 @dataclass
@@ -1443,6 +1444,23 @@ def main() -> None:
     QQBotHandler.bot_cfg = bot_cfg
     QQBotHandler.agent = agent
     QQBotHandler.image_storage = image_manager
+
+    def _send_daily_text(group_id: int, text: str) -> None:
+        """
+        通过 OneBot HTTP API 发送每日任务文本。
+
+        Args:
+            group_id (int): 目标群号。
+            text (str): 需要广播的纯文本内容。
+        """
+        assert isinstance(group_id, int) and group_id > 0, "group_id 必须为正整数"
+        assert isinstance(text, str) and text.strip(), "text 必须为非空文本"
+        _send_group_msg(bot_cfg.api_base, group_id, text, bot_cfg.access_token)
+
+    daily_env = os.environ.get("DAILY_TASK", "").strip()
+    daily_groups = parse_daily_task_groups(daily_env)
+    daily_task = DailyWeatherTask(agent, _send_daily_text, daily_groups)
+    daily_task.start()
 
     server = ThreadingHTTPServer((bot_cfg.host, bot_cfg.port), QQBotHandler)
     print(
