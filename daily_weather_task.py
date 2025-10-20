@@ -152,6 +152,9 @@ class DailyWeatherTask:
             sys.stderr.write(f"[DailyTask] 调用 Agent 失败: {err}\n")
             return
 
+        # 添加一个表情
+        reply = f"📅 {reply}"
+
         for gid in self._group_ids:
             try:
                 self._send_func(gid, reply)

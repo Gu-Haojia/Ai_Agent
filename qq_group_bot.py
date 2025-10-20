@@ -1457,9 +1457,10 @@ def main() -> None:
         assert isinstance(text, str) and text.strip(), "text 必须为非空文本"
         _send_group_msg(bot_cfg.api_base, group_id, text, bot_cfg.access_token)
 
+    daily_question = "这是一个每日简报任务，你需要包含：今天的日期，现在的时间，今天是否是节日或者特殊的日子（中国/日本/世界通用）[没有就不回答]，今天京都的天气怎么样，以及想说的话，控制在150字以内。"
     daily_env = os.environ.get("DAILY_TASK", "").strip()
     daily_groups = parse_daily_task_groups(daily_env)
-    daily_task = DailyWeatherTask(agent, _send_daily_text, daily_groups)
+    daily_task = DailyWeatherTask(agent, _send_daily_text, daily_groups, question=daily_question,run_time="03:35")
     daily_task.start()
 
     server = ThreadingHTTPServer((bot_cfg.host, bot_cfg.port), QQBotHandler)
