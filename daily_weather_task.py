@@ -129,7 +129,12 @@ class DailyWeatherTask:
         """运行调度循环，通过动态等待避免频繁唤醒。"""
         while not self._stop_event.is_set():
             self._scheduler.run_pending()
-            idle = self._scheduler.idle_seconds()
+            idle_attr = getattr(self._scheduler, "idle_seconds", None)
+            idle = None
+            if callable(idle_attr):
+                idle = idle_attr()
+            else:
+                idle = idle_attr
             if idle is None:
                 idle = 60.0
             if idle < 0:
