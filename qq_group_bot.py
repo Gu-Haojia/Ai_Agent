@@ -1459,8 +1459,9 @@ def main() -> None:
 
     daily_question = "这是一个每日简报任务，你需要包含：今天的日期，现在是几点几分，今天是否是节日或者特殊的日子（中国/日本/世界通用）[没有就不回答，不要声明不是节日]，最近一周会不会有法定假日（中国/日本）[没有就不回答，不要声明不是法定假日]，今天京都的天气怎么样，以及想说的话，控制在大于120字，200字以内。"
     daily_env = os.environ.get("DAILY_TASK", "").strip()
+    daily_time = os.environ.get("DAILY_TASK_TIME", "09:00").strip()
     daily_groups = parse_daily_task_groups(daily_env)
-    daily_task = DailyWeatherTask(agent, _send_daily_text, daily_groups, question=daily_question, run_time="09:00")
+    daily_task = DailyWeatherTask(agent, _send_daily_text, daily_groups, question=daily_question, run_time=daily_time)
     daily_task.start()
 
     server = ThreadingHTTPServer((bot_cfg.host, bot_cfg.port), QQBotHandler)
