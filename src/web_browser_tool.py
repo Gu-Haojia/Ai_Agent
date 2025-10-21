@@ -202,7 +202,9 @@ class WebBrowserTool(BaseTool):
         context = self._select_context(documents, question_text)
         prompt = self._build_prompt(normalized_url, question_text, context, links)
         chain = prompt | self._llm | StrOutputParser()
-        return chain.invoke({}, run_manager=run_manager)
+        result = chain.invoke({}, run_manager=run_manager)
+        print(f"[WebBrowserTool 输出] {result}")
+        return result
 
     async def _arun(  # pragma: no cover - 同步工具未实现异步接口
         self,
