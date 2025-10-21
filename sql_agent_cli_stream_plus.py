@@ -766,7 +766,7 @@ class SQLCheckpointAgentStreamingPlus:
 
                 from langchain_community.utilities import OpenWeatherMapAPIWrapper
 
-                browser_tool = WebBrowserTool()
+                browser_tool = WebBrowserTool(llm=llm)
                 tools.append(browser_tool)
 
                 # 暂时关闭OpenWeatherMap天气工具
