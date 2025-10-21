@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-import os
 import re
 import time
 from dataclasses import dataclass
@@ -24,9 +23,6 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.tools import BaseTool
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from pydantic import BaseModel, Field, HttpUrl, field_validator
-
-# 降低 gRPC 启动时的 ALTS 噪声日志
-os.environ.setdefault("GRPC_VERBOSITY", "ERROR")
 
 
 DEFAULT_HEADERS: dict[str, str] = {
