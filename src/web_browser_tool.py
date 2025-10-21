@@ -205,7 +205,7 @@ class WebBrowserTool(BaseTool):
         chain = prompt | self._llm | StrOutputParser()
         result = chain.invoke({}, run_manager=run_manager)
         timestamp = time.strftime("[%m-%d %H:%M:%S]", time.localtime())
-        print(f"{timestamp} [WebBrowserTool 输出] {result}")
+        print(f"{timestamp} [WebBrowserTool] {result}")
         return result
 
     async def _arun(  # pragma: no cover - 同步工具未实现异步接口
