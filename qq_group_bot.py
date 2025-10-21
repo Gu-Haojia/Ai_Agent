@@ -1461,8 +1461,27 @@ def main() -> None:
     daily_env = os.environ.get("DAILY_TASK", "").strip()
     daily_time = os.environ.get("DAILY_TASK_TIME", "09:00").strip()
     daily_groups = parse_daily_task_groups(daily_env)
-    daily_task = DailyWeatherTask(agent, _send_daily_text, daily_groups, question=daily_question, run_time=daily_time)
+    daily_task = DailyWeatherTask(
+        agent,
+        _send_daily_text,
+        daily_groups,
+        question=daily_question,
+        run_time=daily_time,
+    )
     daily_task.start()
+
+    nightly_question = "这是一个晚间每日总结任务，你需要包含：现在是几点几分，明天是星期几，明天是否是节假日或者特殊的日子（中国/日本/世界通用）[没有就不回答，不要声明不是节日]，明天京都的天气预报如何，以及想说的话，控制在大于120字，200字以内。"
+    nightly_env = os.environ.get("NIGHTLY_TASK", "").strip()
+    nightly_time = os.environ.get("NIGHTLY_TASK_TIME", "21:00").strip()
+    nightly_groups = parse_daily_task_groups(nightly_env)
+    nightly_task = DailyWeatherTask(
+        agent,
+        _send_daily_text,
+        nightly_groups,
+        question=nightly_question,
+        run_time=nightly_time,
+    )
+    nightly_task.start()
 
     server = ThreadingHTTPServer((bot_cfg.host, bot_cfg.port), QQBotHandler)
     print(
