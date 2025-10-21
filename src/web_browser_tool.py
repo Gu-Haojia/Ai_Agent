@@ -179,10 +179,16 @@ class WebBrowserTool(BaseTool):
             RuntimeError: 当网络请求失败或响应内容类型不受支持时抛出。
         """
 
-        assert url.startswith(("http://", "https://")), "URL 必须以 http 或 https 开头。"
+        normalized_url = str(url)
+        assert normalized_url.startswith(
+            ("http://", "https://")
+        ), "URL 必须以 http 或 https 开头。"
 
-        html = self._fetch_html(url)
-        text, links = self._extract_text_and_links(html, url, question is None)
+        html = self._fetch_html(normalized_url)
+        text, links = self._extract_text_and_links(
+            html, normalized_url, question is None
+        )
+        question_text = None if question is None else str(question)
         if not text:
             raise RuntimeError("网页正文内容为空，无法生成结果。")
 
@@ -193,8 +199,8 @@ class WebBrowserTool(BaseTool):
         if not documents:
             raise RuntimeError("网页内容切分后为空，无法生成结果。")
 
-        context = self._select_context(documents, question)
-        prompt = self._build_prompt(url, question, context, links)
+        context = self._select_context(documents, question_text)
+        prompt = self._build_prompt(normalized_url, question_text, context, links)
         chain = prompt | self._llm | StrOutputParser()
         return chain.invoke({}, run_manager=run_manager)
 
