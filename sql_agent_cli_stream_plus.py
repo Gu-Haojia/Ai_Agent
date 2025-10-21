@@ -766,7 +766,16 @@ class SQLCheckpointAgentStreamingPlus:
 
                 from langchain_community.utilities import OpenWeatherMapAPIWrapper
 
-                browser_tool = WebBrowserTool(llm=llm)
+                summary_model_name = os.environ.get("SUMMARY_MODEL", "").strip()
+                assert summary_model_name, (
+                    "启用 web_browser 工具时必须设置 SUMMARY_MODEL 环境变量。"
+                )
+                summary_llm = init_chat_model(
+                    summary_model_name,
+                    thinking_budget=-1,
+                )
+
+                browser_tool = WebBrowserTool(llm=summary_llm)
                 tools.append(browser_tool)
 
                 # 暂时关闭OpenWeatherMap天气工具
