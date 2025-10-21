@@ -7,12 +7,14 @@
 from __future__ import annotations
 
 import re
+import os
 from dataclasses import dataclass
 from typing import Sequence
 from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup, NavigableString, Tag
+from langchain.chat_models import init_chat_model
 from langchain_core.callbacks import CallbackManagerForToolRun
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
@@ -110,6 +112,7 @@ class WebBrowserTool(BaseTool):
     将网页抓取与 LangChain 模型结合的工具。
 
     支持摘要模式（未指定 question）与定向查找模式（指定 question）。
+    若未显式传入 LLM，将自动读取 `SUMMARY_MODEL` 环境变量实例化模型。
     """
 
     name: str = "web_browser"
@@ -121,9 +124,10 @@ class WebBrowserTool(BaseTool):
 
     def __init__(
         self,
-        llm: BaseChatModel,
+        llm: BaseChatModel | None = None,
         embeddings: Embeddings | None = None,
         *,
+        model_name: str | None = None,
         headers: dict[str, str] | None = None,
         chunk_size: int = 2000,
         chunk_overlap: int = 200,
@@ -133,8 +137,11 @@ class WebBrowserTool(BaseTool):
         初始化 WebBrowserTool。
 
         Args:
-            llm (BaseChatModel): LangChain 聊天模型实例，用于生成最终回答。
+            llm (BaseChatModel | None): 可选的 LangChain 聊天模型实例，用于生成最终回答。
+                若未提供，则根据 `SUMMARY_MODEL` 环境变量自动初始化。
             embeddings (Embeddings | None): 预留的向量化模型，目前未启用。
+            model_name (str | None): 可选的模型名称，当 `llm` 为空时生效；
+                若未提供则读取环境变量 `SUMMARY_MODEL`。
             headers (dict[str, str] | None): 自定义 HTTP 请求头。
             chunk_size (int): 文本分块大小，默认 2000。
             chunk_overlap (int): 文本分块之间的重叠字符数，默认 200。
@@ -142,13 +149,25 @@ class WebBrowserTool(BaseTool):
 
         Raises:
             AssertionError: 当 chunk_size 或 chunk_overlap 取值非法时抛出。
+            AssertionError: 当需要自动初始化模型且无法获取模型名称时抛出。
         """
 
         super().__init__()
         assert chunk_size > 0, "chunk_size 必须为正整数。"
         assert 0 <= chunk_overlap < chunk_size, "chunk_overlap 必须小于 chunk_size。"
         assert timeout > 0, "timeout 必须大于 0。"
-        self._llm = llm
+
+        if llm is not None:
+            self._llm = llm
+            self._model_name = getattr(llm, "model_name", "custom-llm")
+        else:
+            chosen_model = (model_name or os.environ.get("SUMMARY_MODEL", "")).strip()
+            assert chosen_model, (
+                "缺少 SUMMARY_MODEL 环境变量，或未在构造时显式传入 model_name。"
+            )
+            self._model_name = chosen_model
+            self._llm = init_chat_model(chosen_model, thinking_budget=-1)
+
         self._embeddings = embeddings
         self._headers = headers or DEFAULT_HEADERS.copy()
         self._timeout = timeout
