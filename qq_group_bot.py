@@ -39,6 +39,7 @@ import os
 import re
 import sys
 import time
+import logging
 from pathlib import Path
 from dataclasses import dataclass
 from hashlib import sha1
@@ -167,6 +168,17 @@ def _load_env_from_files(files: list[str]) -> None:
 
 
 _load_env_from_files([".env.local", ".env"])
+
+# 抑制 gRPC / absl 在 Google GenAI 初始化时输出的 ALTS 噪声日志
+os.environ.setdefault("GRPC_VERBOSITY", "ERROR")
+logging.getLogger("grpc").setLevel(logging.ERROR)
+try:
+    from absl import logging as _absl_logging
+
+    _absl_logging.set_verbosity(_absl_logging.ERROR)
+    _absl_logging.use_absl_handler()
+except ModuleNotFoundError:
+    pass
 
 # 复用现有 Agent
 from sql_agent_cli_stream_plus import (
