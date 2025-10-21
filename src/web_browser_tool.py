@@ -28,6 +28,7 @@ from pydantic import BaseModel, Field, HttpUrl, field_validator
 # 降低 gRPC 启动时的 ALTS 噪声日志
 os.environ.setdefault("GRPC_VERBOSITY", "ERROR")
 
+
 DEFAULT_HEADERS: dict[str, str] = {
     "Accept": (
         "text/html,application/xhtml+xml,application/xml;"
