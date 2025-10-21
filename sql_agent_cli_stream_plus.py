@@ -56,6 +56,7 @@ from src.google_flights_client import (
 from src.google_directions_client import GoogleDirectionsClient
 from src.google_reverse_image_client import GoogleReverseImageClient
 from src.google_reverse_image_tool import GoogleReverseImageTool, ReverseImageUploader
+from src.web_browser_tool import WebBrowserTool
 from src.anilist_client import AniListAPI, ANILIST_MEDIA_SORTS
 
 ANILIST_SORT_CHOICES_TEXT: str = ", ".join(ANILIST_MEDIA_SORTS)
@@ -764,6 +765,9 @@ class SQLCheckpointAgentStreamingPlus:
                     tools = [TavilySearch(max_results=3)]
 
                 from langchain_community.utilities import OpenWeatherMapAPIWrapper
+
+                browser_tool = WebBrowserTool(llm=llm)
+                tools.append(browser_tool)
 
                 # 暂时关闭OpenWeatherMap天气工具
                 if os.environ.get("OPENWEATHERMAP_API_KEY") and False:
