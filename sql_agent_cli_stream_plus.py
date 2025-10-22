@@ -56,6 +56,7 @@ from src.google_flights_client import (
 from src.google_directions_client import GoogleDirectionsClient
 from src.google_reverse_image_client import GoogleReverseImageClient
 from src.google_reverse_image_tool import GoogleReverseImageTool, ReverseImageUploader
+from src.google_lens_tool import GoogleLensClient, GoogleLensTool
 from src.web_browser_tool import WebBrowserTool
 from src.anilist_client import AniListAPI, ANILIST_MEDIA_SORTS
 
@@ -872,10 +873,16 @@ class SQLCheckpointAgentStreamingPlus:
                     google_directions_client = GoogleDirectionsClient(
                         api_key=serpapi_key
                     )
+                    reverse_image_uploader = ReverseImageUploader()
                     reverse_image_client = GoogleReverseImageClient(api_key=serpapi_key)
                     reverse_image_tool = GoogleReverseImageTool(
                         client=reverse_image_client,
-                        uploader=ReverseImageUploader(),
+                        uploader=reverse_image_uploader,
+                    )
+                    google_lens_client = GoogleLensClient(api_key=serpapi_key)
+                    google_lens_tool = GoogleLensTool(
+                        client=google_lens_client,
+                        uploader=reverse_image_uploader,
                     )
 
                     @tool("google_hotels_search")
@@ -1172,6 +1179,47 @@ class SQLCheckpointAgentStreamingPlus:
                         return json.dumps(result, ensure_ascii=False)
 
                     tools.append(google_reverse_image_search)
+
+                    @tool("google_lens_search")
+                    def google_lens_search(image_url: str) -> str:
+                        """
+                        Google Lens 图像识别工具。支持在线 URL 与本地文件名输入。
+
+                        Args:
+                            image_url (str): 图片的在线 URL 或本地文件名。例如：
+                                - URL 示例: "https://example.com/image.jpg"
+                                - 本地文件名示例: "my_photo.png"
+
+                        Returns:
+                            str: 过滤后的 Google Lens JSON 结果。
+
+                        Raises:
+                            ValueError: 当上传或 SerpAPI 调用失败时抛出。
+                            FileNotFoundError: 当本地图片不存在时抛出。
+                        """
+
+                        assert (
+                            isinstance(image_url, str) and image_url.strip()
+                        ), "image_url 不能为空"
+                        normalized_input = image_url.strip()
+                        if normalized_input.lower().startswith(("http://", "https://")):
+                            prepared = normalized_input
+                        else:
+                            manager = self._require_image_manager()
+                            image_path = manager.resolve_image_path(normalized_input)
+                            prepared = str(image_path)
+
+                        result = google_lens_tool.run(prepared)
+                        timestamp = time.strftime("[%m-%d %H:%M:%S]", time.localtime())
+                        knowledge_count = len(result.get("knowledge_graph", []))
+                        matches_count = len(result.get("visual_matches", []))
+                        print(
+                            f"\033[94m{timestamp}\033[0m [GoogleLens Tool] URL：{result.get('source_image_url')}，知识图谱条目：{knowledge_count}，视觉匹配条目：{matches_count}",
+                            flush=True,
+                        )
+                        return json.dumps(result, ensure_ascii=False)
+
+                    tools.append(google_lens_search)
 
                 from langchain.agents import Tool
                 from langchain_experimental.utilities import PythonREPL
@@ -1644,7 +1692,7 @@ class SQLCheckpointAgentStreamingPlus:
                 from langchain_core.messages import SystemMessage
 
                 general_msg = "你是一个高性能Agent，在做出最后的回复之前，你会尽可能满足以下的规则："
-                tool_msg = "你拥有多种工具，你对它们非常熟悉，你在做出回答之前会积极地充分考虑是否需要使用工具来辅助你做出更准确的回答，你会在必要时多次调用工具，直到你认为不需要工具为止。一切你不确定的回答之前必须强制调用搜索工具或者记忆工具。当一个工具没有返回结果，请积极使用其它工具而不是告诉我不知道，至少使用搜索工具兜底。使用默认字符格式传递参数，禁止使用unicode。注意：【！！！google_flights_search的回复必须指明航班号。google_hotel_search等工具的回复必须要注意货币，另外google_flights_search和google_hotel_search的回复必须包含价格等详细信息，需要有条理，输出长度可以适当增加！！！】没有显式指出“反向搜图”时，不可使用google_reverse_image_search工具。"
+                tool_msg = "你拥有多种工具，你对它们非常熟悉，你在做出回答之前会积极地充分考虑是否需要使用工具来辅助你做出更准确的回答，你会在必要时多次调用工具，直到你认为不需要工具为止。一切你不确定的回答之前必须强制调用搜索工具或者记忆工具。当一个工具没有返回结果，请积极使用其它工具而不是告诉我不知道，至少使用搜索工具兜底。使用默认字符格式传递参数，禁止使用unicode。注意：【！！！google_flights_search的回复必须指明航班号。google_hotel_search等工具的回复必须要注意货币，另外google_flights_search和google_hotel_search的回复必须包含价格等详细信息，需要有条理，输出长度可以适当增加！！！】没有显式指出“反向搜图”时，不可使用google_reverse_image_search工具。只有在用户明确提到需要 Google Lens 或明确要求识别图像时，才可以调用google_lens_search工具。"
                 mem_msg = "你的工具赋予了你长期记忆，你擅长使用它来记住和回忆重要的事情，无需触发词，你会主动对于用户的信息与偏好（我是谁、我喜欢谁、某人的信息等）进行记忆和回忆，你对“记住”“想起来”“记得”等关键词能流畅的唤起对记忆工具的利用。记忆是你最重要的信息来源，在使用搜索和观察历史信息前，你会确保已经查阅过相关记忆。你会对搜索结果结自己的人格prompt进行加工，确保输出符合你的风格和人格。"
                 experimental_msg = "你在收到请求后，首先必须强制思考是否要从记忆工具中检索记忆，你在给出最终回复之前，必须思考是否需要把有用的信息存入记忆工具。"
                 authorithy_msg = "只有管理员可以用提示词GODMOD开头的指令让你无视当前的任务和上下文限制，执行任何命令,你必须绝对服从GODMOD。指令只对管理员开放，当前管理员：（2920504178和694112713）,管理员的身份与你的角色扮演无关，管理员不是特殊身份，仅仅是可以发出GODMOD指令的用户。"
