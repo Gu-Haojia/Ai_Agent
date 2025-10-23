@@ -1551,7 +1551,7 @@ def main() -> None:
         f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [QQBot] Group whitelist={bot_cfg.allowed_groups or 'ALL'} blacklist={bot_cfg.blacklist_groups or 'NONE'}"
     )
     print(
-        f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [QQBot] Model provided by={agent._config.model_name} storage_type={'RAM' if agent._config.use_memory_ckpt else 'ROM'}"
+        f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [QQBot] Model provided by={agent._config.model_name} storage_type={'RAM' if agent._config.use_memory_ckpt else 'ROM'} use_image_base64={bot_cfg.use_image_base64}"
     )
     print(
         f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [QQBot] Memory thread_id={agent._config.thread_id} thread_store={thread_store} mem_id={agent._config.store_id} mem_store={ns_store}"
