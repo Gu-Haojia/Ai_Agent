@@ -192,7 +192,7 @@ class GoogleLensTool:
                 if trimmed:
                     vm_items.append(trimmed)
         if vm_items:
-            retained["visual_matches"] = vm_items
+            retained["visual_matches"] = vm_items[:10]  # 最多保留 10 条
 
         reverse_info = payload.get("reverse_image_search")
         if isinstance(reverse_info, dict):
