@@ -173,8 +173,73 @@ from sql_agent_cli_stream_plus import (
     AgentConfig,
     SQLCheckpointAgentStreamingPlus,
 )
+from src.google_reverse_image_tool import ReverseImageUploader
 from image_storage import GeneratedImage, ImageStorageManager, StoredImage
 from daily_task import DailyWeatherTask, parse_daily_task_groups
+
+_IMAGE_UPLOADER: Optional[ReverseImageUploader] = None
+_IMAGE_UPLOADER_LOCK = Lock()
+
+
+def _should_embed_base64_images() -> bool:
+    """
+    根据 LOCAL_IMG 环境变量判断是否使用 Base64 内联图片。
+
+    Returns:
+        bool: True 表示使用 Base64，False 表示上传到公网后引用 URL。
+
+    Raises:
+        AssertionError: 当环境变量设置为除 ``0`` 和 ``1`` 之外的值时抛出。
+    """
+
+    value = os.environ.get("LOCAL_IMG")
+    if value is None:
+        return True
+    normalized = value.strip()
+    if not normalized:
+        return True
+    assert normalized in {"0", "1"}, "LOCAL_IMG 仅支持设置为 0 或 1"
+    return normalized == "1"
+
+
+def _get_reverse_image_uploader() -> ReverseImageUploader:
+    """
+    获取 ReverseImageUploader 单例实例。
+
+    Returns:
+        ReverseImageUploader: 用于上传图片至临时公网存储的实例。
+
+    Raises:
+        None.
+    """
+
+    global _IMAGE_UPLOADER
+    with _IMAGE_UPLOADER_LOCK:
+        if _IMAGE_UPLOADER is None:
+            _IMAGE_UPLOADER = ReverseImageUploader()
+        return _IMAGE_UPLOADER
+
+
+def _resolve_stored_image_url(stored: StoredImage) -> str:
+    """
+    按配置返回多模态消息需要的图片 URL。
+
+    Args:
+        stored (StoredImage): 已保存的图像对象。
+
+    Returns:
+        str: Base64 data URL 或上传后的公网链接。
+
+    Raises:
+        AssertionError: 当 stored 类型不符或配置非法时抛出。
+        ValueError: 上传到公网存储失败时抛出。
+    """
+
+    assert isinstance(stored, StoredImage), "stored 必须为 StoredImage 实例"
+    if _should_embed_base64_images():
+        return stored.data_url()
+    uploader = _get_reverse_image_uploader()
+    return uploader.upload(stored.path)
 
 
 @dataclass
@@ -562,7 +627,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
             content.append(
                 {
                     "type": "image_url",
-                    "image_url": {"url": stored.data_url()},
+                    "image_url": {"url": _resolve_stored_image_url(stored)},
                 }
             )
         return content
