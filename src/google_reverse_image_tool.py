@@ -7,6 +7,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse, urlunparse
 
 import requests
 
@@ -19,12 +20,12 @@ class ReverseImageUploader:
     将本地图片上传到临时公网存储的工具类。
 
     Args:
-        endpoint (str): 上传服务地址，默认 ``https://0x0.st``。
+        endpoint (str): 上传服务地址，默认 ``https://tmpfiles.org/api/v1/upload``。
         user_agent (str): 提供给上传服务的 User-Agent，默认 ``curl/8.1.2``。
         timeout_seconds (int): 上传请求超时时间（秒），默认 30。
     """
 
-    endpoint: str = "https://0x0.st"
+    endpoint: str = "https://tmpfiles.org/api/v1/upload"
     user_agent: str = "curl/8.1.2"
     timeout_seconds: int = 30
 
@@ -36,7 +37,7 @@ class ReverseImageUploader:
             path (Path): 待上传的图片路径。
 
         Returns:
-            str: 上传成功后返回的公网 URL。
+            str: 上传成功后返回的直接下载 URL。
 
         Raises:
             AssertionError: 当路径不存在或不是文件时抛出。
@@ -44,27 +45,63 @@ class ReverseImageUploader:
         """
 
         assert path.is_file(), f"本地图片不存在：{path}"
-        headers = {"User-Agent": self.user_agent}
-        with path.open("rb") as file_handle:
-            files = {"file": (path.name, file_handle.read())}
+        headers = {
+            "User-Agent": self.user_agent,
+            "Accept": "application/json",
+        }
         try:
-            response = requests.post(
-                self.endpoint,
-                files=files,
-                headers=headers,
-                timeout=self.timeout_seconds,
-            )
+            with path.open("rb") as file_handle:
+                response = requests.post(
+                    self.endpoint,
+                    files={"file": (path.name, file_handle)},
+                    headers=headers,
+                    timeout=self.timeout_seconds,
+                )
+        except OSError as exc:
+            raise ValueError(f"读取本地图片失败：{path}") from exc
         except requests.RequestException as exc:
             raise ValueError("上传图片到临时存储失败，请检查网络。") from exc
 
         if response.status_code >= 400:
             raise ValueError(f"上传服务返回异常状态码：HTTP {response.status_code}。")
 
-        uploaded_url = response.text.strip()
-        clean_url, _, _fragment = uploaded_url.partition("#")
-        if not clean_url.startswith("http"):
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise ValueError("上传服务返回内容无法解析为 JSON。") from exc
+
+        if not isinstance(payload, dict):
+            raise ValueError("上传服务返回内容异常，缺少字典结构。")
+
+        status_value = payload.get("status")
+        if status_value != "success":
+            error_message = payload.get("error") or "上传服务返回失败状态。"
+            raise ValueError(f"上传服务提示失败：{error_message}")
+
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            raise ValueError("上传服务返回内容异常，缺少 data 字段。")
+
+        link = data.get("url")
+        if not isinstance(link, str):
+            raise ValueError("上传服务返回内容异常，缺少链接地址。")
+
+        clean_link = link.strip()
+        if not clean_link.startswith("http"):
             raise ValueError("上传服务返回内容异常，未提供可访问的 URL。")
-        return clean_url
+
+        parsed = urlparse(clean_link)
+        download_path = parsed.path
+        if not download_path.startswith("/dl/"):
+            if download_path.startswith("/"):
+                download_path = "/dl" + download_path
+            else:
+                download_path = f"/dl/{download_path}"
+
+        download_link = urlunparse(
+            parsed._replace(path=download_path, params="", query="", fragment="")
+        )
+        return download_link
 
 
 @dataclass
