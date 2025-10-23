@@ -181,27 +181,6 @@ _IMAGE_UPLOADER: Optional[ReverseImageUploader] = None
 _IMAGE_UPLOADER_LOCK = Lock()
 
 
-def _should_embed_base64_images() -> bool:
-    """
-    根据 LOCAL_IMG 环境变量判断是否使用 Base64 内联图片。
-
-    Returns:
-        bool: True 表示使用 Base64，False 表示上传到公网后引用 URL。
-
-    Raises:
-        AssertionError: 当环境变量设置为除 ``0`` 和 ``1`` 之外的值时抛出。
-    """
-
-    value = os.environ.get("LOCAL_IMG")
-    if value is None:
-        return True
-    normalized = value.strip()
-    if not normalized:
-        return True
-    assert normalized in {"0", "1"}, "LOCAL_IMG 仅支持设置为 0 或 1"
-    return normalized == "1"
-
-
 def _get_reverse_image_uploader() -> ReverseImageUploader:
     """
     获取 ReverseImageUploader 单例实例。
@@ -220,12 +199,13 @@ def _get_reverse_image_uploader() -> ReverseImageUploader:
         return _IMAGE_UPLOADER
 
 
-def _resolve_stored_image_url(stored: StoredImage) -> str:
+def _resolve_stored_image_url(stored: StoredImage, use_base64: bool) -> str:
     """
     按配置返回多模态消息需要的图片 URL。
 
     Args:
         stored (StoredImage): 已保存的图像对象。
+        use_base64 (bool): True 使用 Base64 data URL，False 上传并返回公网链接。
 
     Returns:
         str: Base64 data URL 或上传后的公网链接。
@@ -236,7 +216,7 @@ def _resolve_stored_image_url(stored: StoredImage) -> str:
     """
 
     assert isinstance(stored, StoredImage), "stored 必须为 StoredImage 实例"
-    if _should_embed_base64_images():
+    if use_base64:
         return stored.data_url()
     uploader = _get_reverse_image_uploader()
     return uploader.upload(stored.path)
@@ -254,6 +234,7 @@ class BotConfig:
     allowed_groups: tuple[int, ...] = ()
     blacklist_groups: tuple[int, ...] = ()
     cmd_allowed_users: tuple[int, ...] = ()  # 命令白名单用户（为空表示放行）
+    use_local_image_base64: bool = True
 
     @staticmethod
     def from_env() -> "BotConfig":
@@ -281,6 +262,13 @@ class BotConfig:
             cmd_allowed = tuple(
                 int(x) for x in cmd_env.split(",") if x.strip().isdigit()
             )
+        local_img_env = os.environ.get("LOCAL_IMG")
+        use_local_image_base64 = True
+        if local_img_env is not None:
+            normalized = local_img_env.strip()
+            if normalized:
+                assert normalized in {"0", "1"}, "LOCAL_IMG 仅支持设置为 0 或 1"
+                use_local_image_base64 = normalized == "1"
         cfg = BotConfig(
             host=host,
             port=port,
@@ -290,6 +278,7 @@ class BotConfig:
             allowed_groups=groups,
             blacklist_groups=blacklist,
             cmd_allowed_users=cmd_allowed,
+            use_local_image_base64=use_local_image_base64,
         )
         # 基础校验
         assert cfg.api_base, "缺少 ONEBOT_API_BASE，例如 http://127.0.0.1:3000"
@@ -589,9 +578,9 @@ class QQBotHandler(BaseHTTPRequestHandler):
             raise AssertionError("图像存储管理器尚未配置")
         return cls.image_storage
 
-    @staticmethod
+    @classmethod
     def _build_multimodal_content(
-        model_input: str, images: Sequence[StoredImage]
+        cls, model_input: str, images: Sequence[StoredImage]
     ) -> list[dict[str, object]]:
         """
         构造多模态消息内容列表。
@@ -612,6 +601,10 @@ class QQBotHandler(BaseHTTPRequestHandler):
                     "text": f"用户同时附带了 {len(images)} 张图片，请结合视觉分析并不要回传原始图片。",
                 }
             )
+        cfg = getattr(cls, "bot_cfg", None)
+        use_base64 = True
+        if isinstance(cfg, BotConfig):
+            use_base64 = cfg.use_local_image_base64
         for idx, stored in enumerate(images, 1):
             file_path = Path(stored.path)
             assert file_path.name, "图像文件名不能为空"
@@ -627,7 +620,9 @@ class QQBotHandler(BaseHTTPRequestHandler):
             content.append(
                 {
                     "type": "image_url",
-                    "image_url": {"url": _resolve_stored_image_url(stored)},
+                    "image_url": {
+                        "url": _resolve_stored_image_url(stored, use_base64)
+                    },
                 }
             )
         return content
