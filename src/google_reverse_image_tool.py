@@ -7,6 +7,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse, urlunparse
 
 import requests
 
@@ -36,7 +37,7 @@ class ReverseImageUploader:
             path (Path): 待上传的图片路径。
 
         Returns:
-            str: 上传成功后返回的公网 URL。
+            str: 上传成功后返回的直接下载 URL。
 
         Raises:
             AssertionError: 当路径不存在或不是文件时抛出。
@@ -88,7 +89,19 @@ class ReverseImageUploader:
         clean_link = link.strip()
         if not clean_link.startswith("http"):
             raise ValueError("上传服务返回内容异常，未提供可访问的 URL。")
-        return clean_link
+
+        parsed = urlparse(clean_link)
+        download_path = parsed.path
+        if not download_path.startswith("/dl/"):
+            if download_path.startswith("/"):
+                download_path = "/dl" + download_path
+            else:
+                download_path = f"/dl/{download_path}"
+
+        download_link = urlunparse(
+            parsed._replace(path=download_path, params="", query="", fragment="")
+        )
+        return download_link
 
 
 @dataclass
