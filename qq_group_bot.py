@@ -175,7 +175,7 @@ from sql_agent_cli_stream_plus import (
 )
 from src.google_reverse_image_tool import ReverseImageUploader
 from image_storage import GeneratedImage, ImageStorageManager, StoredImage
-from daily_task import DailyWeatherTask, parse_daily_task_groups
+from daily_task import DailyWeatherTask, DailyTicketTask, parse_daily_task_groups
 
 _IMAGE_UPLOADER: Optional[ReverseImageUploader] = None
 _IMAGE_UPLOADER_LOCK = Lock()
@@ -1542,6 +1542,17 @@ def main() -> None:
         run_time=nightly_time,
     )
     nightly_task.start()
+
+    ticket_env = os.environ.get("TICKET_TASK", "").strip()
+    ticket_time = os.environ.get("TICKET_TASK_TIME", "22:05").strip()
+    ticket_groups = parse_daily_task_groups(ticket_env)
+    ticket_task = DailyTicketTask(
+        agent,
+        _send_daily_text,
+        ticket_groups,
+        run_time=ticket_time,
+    )
+    ticket_task.start()
 
     server = ThreadingHTTPServer((bot_cfg.host, bot_cfg.port), QQBotHandler)
     print(

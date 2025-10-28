@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import time
 from datetime import datetime
@@ -15,6 +16,7 @@ from typing import Callable, Optional, Sequence, TypeAlias
 import schedule
 
 from sql_agent_cli_stream_plus import SQLCheckpointAgentStreamingPlus
+from src.asobi_ticket_agent import AsobiTicketQuery
 
 if False:  # pragma: no cover - 类型检查使用，避免循环导入
     from qq_group_bot import BotConfig  # noqa: F401
@@ -169,6 +171,150 @@ class DailyWeatherTask:
                 )
             except Exception as err:
                 sys.stderr.write(f"[DailyTask] 群 {gid} 发送失败: {err}\n")
+
+    def stop(self) -> None:
+        """停止调度线程（若未启动则忽略）。"""
+        if not self._started:
+            return
+        self._stop_event.set()
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=5)
+
+
+class DailyTicketTask:
+    """
+    每日检测偶像大师抽選更新的调度器。
+
+    在指定时间运行 AsobiTicketQuery 的 check 模式，若检测到新增抽選，
+    则向 Agent 提问并将回答广播至目标群聊。
+    """
+
+    def __init__(
+        self,
+        agent: SQLCheckpointAgentStreamingPlus,
+        send_func: SendGroupText,
+        group_ids: Sequence[int],
+        run_time: str = "10:00",
+        prompt: str = "检测到偶像大师抽选更新了，请使用工具的update模式，整理详细的新抽选信息列表。",
+        query: Optional[AsobiTicketQuery] = None,
+    ) -> None:
+        """
+        初始化抽選检测调度器。
+
+        Args:
+            agent (SQLCheckpointAgentStreamingPlus): 已初始化的 Agent 实例。
+            send_func (SendGroupText): 发送文本到群聊的回调函数。
+            group_ids (Sequence[int]): 准备广播的目标群号列表。
+            run_time (str): 每日触发时间，必须为 HH:MM（24 小时制）。
+            prompt (str): 当检测到更新时，发送给 Agent 的提问。
+            query (Optional[AsobiTicketQuery]): 可选的查询实例，未提供时自动创建。
+
+        Raises:
+            AssertionError: 当参数不符合预期时抛出。
+        """
+        assert isinstance(prompt, str) and prompt.strip(), "prompt 不能为空"
+        assert isinstance(run_time, str) and run_time.strip(), "run_time 不能为空"
+        try:
+            datetime.strptime(run_time, "%H:%M")
+        except ValueError as exc:
+            raise AssertionError("run_time 必须为 HH:MM（24 小时制）") from exc
+        assert callable(send_func), "send_func 必须可调用"
+        assert isinstance(agent, SQLCheckpointAgentStreamingPlus), "agent 类型非法"
+        normalized_groups = tuple(int(gid) for gid in group_ids if int(gid) > 0)
+
+        self._agent = agent
+        self._send_func = send_func
+        self._group_ids: tuple[int, ...] = normalized_groups
+        self._run_time = run_time
+        self._prompt = prompt.strip()
+        self._query = query or AsobiTicketQuery()
+        self._scheduler = schedule.Scheduler()
+        self._stop_event = Event()
+        self._thread: Optional[Thread] = None
+        self._started = False
+
+    def start(self) -> None:
+        """
+        启动调度线程（若未配置群号则直接返回）。
+
+        Raises:
+            AssertionError: 当调度器已启动时重复调用。
+        """
+        if not self._group_ids:
+            print(
+                f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m "
+                "[TicketTask] 未配置 TICKET_TASK，跳过抽選检测。",
+                flush=True,
+            )
+            return
+        assert not self._started, "调度器已启动，请勿重复调用 start()"
+        self._scheduler.every().day.at(self._run_time).do(self._execute_once)
+        self._thread = Thread(target=self._run_loop, name="daily-ticket-task", daemon=True)
+        self._started = True
+        self._thread.start()
+        print(
+            f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m "
+            f"[TicketTask] 调度已启动，将在每日 {self._run_time} 检测抽選更新。目标群：{self._group_ids}",
+            flush=True,
+        )
+
+    def _run_loop(self) -> None:
+        """运行调度循环，通过动态等待避免频繁唤醒。"""
+        while not self._stop_event.is_set():
+            self._scheduler.run_pending()
+            idle_attr = getattr(self._scheduler, "idle_seconds", None)
+            idle = None
+            if callable(idle_attr):
+                idle = idle_attr()
+            else:
+                idle = idle_attr
+            if idle is None:
+                idle = 60.0
+            if idle < 0:
+                idle = 0.0
+            wait_seconds = min(idle, 3600.0)
+            self._stop_event.wait(wait_seconds)
+
+    def _execute_once(self) -> None:
+        """执行一次抽選检测任务。"""
+        timestamp = time.strftime("[%m-%d %H:%M:%S]", time.localtime())
+        print(
+            f"\033[94m{timestamp}\033[0m [TicketTask] 开始检测抽選更新。",
+            flush=True,
+        )
+        try:
+            check_raw = self._query.run("check")
+            check_data = json.loads(check_raw)
+            has_update = bool(check_data.get("has_update"))
+        except Exception as err:
+            sys.stderr.write(f"[TicketTask] 调用 AsobiTicketQuery(check) 失败: {err}\n")
+            return
+
+        if not has_update:
+            print(
+                f"\033[94m{timestamp}\033[0m [TicketTask] 当前没有新的抽選开启。",
+                flush=True,
+            )
+            return
+
+        try:
+            answer = self._agent.chat_once_stream(self._prompt)
+            assert isinstance(answer, str) and answer.strip(), "Agent 未返回文本内容"
+            reply = answer.strip()
+        except Exception as err:
+            sys.stderr.write(f"[TicketTask] 调用 Agent 失败: {err}\n")
+            return
+
+        reply = f"🎟️ {reply}"
+        for gid in self._group_ids:
+            try:
+                self._send_func(gid, reply)
+                print(
+                    f"\033[94m{timestamp}\033[0m [TicketTask] 已发送更新到群 {gid}",
+                    flush=True,
+                )
+            except Exception as err:
+                sys.stderr.write(f"[TicketTask] 群 {gid} 发送失败: {err}\n")
 
     def stop(self) -> None:
         """停止调度线程（若未启动则忽略）。"""
