@@ -60,6 +60,7 @@ from src.google_lens_tool import GoogleLensClient, GoogleLensTool
 from src.web_browser_tool import WebBrowserTool
 from src.anilist_client import AniListAPI, ANILIST_MEDIA_SORTS
 from src.timer_reminder import TimerReminderManager
+from src.asobi_ticket_agent import AsobiTicketQuery
 
 ANILIST_SORT_CHOICES_TEXT: str = ", ".join(ANILIST_MEDIA_SORTS)
 
@@ -616,6 +617,7 @@ class SQLCheckpointAgentStreamingPlus:
             os.environ.get("REMINDER_STORE_FILE", ".qq_reminders.json")
         )
         self._reminder_scheduler = TimerReminderManager(self._reminder_store)
+        self._asobi_query = AsobiTicketQuery()
         self._image_manager: Optional[ImageStorageManager] = None
         self._generated_images: list[GeneratedImage] = []
 
@@ -1306,6 +1308,29 @@ class SQLCheckpointAgentStreamingPlus:
                     )
 
                 tools.append(set_timer)
+
+                asobi_ticket_query = self._asobi_query
+
+                @tool
+                def asobi_ticket_tool(mode: str) -> str:
+                    """
+                    查询 ASOBI偶像大师系列演出门票 抽選信息。
+
+                    Args:
+                        mode (str): 模式，可选 ``list``（展示当前所有活跃抽选）或 ``update``（更新当前状态）。
+
+                    Returns:
+                        str: JSON 字符串形式的抽選信息。
+
+                    Raises:
+                        AssertionError: 当 mode 非法时抛出。
+                    """
+                    assert isinstance(mode, str) and mode.strip(), "mode 不能为空"
+                    normalized = mode.strip().lower()
+                    assert normalized in {"list", "update"}, "mode 仅支持 list 或 update"
+                    return asobi_ticket_query.run(normalized)
+
+                tools.append(asobi_ticket_tool)
 
                 # 持久记忆：langmem 工具（依官方 API 使用命名空间 + runtime config）
                 try:

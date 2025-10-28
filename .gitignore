@@ -43,5 +43,6 @@ prompts/
 AGENTS.md
 run_qq_group_bot.sh
 
-#images
+# Data
 images/
+ticket_data/
