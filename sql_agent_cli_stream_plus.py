@@ -1312,9 +1312,9 @@ class SQLCheckpointAgentStreamingPlus:
                 asobi_ticket_query = self._asobi_query
 
                 @tool
-                def asobi_ticket_tool(mode: str) -> str:
+                def imas_ticket_tool(mode: str) -> str:
                     """
-                    查询 ASOBI偶像大师系列演出门票 抽選信息。
+                    查询 IMAS 偶像大师系列演出门票 抽選信息。
 
                     Args:
                         mode (str): 模式，可选 ``list``（展示当前所有活跃抽选）或 ``update``（更新当前状态）。
@@ -1330,7 +1330,7 @@ class SQLCheckpointAgentStreamingPlus:
                     assert normalized in {"list", "update"}, "mode 仅支持 list 或 update"
                     return asobi_ticket_query.run(normalized)
 
-                tools.append(asobi_ticket_tool)
+                tools.append(imas_ticket_tool)
 
                 # 持久记忆：langmem 工具（依官方 API 使用命名空间 + runtime config）
                 try:
