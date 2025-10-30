@@ -1517,7 +1517,7 @@ def main() -> None:
         assert isinstance(text, str) and text.strip(), "text 必须为非空文本"
         _send_group_msg(bot_cfg.api_base, group_id, text, bot_cfg.access_token)
 
-    daily_question = "这是一个每日简报任务，你需要包含：今天的日期与星期，现在是几点几分，今天是否是节日或者特殊的日子（中国/日本/世界通用）[没有就不回答，不要声明不是节日]，最近一周会不会有法定假日（中国/日本）[没有就不回答，不要声明不是法定假日][分段]；今天京都的天气怎么样（配上对应的emoji，必须有气温，如果下雨需要精确到小时）[分段]；以及想说的话，控制在大于120字，200字以内。"
+    daily_question = "这是一个每日简报任务，你需要包含：今天的日期与星期，现在是几点几分，今天是否是节日或者特殊的日子（中国/日本/世界通用）[没有就不回答，不要声明不是节日]，最近一周会不会有法定假日（中国/日本）[没有就不回答，不要声明不是法定假日][分段]；今天京都的天气怎么样（配上对应的emoji，必须有气温，如果下雨需要精确到小时）[分段]；使用抽选工具list模式，参看是否有今日截止的抽选，如果有就提醒并创建截止时间提前一小时的reminder[没有就不回答]。以及想说的话，控制在大于120字，200字以内。"
     daily_env = os.environ.get("DAILY_TASK", "").strip()
     daily_time = os.environ.get("DAILY_TASK_TIME", "09:00").strip()
     daily_groups = parse_daily_task_groups(daily_env)

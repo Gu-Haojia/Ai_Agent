@@ -1277,7 +1277,7 @@ class SQLCheckpointAgentStreamingPlus:
                         group_id (int): 当前Group。
                         user_id (int): 当前User_id。
                         description (str): 提供给工具的简要的提醒概括。
-                        answer (str): 符合当前说话风格的提醒内容。
+                        answer (str): 提醒到时间后预定发送给用户的，符合当前说话风格的提醒内容。
 
                     Returns:
                         str: 是否创建成功的提示信息。
