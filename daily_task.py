@@ -152,7 +152,8 @@ class DailyWeatherTask:
             flush=True,
         )
         try:
-            answer = self._agent.chat_once_stream(self._question)
+            thread_id = self._build_thread_id()
+            answer = self._agent.chat_once_stream(self._question, thread_id=thread_id)
             assert isinstance(answer, str) and answer.strip(), "Agent 未返回文本内容"
             reply = answer.strip()
         except Exception as err:
@@ -180,6 +181,16 @@ class DailyWeatherTask:
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=5)
 
+    def _build_thread_id(self) -> str:
+        """
+        构建本次运行使用的线程 ID，避免沿用历史上下文。
+
+        Returns:
+            str: 基于时间戳拼接的唯一线程标识。
+        """
+        now_tag = datetime.now().strftime("%Y%m%d%H%M%S")
+        return f"daily-weather-{now_tag}"
+
 
 class DailyTicketTask:
     """
@@ -195,7 +206,7 @@ class DailyTicketTask:
         send_func: SendGroupText,
         group_ids: Sequence[int],
         run_time: str = "10:00",
-        prompt: str = "检测到偶像大师抽选更新了，请使用工具的update模式，整理详细的新抽选信息列表。",
+        prompt: str = "检测到偶像大师抽选更新了，请使用工具的update模式，整理详细的新抽选信息列表。并创建截止时间提前一小时的reminder，通知群1070489110的用户2920504178。",
         query: Optional[AsobiTicketQuery] = None,
     ) -> None:
         """
@@ -298,7 +309,8 @@ class DailyTicketTask:
             return
 
         try:
-            answer = self._agent.chat_once_stream(self._prompt)
+            thread_id = self._build_thread_id()
+            answer = self._agent.chat_once_stream(self._prompt, thread_id=thread_id)
             assert isinstance(answer, str) and answer.strip(), "Agent 未返回文本内容"
             reply = answer.strip()
         except Exception as err:
@@ -323,3 +335,13 @@ class DailyTicketTask:
         self._stop_event.set()
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=5)
+
+    def _build_thread_id(self) -> str:
+        """
+        构建抽選检测任务专用的线程 ID。
+
+        Returns:
+            str: 使用当前时间生成的唯一线程标识。
+        """
+        now_tag = datetime.now().strftime("%Y%m%d%H%M%S")
+        return f"daily-ticket-{now_tag}"
