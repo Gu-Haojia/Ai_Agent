@@ -37,7 +37,6 @@ LangGraph/
 |-- ticket_data/                      # Ticket 查询缓存（自动生成）
 |-- images/ / logs/ / local_backup/   # 输出、日志与备份
 |-- requirements.txt
-|-- AGENTS.md                         # 协作规范
 ```
 
 更多模块速览：
