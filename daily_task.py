@@ -53,6 +53,43 @@ def parse_daily_task_groups(raw: str) -> tuple[int, ...]:
     return tuple(groups)
 
 
+def parse_schedule_times(raw: str | Sequence[str]) -> tuple[str, ...]:
+    """
+    解析并校验逗号分隔的 HH:MM 时间列表。
+
+    Args:
+        raw (str | Sequence[str]): 待解析的单个时间字符串或时间序列。
+
+    Returns:
+        tuple[str, ...]: 去重后的有效时间列表，按输入顺序保留。
+
+    Raises:
+        AssertionError: 当存在非法格式或最终为空时抛出。
+    """
+    slots: list[str] = []
+    seen: set[str] = set()
+    if isinstance(raw, str):
+        candidates = raw.split(",")
+    else:
+        assert isinstance(raw, Sequence), "run_time 必须为字符串或字符串序列"
+        candidates = list(raw)
+    for token in candidates:
+        assert isinstance(token, str), "run_time 序列的元素必须为字符串"
+        entry = token.strip()
+        if not entry:
+            continue
+        try:
+            datetime.strptime(entry, "%H:%M")
+        except ValueError as exc:
+            raise AssertionError("run_time 必须为 HH:MM（24 小时制）") from exc
+        if entry in seen:
+            continue
+        seen.add(entry)
+        slots.append(entry)
+    assert slots, "run_time 至少包含一个有效时间"
+    return tuple(slots)
+
+
 class DailyWeatherTask:
     """
     每日定时向 Agent 提问天气并广播文本结果的调度器。
@@ -205,7 +242,7 @@ class DailyTicketTask:
         agent: SQLCheckpointAgentStreamingPlus,
         send_func: SendGroupText,
         group_ids: Sequence[int],
-        run_time: str = "10:00",
+        run_time: str | Sequence[str] = "10:00",
         prompt: str = "检测到偶像大师抽选更新了，请使用工具的update模式，整理详细的新抽选信息列表。并创建截止时间提前一小时的reminder，通知群1070489110的用户2920504178。",
         query: Optional[AsobiTicketQuery] = None,
     ) -> None:
@@ -216,7 +253,7 @@ class DailyTicketTask:
             agent (SQLCheckpointAgentStreamingPlus): 已初始化的 Agent 实例。
             send_func (SendGroupText): 发送文本到群聊的回调函数。
             group_ids (Sequence[int]): 准备广播的目标群号列表。
-            run_time (str): 每日触发时间，必须为 HH:MM（24 小时制）。
+            run_time (str | Sequence[str]): 每日触发时间，可以为单个字符串或逗号分隔的时间序列。
             prompt (str): 当检测到更新时，发送给 Agent 的提问。
             query (Optional[AsobiTicketQuery]): 可选的查询实例，未提供时自动创建。
 
@@ -224,11 +261,6 @@ class DailyTicketTask:
             AssertionError: 当参数不符合预期时抛出。
         """
         assert isinstance(prompt, str) and prompt.strip(), "prompt 不能为空"
-        assert isinstance(run_time, str) and run_time.strip(), "run_time 不能为空"
-        try:
-            datetime.strptime(run_time, "%H:%M")
-        except ValueError as exc:
-            raise AssertionError("run_time 必须为 HH:MM（24 小时制）") from exc
         assert callable(send_func), "send_func 必须可调用"
         assert isinstance(agent, SQLCheckpointAgentStreamingPlus), "agent 类型非法"
         normalized_groups = tuple(int(gid) for gid in group_ids if int(gid) > 0)
@@ -236,7 +268,7 @@ class DailyTicketTask:
         self._agent = agent
         self._send_func = send_func
         self._group_ids: tuple[int, ...] = normalized_groups
-        self._run_time = run_time
+        self._run_times: tuple[str, ...] = parse_schedule_times(run_time)
         self._prompt = prompt.strip()
         self._query = query or AsobiTicketQuery()
         self._scheduler = schedule.Scheduler()
@@ -259,13 +291,15 @@ class DailyTicketTask:
             )
             return
         assert not self._started, "调度器已启动，请勿重复调用 start()"
-        self._scheduler.every().day.at(self._run_time).do(self._execute_once)
+        for slot in self._run_times:
+            self._scheduler.every().day.at(slot).do(self._execute_once)
         self._thread = Thread(target=self._run_loop, name="daily-ticket-task", daemon=True)
         self._started = True
         self._thread.start()
+        times_display = "、".join(self._run_times)
         print(
             f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m "
-            f"[TicketTask] 调度已启动，将在每日 {self._run_time} 检测抽選更新。目标群：{self._group_ids}",
+            f"[TicketTask] 调度已启动，将在每日 {times_display} 检测抽選更新。目标群：{self._group_ids}",
             flush=True,
         )
 
