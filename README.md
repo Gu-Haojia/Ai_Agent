@@ -1,192 +1,197 @@
-# LangGraph Agents（流式 + 工具 + SQL 检查点）
+# LangGraph Agents
 
-本项目演示了使用 LangGraph/LangChain 构建具备网页搜索工具、检查点持久化以及流式输出能力的交互式 Agent。
+> 一套面向 QQ 群与命令行的 LangGraph 多工具 Agent 栈：流式输出、SQL/内存检查点、NapCat Bot、每日自动任务与票务提醒一个都不少。
 
-- `sql_agent_cli_stream.py`: 流式 + 可暂停（Ctrl-C）+ SQL/内存检查点，自动/按需调用网页搜索工具
-- `sql_agent_cli_stream_plus.py`: 增强版，多轮工具（可强制调用）、先 Tool 后 Agent 的输出顺序、强化“基于工具结果综合”
-- `sql_agent_cli.py`: 非流式基础版（SQL 检查点），演示核心结构
+## ✨ 核心亮点
 
-> 说明：仓库中为本地调试方便保留了示例 API Key 与 brew 启停（请仅在本机调试使用）。在你的环境中，建议通过环境变量覆盖这两个值。
+- **LangGraph SQL Agent**：`sql_agent_cli_stream_plus.py` 提供流式 SSE、可中断执行、自动/强制工具调用及“基于工具结论输出”策略，配合 PostgreSQL / 内存检查点可实现会话回放与时间旅行调试。
+- **NapCat QQ 机器人**：`qq_group_bot.py` 结合 OneBot v11 回调、命令白名单、线程持久化及健康检查，为多个群提供安全的 @ 交互体验。
+- **自动化任务**：`daily_task.py` 内置日间/夜间播报与偶像大师抽选监控，可多时段触发并向多个群广播，支持提醒与 Ticket 数据缓存。
+- **工具矩阵**：内置 Tavily 搜索、Visual Crossing 天气、Google Directions/Flights/Hotels、Web Browser、Reverse Image、定时提醒等工具节点，可按需扩展。
+- **可观测与可维护**：命令行 REPL 自带 `:history` / `:replay` / `:thread`，QQ Bot 通过 `.qq_group_threads.json`、`ticket_data/` 与 `logs/` 让状态可追踪；测试用例覆盖天气、多模态链路，确保改动可验证。
 
-## 快速开始
+## 📁 项目结构
 
-### 1) 创建并激活虚拟环境
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
+```
+LangGraph/
+|-- sql_agent_cli_stream_plus.py      # 增强版流式 Agent（推荐入口）
+|-- sql_agent_cli_stream.py           # 标准流式 + 可暂停
+|-- sql_agent_cli.py                  # 非流式基础示例
+|-- daily_task.py                     # 每日播报 / Ticket 调度器
+|-- qq_group_bot.py                   # NapCat / OneBot v11 QQ 机器人
+|-- run_qq_group_bot.sh               # 机器人一键启动脚本（自动激活 .venv311）
+|-- image_storage.py                  # 生成图像持久化抽象
+|-- prompts/                          # 系统提示词模板
+|-- docs/                             # 部署与使用文档（如 `lagrange_deploy.md`）
+|-- src/
+|   |-- agent_with_timetravel.py      # LangGraph 时间旅行调试 Agent
+|   |-- chatbot.py / addtools.py      # Agent 主体与工具注册
+|   |-- asobi_ticket_agent.py         # 偶像大师抽选抓取与解析
+|   |-- google_* / web_browser_tool.py# 多种外部工具客户端
+|   |-- visual_crossing_weather.py    # 天气工具封装
+|   |-- timer_reminder.py             # 定时/提醒工具
+|   `-- ...                           # 其余功能模块
+|-- tests
+|   |-- test_multimodal_unit.py
+|   `-- test_visual_crossing_weather.py
+|-- ticket_data/                      # Ticket 查询缓存（自动生成）
+|-- images/ / logs/ / local_backup/   # 输出、日志与备份
+|-- requirements.txt
+|-- AGENTS.md                         # 协作规范
 ```
 
-### 2) 安装依赖
+更多模块速览：
+
+| 模块 | 说明 |
+| --- | --- |
+| `src/web_browser_tool.py` | 将 LangChain Web Browser 能力接入 Graph，提供半结构化网页解析。 |
+| `src/google_reverse_image_tool.py` | 上传并比对图片，支持 NapCat 群内以图搜图。 |
+| `src/visual_crossing_weather.py` | 调用 Visual Crossing API，供每日播报与 CLI 使用。 |
+| `src/agent_with_timetravel.py` | 通过 checkpoint “时间旅行”快速复盘会话。 |
+| `image_storage.py` | 对生成图片进行哈希、落盘、回查，支持 QQ Bot 与多模态测试。 |
+
+## ⚙️ 快速开始
+
+1. 安装 Python 3.11，并在仓库根目录创建专用虚拟环境：
+   ```bash
+   python3 -m venv .venv311
+   source .venv311/bin/activate
+   ```
+2. 安装依赖：
+   ```bash
+   pip install -r requirements.txt
+   ```
+3. 复制 `.env`（或自行创建），填入 API Key / 数据库等配置。
+4. （可选）启动 PostgreSQL（见下文）以启用 SQL 检查点；否则设置 `DRY_RUN=1` 走内存模式。
+5. 运行你需要的入口（CLI / QQ Bot / 自动任务）。
+
+## 🌍 环境变量速查
+
+### Agent / LangGraph
+
+| 变量 | 作用 | 默认 |
+| --- | --- | --- |
+| `OPENAI_API_KEY` | OpenAI/兼容模型密钥 | - |
+| `MODEL_NAME` | 模型名，支持 `openai:gpt-4o-mini` 等 | `openai:gpt-4o-mini` |
+| `SYS_MSG_FILE` | 系统提示词路径（`prompts/*.txt`） | 必填（增强版必需） |
+| `LANGGRAPH_PG` | PostgreSQL 连接串，例如 `postgresql://user:pass@host:5432/db` | 空则走内存 |
+| `THREAD_ID` | 默认线程 ID | `demo-plus` / `demo-sql` |
+| `DRY_RUN` | 设为 `1` 时使用内存检查点 | `0` |
+| `ENABLE_TOOLS` | 设为 `1` 时显式启用工具节点 | `1` |
+| `TAVILY_API_KEY` | Tavily 搜索工具 Key | 可选 |
+
+### QQ 机器人 & 自动任务
+
+| 变量 | 作用 |
+| --- | --- |
+| `BOT_HOST` / `BOT_PORT` | HTTP 回调监听地址与端口（默认 `0.0.0.0:8080`） |
+| `ONEBOT_API_BASE` | NapCat HTTP API 地址（默认 `http://127.0.0.1:3000`） |
+| `ONEBOT_SECRET` / `ONEBOT_ACCESS_TOKEN` | 回调签名与 API Token（可选） |
+| `ALLOWED_GROUPS` / `CMD_ALLOWED_USERS` | 群聊/命令白名单，逗号分隔 |
+| `THREAD_STORE_FILE` | 群 → 线程 ID 映射文件，默认 `.qq_group_threads.json` |
+| `DAILY_TASK` / `NIGHTLY_TASK` | 需要播报的群号（逗号分隔） |
+| `DAILY_TASK_TIME` / `NIGHTLY_TASK_TIME` | HH:MM（24 小时制） |
+| `TICKET_TASK` | 接收 Ticket 更新的群号 |
+| `TICKET_TASK_TIME` | 单个或逗号分隔的多个 HH:MM（例：`02:05,16:05,22:05`） |
+| `TICKET_TASK_PROMPT` | （可选）覆盖 Ticket 更新时给 Agent 的提示 |
+
+> `.env` 中所有敏感信息均不会被仓库追踪，请通过环境变量或密钥管理服务注入。
+
+## 🚀 运行方式
+
+### CLI Agent
 
 ```bash
-pip install -r requirements.txt
-```
-
-### 3) 环境变量
-
-必需/可选环境变量：
-
-- `OPENAI_API_KEY`（必需，若使用 OpenAI 模型）
-- `SYS_MSG_FILE`（必需，增强版 `sql_agent_cli_stream_plus.py` 需要，指向 `prompts/*.txt`）
-- `TAVILY_API_KEY`（可选，启用网页搜索工具 Tavily 时建议设置）
-- `LANGGRAPH_PG`（可选，使用 PostgreSQL 持久化检查点时设置）
-- `MODEL_NAME`（可选，默认 `openai:gpt-4o-mini`）
-- `THREAD_ID`（可选，默认 `demo-sql` / `demo-plus`）
-- `DRY_RUN=1`（可选，启用内存检查点，便于无 PG 环境下快速运行）
-- `ENABLE_TOOLS=1`（可选，显式启用工具）
-
-### 4) 运行
-
-- 增强流式版（推荐，具备多轮工具 + 强化综合）：
-
-```bash
+source .venv311/bin/activate
+export SYS_MSG_FILE=$(pwd)/prompts/default.txt
 python sql_agent_cli_stream_plus.py
 ```
 
-- 标准流式版（可暂停 Ctrl-C）：
+- `:help` 查看命令，`:history / :replay <idx>` 用于调试，`:thread <id>` 切换线程。
+- 若需要更轻量的演示，可改用 `sql_agent_cli_stream.py` 或 `sql_agent_cli.py`。
+
+### NapCat QQ 机器人
 
 ```bash
-python sql_agent_cli_stream.py
-```
-
-- 基础非流式版：
-
-```bash
-python sql_agent_cli.py
-```
-
-> macOS（可选）：脚本中包含 `brew services start/stop postgresql` 便于本地调试。若无需 PG，可设置 `DRY_RUN=1` 使用内存检查点。
-
-## REPL 内置命令
-
-- `:help` 显示命令
-- `:history` 查看检查点历史（时间顺序），示例输出：
-  - `[2] node=tools latest={...完整工具JSON...} messages=3 next=chatbot`
-- `:replay <index>` 从指定检查点回放
-- `:thread <id>` 切换线程 ID（不删除历史）
-- `:newthread [id]` 新建线程并切换（不删除历史）；`:clear` 等效
-- `:exit` 退出
-
-## 工具调用与回答风格（增强版）
-
-`sql_agent_cli_stream_plus.py` 的策略：
-
-- 当用户显式请求“搜索/检索/互联网/先用工具/帮我搜/continue”等，强制调用 Tavily 搜索工具
-- 工具返回后，模型不会再次调用工具，而是基于结果进行综合并给出清晰、可执行的结论
-- 事件流输出顺序：
-  - `Tool: Calling tool [tavily_search]`
-  - `Agent: ...（流式输出总结）`
-- 消息长度上限：内部 reducer 仅保留最近 20 条消息，以避免上下文无限增长。
-- 对于敏感或不现实请求（例如“如何与某公众人物结婚”），模型将礼貌地解释现实限制，并提供一般性、合规的建议（而非生搬搜索结果）
-
-## 示例对话
-
-- 触发搜索并总结：
-
-```
-User: 搜索...
-Tool: Calling tool [tavily_search]
-Agent: （综合工具结果的中文总结 + 简明要点 + 参考链接）
-```
-
-- 强制先搜索再给建议：
-
-```
-User: 先用工具搜索互联网,再告诉我如何xxxxxx
-Tool: Calling tool [tavily_search]
-Agent: （解释现实限制 + 合理建议；不生搬工具原文）
-```
-
-- 连续搜索（多轮）：
-
-```
-User: 搜索XXX
-User: 是XXXXXXXX
-User: 继续
-User: Search for XXXXXX
-```
-
-> 在上述多轮中，增强版会避免“跨轮误判导致不再调用工具”的问题；当用户输入“继续”且上轮 AI 承诺搜索时，会再次调用工具兑现承诺。
-
-## PostgreSQL 持久化（可选）
-
-将检查点存入 PG：
-
-1. 启动本地 PG（macOS Homebrew 示例）
-   ```bash
-   brew services start postgresql
-   ```
-2. 设置连接串
-   ```bash
-   export LANGGRAPH_PG=***REMOVED***
-   ```
-3. 运行脚本（不要设置 `DRY_RUN=1`）
-
-关闭服务：
-```bash
-brew services stop postgresql
-```
-
-## 目录
-
-- `sql_agent_cli_stream.py`：流式 + 可暂停 + SQL/内存检查点
-- `sql_agent_cli_stream_plus.py`：增强流式（多轮工具/强制搜索/强化综合）
-- `sql_agent_cli.py`：基础（非流式）
-
-提示：`sql_agent_cli_stream_plus.py` 需要设置 `SYS_MSG_FILE` 指向系统提示词文件，例如：
-```bash
-export SYS_MSG_FILE=$(pwd)/prompts/default.txt
-```
-
-## QQ 群机器人（NapCat / OneBot v11）
-
-文件：`qq_group_bot.py`
-
-特点与行为：
-- 仅在被 @ 机器人时才响应群消息（防刷屏）；
-- 解析 NapCat Array 段落格式，精准识别 @；
-- 通过 OneBot HTTP API 发送群消息；
-- 支持健康检查 `GET /healthz`；
-- 对每个群维持独立会话线程（/clear 可重置）。
-
-拓扑建议（Docker 下 NapCat）：
-- 机器人 HTTP 回调监听在宿主 `http://0.0.0.0:8080`（可配）；
-- NapCat 容器回调到机器人：`http://host.docker.internal:8080`；
-- 机器人请求 NapCat HTTP API：`http://127.0.0.1:3000`（或你的 NapCat API 地址）。
-
-必需/可选环境变量：
-- `BOT_HOST`（默认 `0.0.0.0`）：机器人监听地址；
-- `BOT_PORT`（默认 `8080`）：机器人监听端口；
-- `ONEBOT_API_BASE`（默认 `http://127.0.0.1:3000`）：NapCat HTTP API Base；
-- `ONEBOT_SECRET`（可选）：OneBot 回调签名密钥（HMAC-SHA1）；
-- `ONEBOT_ACCESS_TOKEN`（可选）：NapCat HTTP API Token；
-- `ALLOWED_GROUPS`（可选）：允许响应的群ID，逗号分隔；为空表示不限制；
-- `CMD_ALLOWED_USERS`（可选）：命令白名单QQ号，逗号分隔；为空表示所有人可执行命令；
-- `THREAD_STORE_FILE`（可选，默认 `.qq_group_threads.json`）：群→线程ID 映射存储文件；
-- `SYS_MSG_FILE`：指向 `prompts/*.txt`（系统提示词）；
-- `MODEL_NAME`、`LANGGRAPH_PG`、`THREAD_ID`、`DRY_RUN`、`ENABLE_TOOLS`：透传给 SQL Agent，含义同上文。
-
-运行：
-```bash
+./run_qq_group_bot.sh
+# 或手动：
+source .venv311/bin/activate
 python qq_group_bot.py
 ```
 
-健康检查：
+- 支持 @ 机器人触发、`/switch` Prompt、`/clear` 重置线程、`/cmd` 查看指令。
+- 提供健康检查：`curl http://127.0.0.1:8080/healthz`.
+- `logs/`、`.qq_group_threads.json`、`ticket_data/` 会在首次运行时自动生成。
+
+## 🗄️ PostgreSQL 持久化
+
+LangGraph 默认读取/写入 `LANGGRAPH_PG` 指向的数据库，实现多节点之间的共享检查点、话题切换与“时间旅行”：
+
 ```bash
-curl -s http://127.0.0.1:8080/healthz
+# Docker 示例
+docker run --name langgraph-pg \
+  -e POSTGRES_PASSWORD=langgraph \
+  -e POSTGRES_DB=langgraph \
+  -p 5432:5432 -d postgres:15
+
+export LANGGRAPH_PG=postgresql://postgres:langgraph@127.0.0.1:5432/langgraph
+python sql_agent_cli_stream_plus.py
 ```
 
-群内命令（需 @ 机器人）：
-- `/cmd`：显示命令列表
-- `/switch`：列出可用 `prompts/*.txt`
-- `/switch <name>`：切换到 `prompts/<name>.txt` 并重建 Agent
-- `/clear` 或 “让我忘记一切吧”：为当前群新建线程
-- `/whoami`：回当前 Prompt 名称并生成“你是谁”回答
+macOS 亦可使用 Homebrew：
 
-注意与安全：
-- 必须在虚拟环境中运行；严禁硬编码密钥；
-- 建议使用 `ALLOWED_GROUPS` 与 `CMD_ALLOWED_USERS` 控制可用群与命令权限；
-- 首次启动会读取/创建 `THREAD_STORE_FILE`，存储“群→线程ID”，用于跨重启保持会话。
+```bash
+brew services start postgresql
+# ... 使用完毕后
+brew services stop postgresql
+```
 
----
+若暂未部署数据库，可设置 `DRY_RUN=1` 让检查点驻留内存（不跨进程持久化）。
+
+## 📆 定时任务与 Ticket 监听
+
+`daily_task.py` 暴露两个调度器：
+
+- `DailyWeatherTask`：在 `DAILY_TASK_TIME` / `NIGHTLY_TASK_TIME` 触发，对配置的群号推送早晚播报（日期、节日、京都天气、抽选列表与机器人寄语）。
+- `DailyTicketTask`：调用 `AsobiTicketQuery` 的 `check` / `update` 模式，一旦检测到新抽选立刻向群广播并可附带提醒。`TICKET_TASK_TIME` 支持多个时间点，以“02:05, 16:05, 22:05”形式配置即可。
+
+两类任务都通过 QQ Bot 的 `_send_daily_text` 回调发送消息，可直接复用或扩展。缓存文件位于 `ticket_data/`，用于避免重复推送。
+
+## 🔧 工具与扩展
+
+- **搜索**：Tavily Search、Web Browser（抓取并总结页面）。
+- **旅行**：Google Flights / Hotels / Directions 工具链。
+- **天气**：Visual Crossing 天气查询，支持多地点、多时段。
+- **票务**：Asobi Ticket 抓取 + `imas_ticket_tool` 便捷命令。
+- **图像**：Reverse Image 上传 + `image_storage.py` 文件存档。
+- **提醒**：`timer_reminder.py` 提供跨轮的定时提醒、清单管理。
+
+所有工具均在 `src/addtools.py` 注册，继承自 LangChain 工具接口，便于自定义扩展。
+
+## 🧊 酷炫玩法
+
+- **时间旅行调试**：`AgentWithTimetravel` 可从任意 checkpoint 回放，将复杂对话拆解成 DAG 并复用旧节点。
+- **群聊记忆命名空间**：每个群都绑定独立 `thread_id`，同时支持 `.qq_group_memnames.json` 持久化记忆命名空间，实现“群聊人格”。
+- **多模态自检**：`test_multimodal_unit.py` 通过本地伪造的 Cross-Image 流程验证图片上传/缓存逻辑，配合 `image_storage.py` 避免重复上链。
+
+## 🧪 测试
+
+```bash
+source .venv311/bin/activate
+PYTHONPATH=$PWD pytest
+```
+
+当前测试覆盖：
+
+- `src/test_agent_with_timetravel.py`：验证时间旅行 Agent 能够正确管理节点。
+- `test_multimodal_unit.py`：校验图片工具链（下载、缓存、逆向上传）。
+- `test_visual_crossing_weather.py`：确保天气工具参数与解析稳定。
+
+## 🛠️ 运维 Tips
+
+- `logs/`、`output.xml`、`local_backup/` 可帮助排查 NapCat 或 Agent 运行情况。
+- `ticket_data/`、`.qq_group_threads.json`、`.qq_group_memnames.json` 均为运行期生成，建议在部署时加到持久卷中。
+- `run_qq_group_bot.sh` 会检测虚拟环境并阻止裸跑 base 环境，确保依赖一致。
+- 若需扩展工具，记得在 `addtools.py` 注册并在 README 的环境变量中补充依赖说明。
+
+> 享受构建吧：LangGraph 让复杂流程可视化，NapCat 让群聊像控制台一样可编排——把它当成你自己的“多 Agent 控制塔”。
