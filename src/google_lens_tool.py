@@ -10,7 +10,7 @@ from typing import Any
 
 import requests
 
-from src.tmpfiles_uploader import TmpFilesUploader
+from src.google_reverse_image_tool import ReverseImageUploader
 
 
 @dataclass(frozen=True)
@@ -87,11 +87,11 @@ class GoogleLensTool:
 
     Args:
         client (GoogleLensClient): 已配置 API Key 的 SerpAPI 客户端。
-        uploader (TmpFilesUploader): 本地图片上传器。
+        uploader (ReverseImageUploader): 本地图片上传器。
     """
 
     client: GoogleLensClient
-    uploader: TmpFilesUploader
+    uploader: ReverseImageUploader
 
     def run(self, image_url_or_name: str) -> dict[str, Any]:
         """

@@ -57,7 +57,6 @@ from src.google_directions_client import GoogleDirectionsClient
 from src.google_reverse_image_client import GoogleReverseImageClient
 from src.google_reverse_image_tool import GoogleReverseImageTool, ReverseImageUploader
 from src.google_lens_tool import GoogleLensClient, GoogleLensTool
-from src.tmpfiles_uploader import TmpFilesUploader
 from src.web_browser_tool import WebBrowserTool
 from src.anilist_client import AniListAPI, ANILIST_MEDIA_SORTS
 from src.timer_reminder import TimerReminderManager
@@ -839,10 +838,9 @@ class SQLCheckpointAgentStreamingPlus:
                         uploader=reverse_image_uploader,
                     )
                     google_lens_client = GoogleLensClient(api_key=serpapi_key)
-                    lens_uploader = TmpFilesUploader()
                     google_lens_tool = GoogleLensTool(
                         client=google_lens_client,
-                        uploader=lens_uploader,
+                        uploader=reverse_image_uploader,
                     )
 
                     @tool("google_hotels_search")
