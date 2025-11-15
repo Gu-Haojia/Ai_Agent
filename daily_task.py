@@ -243,7 +243,7 @@ class DailyTicketTask:
         send_func: SendGroupText,
         group_ids: Sequence[int],
         run_time: str | Sequence[str] = "10:00",
-        prompt: str = "检测到偶像大师抽选更新了，请使用工具的update模式，整理详细的新抽选信息列表。并创建截止时间提前一小时的reminder，通知群1070489110的用户2920504178。",
+        prompt: str = "检测到偶像大师抽选更新了，请使用工具的update模式，整理详细的新抽选信息列表。并创建截止时间提前一小时的reminder（提醒必须有明确是针对什么公演的什么抽选），通知群1070489110的用户2920504178。",
         query: Optional[AsobiTicketQuery] = None,
     ) -> None:
         """
