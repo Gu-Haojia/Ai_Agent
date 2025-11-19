@@ -1179,10 +1179,23 @@ class SQLCheckpointAgentStreamingPlus:
 
                     tools.append(google_lens_search)
 
-                from langchain.agents import Tool
                 from langchain_experimental.utilities import PythonREPL
 
-                def python_repl_tool(code: str) -> str:
+                @tool("python_repl")
+                def python_repl(code: str) -> str:
+                    """
+                    执行一次临时 Python REPL 代码片段。
+
+                    Args:
+                        code (str): 需要执行的 Python 代码字符串，必须包含完整的 import。
+
+                    Returns:
+                        str: PythonREPL 运行后的标准输出或返回值字符串。
+
+                    Raises:
+                        AssertionError: 当 code 为空或仅包含空白字符时抛出。
+                    """
+                    assert isinstance(code, str) and code.strip(), "code 不能为空"
                     repl = PythonREPL(_locals=None)  # 每次调用都新建实例
                     result = repl.run(code, timeout=30)
                     print(
@@ -1191,13 +1204,7 @@ class SQLCheckpointAgentStreamingPlus:
                     )  # 调用时直接打印
                     return result
 
-                repl_tool = Tool(
-                    name="python_repl",
-                    description="一个REPL Python shell。使用它来执行python命令以及你所有的数学计算需求。输入应该是一个有效的python命令。如果你想看到一个值的输出，你应该用`print(...)`打印出来。你必须每次先执行完整的import语句，然后才能使用导入的模块。",
-                    func=python_repl_tool,
-                )
-
-                tools.append(repl_tool)
+                tools.append(python_repl)
 
                 @tool
                 def datetime_now(tz: str = "local") -> str:
