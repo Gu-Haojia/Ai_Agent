@@ -11,6 +11,7 @@ import base64
 import mimetypes
 import os
 import threading
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -468,7 +469,7 @@ class ImageStorageManager:
             reference_images (Optional[Sequence[GeminiReferenceImage]]):
                 参考图像列表，每项为 ``(mime_type, base64_data)``。
             model (Optional[str]): Gemini 图像模型名称，默认 ``gemini-2.5-flash-image``。
-            timeout (int): HTTP 请求超时时间（秒）。
+            timeout (int): HTTP 请求超时时间（秒），发生 5xx 或请求异常时会在默认三次内重试。
 
         Returns:
             GeneratedImage: 保存后的图像信息。
@@ -476,7 +477,7 @@ class ImageStorageManager:
         Raises:
             AssertionError: 当参数非法或缺少 API 密钥时抛出。
             ValueError: 当 HTTP 请求失败时抛出。
-            RuntimeError: 当响应缺少图像数据或被判定为违规内容时抛出。
+            RuntimeError: 当多次请求仍失败或响应缺少图像数据、被判定为违规内容时抛出。
         """
 
         assert isinstance(prompt, str) and prompt.strip(), "prompt 不能为空"
@@ -529,14 +530,46 @@ class ImageStorageManager:
             "Content-Type": "application/json",
             "x-goog-api-key": api_key,
         }
-        #print(f"请求 Gemini payload: {payload}")
-        response = requests.post(endpoint, headers=headers, json=payload, timeout=timeout)
-        if response.status_code != 200:
+        max_attempts = 3
+        retry_interval = 2
+        data: dict[str, object] | None = None
+        attempt = 0
+        while attempt < max_attempts:
+            attempt += 1
+            try:
+                response = requests.post(
+                    endpoint, headers=headers, json=payload, timeout=timeout
+                )
+            except requests.RequestException as exc:
+                if attempt >= max_attempts:
+                    raise RuntimeError(
+                        f"Gemini 图像接口请求失败：{exc}"
+                    ) from exc
+                time.sleep(retry_interval)
+                continue
+
+            if response.status_code == 200:
+                data = response.json()
+                break
+
+            body_text = response.text.strip()
+            if response.status_code >= 500 and attempt < max_attempts:
+                print(
+                    f"警告：Gemini 图像生成 HTTP {response.status_code}，将在 {retry_interval} 秒后重试，响应：{body_text}",
+                    flush=True,
+                )
+                time.sleep(retry_interval)
+                continue
+
             raise ValueError(
-                f"Gemini 图像生成失败: {response.status_code} {response.text[:128]}"
+                f"Gemini 图像生成失败: {response.status_code} {body_text}"
             )
 
-        data = response.json()
+        if data is None:
+            raise RuntimeError(
+                "Gemini 图像生成接口多次重试仍失败，请稍后再试。"
+            )
+
         #print(f"Gemini 响应: {data}", flush=True)
         candidates = data.get("candidates") or []
         if not candidates:
