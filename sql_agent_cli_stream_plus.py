@@ -171,6 +171,59 @@ def _sanitize_for_logging(payload: object) -> str:
     return sanitized
 
 
+def _extract_text_content(message: Any) -> str:
+    """
+    提取 LangChain v1 消息中的 type=text 内容，兼容旧版纯字符串结构。
+
+    Args:
+        message (Any): LangChain 消息对象或其 content 字段。
+
+    Returns:
+        str: 抽取后的纯文本；若不存在文本块则回退为字符串化结果。
+    """
+
+    if message is None:
+        return ""
+
+    def _blocks_to_text(blocks: Sequence[Any]) -> str:
+        texts: list[str] = []
+        for block in blocks:
+            text = ""
+            if isinstance(block, dict):
+                if (block.get("type") or "").lower() == "text":
+                    text = block.get("text") or ""
+            else:
+                block_type = getattr(block, "type", "")
+                if str(block_type).lower() == "text":
+                    text = getattr(block, "text", "") or ""
+            if text:
+                texts.append(text)
+        return "\n".join(texts)
+
+    blocks = getattr(message, "content_blocks", None)
+    if isinstance(blocks, Sequence) and blocks:
+        text = _blocks_to_text(blocks)
+        if text:
+            return text
+
+    content = getattr(message, "content", None)
+    if isinstance(content, str):
+        return content
+    if isinstance(content, Sequence) and content:
+        text = _blocks_to_text(content)  # type: ignore[arg-type]
+        if text:
+            return text
+        # 部分历史结构直接是字符串列表
+        str_items = [item for item in content if isinstance(item, str)]
+        if str_items:
+            return "\n".join(str_items)
+    if content is not None:
+        return str(content)
+    if isinstance(message, str):
+        return message
+    return str(message)
+
+
 def _infer_model_provider(model_name: str) -> str:
     """
     推断模型提供方前缀。
@@ -1526,7 +1579,7 @@ class SQLCheckpointAgentStreamingPlus:
                 # 使用 LangChain 的 chunk 相加协议，将增量内容与工具调用一起合并
                 accumulated = None
                 for c in runner.stream(messages):  # type: ignore[attr-defined]
-                    txt = getattr(c, "content", None)
+                    txt = _extract_text_content(c)
                     if txt:
                         on_token(txt)
                     accumulated = c if accumulated is None else accumulated + c
@@ -1536,8 +1589,8 @@ class SQLCheckpointAgentStreamingPlus:
 
             # 退化路径：不支持流式则一次性返回
             msg = runner.invoke(messages)  # type: ignore[attr-defined]
-            txt = getattr(msg, "content", "")
-            if isinstance(txt, str) and txt:
+            txt = _extract_text_content(msg)
+            if txt:
                 on_token(txt)
             return {"messages": [msg]}
 
@@ -1674,8 +1727,8 @@ class SQLCheckpointAgentStreamingPlus:
                     )
                     # tool_notified = True
                 if label == "Agent":
-                    txt = getattr(m, "content", "")
-                    if isinstance(txt, str) and txt:
+                    txt = _extract_text_content(m)
+                    if txt:
                         last_text = txt
         except KeyboardInterrupt:
             print("\n暂停生成。")
@@ -1787,8 +1840,7 @@ class SQLCheckpointAgentStreamingPlus:
 
         parts: list[str] = []
         for m in messages:
-            c = getattr(m, "content", "")
-            parts.append(c if isinstance(c, str) else str(c))
+            parts.append(_extract_text_content(m))
         text = "\n".join(parts)
 
         try:
@@ -1846,19 +1898,16 @@ class SQLCheckpointAgentStreamingPlus:
             if msgs:
                 m = msgs[-1]
                 last_role = self._role_label(m)
-                c = getattr(m, "content", "")
-                last_text = c if isinstance(c, str) else str(c)
-                if not (isinstance(last_text, str) and last_text.strip()):
+                last_text = _extract_text_content(m)
+                if not last_text.strip():
                     for mm in reversed(msgs):
                         last_role = self._role_label(mm)
-                        tt = getattr(mm, "content", "")
-                        tt = tt if isinstance(tt, str) else str(tt)
-                        if isinstance(tt, str) and tt.strip():
+                        tt = _extract_text_content(mm)
+                        if tt.strip():
                             last_text = tt
                             break
                 if (
                     last_role != "Tool"
-                    and isinstance(last_text, str)
                     and len(last_text) > 120
                 ):
                     last_text = last_text[:117] + "..."
@@ -1883,7 +1932,7 @@ class SQLCheckpointAgentStreamingPlus:
                 try:
                     m.pretty_print()
                 except Exception:
-                    print(getattr(m, "content", ""))
+                    print(_extract_text_content(m))
 
 
 def _read_env_config() -> AgentConfig:
