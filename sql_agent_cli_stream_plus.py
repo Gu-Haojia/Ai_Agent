@@ -217,11 +217,6 @@ def _extract_text_content(message: Any) -> str:
         str_items = [item for item in content if isinstance(item, str)]
         if str_items:
             return "\n".join(str_items)
-    if content is not None:
-        return str(content)
-    if isinstance(message, str):
-        return message
-    return str(message)
 
 
 def _infer_model_provider(model_name: str) -> str:
