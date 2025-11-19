@@ -67,6 +67,7 @@ class ReminderStoreProtocol(Protocol):
             Sequence[dict[str, Any]]: 尚未过期的提醒集合。
         """
 
+
 class TimerReminderManager:
     """
     计时提醒管理器，负责解析时间表达式、创建调度任务以及恢复未完成提醒。
@@ -207,7 +208,9 @@ class TimerReminderManager:
         Raises:
             AssertionError: 当表达式无效或指向过去时抛出。
         """
-        assert isinstance(expression, str) and expression.strip(), "time_expression 不能为空"
+        assert (
+            isinstance(expression, str) and expression.strip()
+        ), "time_expression 不能为空"
         normalized = expression.strip()
         now = datetime.now(tz=self._tz)
         if normalized.startswith("at:"):
@@ -281,7 +284,9 @@ class TimerReminderManager:
         target_dt = datetime.fromtimestamp(trigger_ts, tz=self._tz)
         readable_time = target_dt.strftime("%Y-%m-%d %H:%M")
         offset_text = self._format_offset(target_dt)
-        remain_seconds = remain_seconds_hint if remain_seconds_hint is not None else wait_seconds
+        remain_seconds = (
+            remain_seconds_hint if remain_seconds_hint is not None else wait_seconds
+        )
         remain_seconds = max(1, remain_seconds)
 
         def _job() -> Any:
@@ -290,7 +295,7 @@ class TimerReminderManager:
                 from qq_group_bot import BotConfig, _send_group_at_message
 
                 cfg = BotConfig.from_env()
-                text = f"[提醒]：{answer}"
+                text = f"📣[提醒]：{answer}"
                 _send_group_at_message(
                     cfg.api_base,
                     group_id,
@@ -307,7 +312,9 @@ class TimerReminderManager:
                 sys.stderr.write(f"\033[31m{log_prefix}\033[0m 发送提醒失败：{err}\n")
             finally:
                 try:
-                    self._store.remove_one(trigger_ts, group_id, user_id, description, answer)
+                    self._store.remove_one(
+                        trigger_ts, group_id, user_id, description, answer
+                    )
                 except Exception as cleanup_err:
                     sys.stderr.write(
                         f"\033[31m{log_prefix}\033[0m 移除记录失败：{cleanup_err}\n"

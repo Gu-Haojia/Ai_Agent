@@ -554,10 +554,10 @@ class _ReminderStore:
                     skip_num += 1
 
             print(
-                    f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m "
-                    f"\033[33m[TimerStore]\033[0m 已清理过期提醒 {skip_num} 条，剩余有效提醒 {len(active)} 条。",
-                    flush=True,
-                )
+                f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m "
+                f"\033[33m[TimerStore]\033[0m 已清理过期提醒 {skip_num} 条，剩余有效提醒 {len(active)} 条。",
+                flush=True,
+            )
             # 覆盖写入仅保留有效项
             self._write_all(active)
             return active
@@ -723,7 +723,6 @@ class SQLCheckpointAgentStreamingPlus:
                 if os.environ.get("TAVILY_API_KEY"):
                     tools = [TavilySearch(max_results=3)]
 
-                from langchain_community.utilities import OpenWeatherMapAPIWrapper
 
                 summary_model_name = os.environ.get("SUMMARY_MODEL", "").strip()
                 assert (
@@ -733,36 +732,6 @@ class SQLCheckpointAgentStreamingPlus:
 
                 browser_tool = WebBrowserTool(llm=summary_llm)
                 tools.append(browser_tool)
-
-                # 暂时关闭OpenWeatherMap天气工具
-                if os.environ.get("OPENWEATHERMAP_API_KEY") and False:
-
-                    @tool
-                    def get_weather(location_en_name: str) -> str:
-                        "Useful for when you need to know the weather"
-                        "of a specific location. Input should be a location english name, "
-                        "like 'Tokyo' or 'Kyoto'."
-                        weather = OpenWeatherMapAPIWrapper()
-                        result = weather.run(location_en_name)
-                        print(
-                            f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [Weather Tool Output] {result}",
-                            flush=True,
-                        )  # 调用时直接打印
-                        return result
-
-                    tools.append(get_weather)
-
-                    """
-                    weather_tool = Tool(
-                        name="weather",
-                        func=weather.run,   # run 方法接收 str 输入，例如地名
-                        description=(
-                            "Useful for when you need to know the weather "
-                            "of a specific location. Input should be a location english name, "
-                            "like 'Tokyo' or 'Kyoto'."
-                        ),
-                    )
-                    """
 
                 visual_crossing_key = os.environ.get(
                     "VISUAL_CROSSING_API_KEY", ""
@@ -1136,7 +1105,7 @@ class SQLCheckpointAgentStreamingPlus:
                         )
                         return json.dumps(result, ensure_ascii=False)
 
-                    #tools.append(google_reverse_image_search)  #暂时关闭反向搜图工具
+                    # tools.append(google_reverse_image_search)  #暂时关闭反向搜图工具
 
                     @tool("google_lens_search")
                     def google_lens_search(image_url: str) -> str:
@@ -1334,7 +1303,10 @@ class SQLCheckpointAgentStreamingPlus:
                     """
                     assert isinstance(mode, str) and mode.strip(), "mode 不能为空"
                     normalized = mode.strip().lower()
-                    assert normalized in {"list", "update"}, "mode 仅支持 list 或 update"
+                    assert normalized in {
+                        "list",
+                        "update",
+                    }, "mode 仅支持 list 或 update"
                     return asobi_ticket_query.run(normalized)
 
                 tools.append(imas_ticket_tool)
@@ -1354,79 +1326,6 @@ class SQLCheckpointAgentStreamingPlus:
                         flush=True,
                     )
                     pass
-
-                # 汇率Tool
-                @tool
-                def currency_tool(
-                    num: float, from_currency: str, to_currency: str
-                ) -> str:
-                    """
-                    汇率转换工具。
-
-                    Args:
-                        num (float): 数值，支持整数与小数。
-                        from_currency (str): 源货币代码，例如 "USD"、"CNY"。
-                        to_currency (str): 目标货币代码，例如 "CNY"、"USD"。
-
-                    Returns:
-                        str: 转换结果字符串，例如 "100 USD = 645.23 CNY"。
-
-                    Raises:
-                        ValueError: 当参数不合法或转换失败时抛出。
-                    """
-                    # 使用exchangerate-api.com的免费接口
-
-                    url = f"https://v6.exchangerate-api.com/v6/YOUR-API-KEY/pair/{from_currency}/{to_currency}/{num}"
-                    response = requests.get(url)
-                    if response.status_code == 200:
-                        data = response.json()
-                        if data.get("result") == "success":
-                            return f"{num} {from_currency} = {data['conversion_rate']} {to_currency}"
-                        else:
-                            raise ValueError(f"汇率转换失败: {data.get('error-type')}")
-                    else:
-                        raise ValueError(f"汇率转换失败: {response.status_code}")
-
-                if False:  # 暂时关闭该工具，避免误用
-
-                    @tool
-                    def hotel_search(city: str, limit: int = 5) -> str:
-                        """
-                        查询指定城市的热门酒店。你必须处理结果并以中文返回给用户，而不是直接返回 JSON。
-
-                        Args:
-                            city (str): 英语城市关键词，例如 "Shanghai" 或 "Tokyo"。
-                            limit (int): 返回酒店数量上限，默认 5，范围 1-10。
-
-                        Returns:
-                            str: 酒店信息列表，按序号逐行包含名称、评分、价格与地址。你需要处理为自然语言，强制转换为中文，不准直接返回原始数据。
-
-                        Raises:
-                            AssertionError: 当参数不合法时抛出。
-                            ValueError: 当外部接口调用失败时抛出。
-                        """
-
-                        client = RapidAPIHotelSearchClient()
-                        results = client.search_hotels(city, limit)
-                        lines: list[str] = []
-                        for idx, item in enumerate(results, start=1):
-                            name = item["name"]
-                            # 去除name的*号
-                            name = name.replace("*", "")
-                            rating = item["rating"]
-                            price = item["price"]
-                            address = item["address"]
-                            lines.append(
-                                f"{idx}. {name} | 评分: {rating} | 价格: {price} | 地址: {address}"
-                            )
-                        print(
-                            f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [Hotel Tool] 查询结果：\n"
-                            + "\n".join(lines),
-                            flush=True,
-                        )
-                        return "\n".join(lines)
-
-                    tools.append(hotel_search)
 
                 @tool
                 def anilist_lookup(
@@ -1517,33 +1416,6 @@ class SQLCheckpointAgentStreamingPlus:
 
                 tools.append(nbnhhsh)
 
-                if False:  # 先关闭，避免误用
-                    tools.append(currency_tool)
-
-                if os.environ.get("SERPAPI_API_KEY") and False:
-                    from langchain_community.tools.google_finance import (
-                        GoogleFinanceQueryRun,
-                    )
-                    from langchain_community.utilities.google_finance import (
-                        GoogleFinanceAPIWrapper,
-                    )
-
-                    finance_google = GoogleFinanceQueryRun(
-                        api_wrapper=GoogleFinanceAPIWrapper()
-                    )
-
-                    finance_tool = Tool(
-                        name="google_finance",
-                        description=(
-                            "A tool for getting stock information and financial news. "
-                            "Input should be a English company ticker symbol, like 'AAPL' or 'MSFT'."
-                        ),
-                        func=finance_google.run,
-                    )
-                    tools.append(finance_tool)
-                # from langchain_community.tools.yahoo_finance_news import YahooFinanceNewsTool
-                # tools.append(YahooFinanceNewsTool())
-
         @tool
         def generate_local_image(
             prompt: str,
@@ -1613,18 +1485,6 @@ class SQLCheckpointAgentStreamingPlus:
         llm_tools_auto = llm.bind_tools(tools) if tools else llm
         llm_tools_none = llm.bind_tools(tools, tool_choice="none") if tools else llm
         # - force：当用户显式要求搜索/检索等，强制调用 tavily_search
-        """
-        if tools:
-            llm_tools_force = llm.bind_tools(
-                tools,
-                tool_choice={
-                    "type": "function",
-                    "function": {"name": "tavily_search"},
-                },
-            )
-        else:
-            llm_tools_force = llm
-        """
 
         def chatbot(state: State):
             on_token: Callable[[str], None] = getattr(self, "_on_token", None) or (
@@ -1653,112 +1513,6 @@ class SQLCheckpointAgentStreamingPlus:
                 messages = [sys_msg] + list(state["messages"])  # 不修改原列表
             except Exception:
                 messages = state["messages"]
-
-            """
-            # 策略增强：
-            # - 仅统计“最后一条 human 之后”的 Tool 消息，避免跨轮次误判。
-            # - 显式搜索请求或“继续”且上次 AI 承诺搜索时，强制调用工具。
-            msgs = list(state.get("messages", []))
-            last_human_idx = -1
-            for i in range(len(msgs) - 1, -1, -1):
-                if (
-                    getattr(msgs[i], "type", "") == "human"
-                    or getattr(msgs[i], "role", "") == "user"
-                ):
-                    last_human_idx = i
-                    break
-            has_tool_feedback = any(
-                (
-                    "tool" in str(getattr(m, "type", "")).lower()
-                    or "tool" in str(getattr(m, "role", "")).lower()
-                )
-                for m in msgs[last_human_idx + 1 :]
-            )
-
-            def _needs_search(text: str) -> bool:
-                if not isinstance(text, str):
-                    return False
-                zh = [
-                    "搜索",
-                    "检索",
-                    "查找",
-                    "互联网",
-                    "网页",
-                    "上网",
-                    "先用工具",
-                    "帮我搜",
-                ]
-                en = [
-                    "search",
-                    "find",
-                    "look up",
-                    "lookup",
-                    "news",
-                    "research",
-                    "investigate",
-                ]
-                t = text.lower()
-                return any(k in text for k in zh) or any(k in t for k in en)
-
-            def _last_ai_promised_search() -> bool:
-                for m in reversed(msgs[:last_human_idx]):
-                    if getattr(m, "type", "") == "ai":
-                        c = getattr(m, "content", "")
-                        if not isinstance(c, str):
-                            c = str(c)
-                        c_low = c.lower()
-                        if any(
-                            x in c
-                            for x in [
-                                "搜索",
-                                "检索",
-                                "查找",
-                                "我将为您搜索",
-                                "我会搜索",
-                                "请稍等",
-                            ]
-                        ):
-                            return True
-                        if any(
-                            x in c_low
-                            for x in [
-                                "search",
-                                "i will search",
-                                "i'll search",
-                                "looking up",
-                                "please wait",
-                            ]
-                        ):
-                            return True
-                        break
-                return False
-
-            last_user_text = ""
-            if last_human_idx >= 0:
-                c = getattr(msgs[last_human_idx], "content", "")
-                last_user_text = c if isinstance(c, str) else str(c)
-            should_force_tool = _needs_search(last_user_text) or (
-                last_user_text.strip() in {"继续", "go on", "continue"}
-                and _last_ai_promised_search()
-            )
-            """
-            """
-            if has_tool_feedback and hasattr(llm_tools_none, "stream"):
-                for chunk in llm_tools_none.stream(messages):
-                    last_msg = chunk
-                    txt = getattr(chunk, "content", None)
-                    if txt:
-                        partial.append(txt)
-                        on_token(txt)
-                from langchain_core.messages import AIMessage
-
-                aggregated = "".join(partial)
-                if aggregated:
-                    return {"messages": [AIMessage(content=aggregated)]}
-                if last_msg is not None:
-                    return {"messages": [last_msg]}
-                return {"messages": [AIMessage(content="")]}  # 空聚合兜底
-            """
 
             # 首轮/无工具反馈：同样改为流式输出
             # 显式要求则强制工具，否则交由模型自动决定
