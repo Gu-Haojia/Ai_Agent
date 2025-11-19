@@ -206,17 +206,6 @@ def _extract_text_content(message: Any) -> str:
         if text:
             return text
 
-    content = getattr(message, "content", None)
-    if isinstance(content, str):
-        return content
-    if isinstance(content, Sequence) and content:
-        text = _blocks_to_text(content)  # type: ignore[arg-type]
-        if text:
-            return text
-        # 部分历史结构直接是字符串列表
-        str_items = [item for item in content if isinstance(item, str)]
-        if str_items:
-            return "\n".join(str_items)
 
 
 def _infer_model_provider(model_name: str) -> str:
