@@ -1416,7 +1416,7 @@ class SQLCheckpointAgentStreamingPlus:
 
                 tools.append(nbnhhsh)
 
-        @tool
+        @tool #raw api 1.39.1
         def generate_local_image(
             prompt: str,
             size: Optional[str] = None,
@@ -1433,7 +1433,7 @@ class SQLCheckpointAgentStreamingPlus:
                     参考图像文件名列表，文件需已保存在图像存储目录中。
 
             Returns:
-                str: JSON 字符串，包含 ``path``、``mime_type`` 与 ``prompt``。
+                str: JSON 字符串，包含 ``path``、``mime_type`` 与 ``text``。
 
             Raises:
                 AssertionError: 当参数非法或参考图像不可用时抛出。
