@@ -505,13 +505,12 @@ class ImageStorageManager:
         if ratio:
             http_options = types.HttpOptions(
                 timeout=int(timeout * 1000) if timeout is not None else None,
-                extra_body={"generationConfig": {"aspectRatio": ratio}},
+                extra_body={"imageConfig": {"aspectRatio": ratio}},
             )
         elif timeout is not None:
             http_options = types.HttpOptions(timeout=int(timeout * 1000))
 
         config = types.GenerateContentConfig(
-            response_modalities=["IMAGE"],
             http_options=http_options,
         )
 
