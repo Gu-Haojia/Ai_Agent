@@ -502,17 +502,20 @@ class ImageStorageManager:
         client = genai.Client(api_key=api_key)
 
         http_options = None
-        if ratio:
-            http_options = types.HttpOptions(
-                timeout=int(timeout * 1000) if timeout is not None else None,
-                extra_body={"imageConfig": {"aspectRatio": ratio}},
-            )
-        elif timeout is not None:
+        if timeout is not None:
             http_options = types.HttpOptions(timeout=int(timeout * 1000))
 
-        config = types.GenerateContentConfig(
-            response_modalities=["Image"],
-            http_options=http_options,
+        image_cfg = None
+        if ratio:
+            image_cfg = types.ImageConfig(aspect_ratio=ratio)
+
+        config = (
+            types.GenerateContentConfig(
+                image_config=image_cfg,
+                http_options=http_options,
+            )
+            if (image_cfg is not None or http_options is not None)
+            else None
         )
 
         prompt_clean = prompt.strip()
