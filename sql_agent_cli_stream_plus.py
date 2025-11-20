@@ -1474,7 +1474,7 @@ class SQLCheckpointAgentStreamingPlus:
             payload = {
                 "path": str(image.path),
                 "mime_type": image.mime_type,
-                "prompt": image.prompt,
+                "text": image.prompt,
             }
             return json.dumps(payload, ensure_ascii=False)
 
