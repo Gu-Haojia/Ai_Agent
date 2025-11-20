@@ -1419,7 +1419,7 @@ class SQLCheckpointAgentStreamingPlus:
         @tool
         def generate_local_image(
             prompt: str,
-            size: str = "1024x1024",
+            size: Optional[str] = None,
             reference_images: Optional[list[str]] = None,
         ) -> str:
             """
@@ -1427,7 +1427,8 @@ class SQLCheckpointAgentStreamingPlus:
 
             Args:
                 prompt (str): 图像描述或编辑指令，必须包含清晰主体与风格，一定要在prompt中体现用户需求，越详细越好，如果用户指定了prompt，直接复制即可，例如 “Transform the photo into a high-end studio portrait in the style of Apple executive headshots.The subject is shown in a half-body composition, wearing professional yet minimalist attire, with a natural and confident expression.Use soft directional lighting to gently highlight the facial features, leaving subtle catchlights in the eyes.The background shouldbe a smooth gradient in neutral tones (light gray or off-white), with clear separation between subject and background.Add a touch of refined film grain for texture, and keep the atmosphere calm, timeless, and sophisticated.Composition should follow minimalist principles, with negative space and non-centered framing for a modern look.--no text, logos, distracting objects, clutter”
-                size (str): 输出尺寸或别名，例如 ``"1024x1024"``、``"square"``。
+                size (Optional[str]): 输出比例（aspect ratio），仅允许 ``"1:1"``、``"3:4"``、``"4:3"``、``"9:16"``、``"16:9"``。
+                    在用户未显式指定比例时，不要传入该参数；传入 ``None`` 表示不指定比例。
                 reference_images (Optional[list[str]]):
                     参考图像文件名列表，文件需已保存在图像存储目录中。
 
@@ -1473,7 +1474,7 @@ class SQLCheckpointAgentStreamingPlus:
             payload = {
                 "path": str(image.path),
                 "mime_type": image.mime_type,
-                "prompt": prompt_text,
+                "prompt": image.prompt,
             }
             return json.dumps(payload, ensure_ascii=False)
 

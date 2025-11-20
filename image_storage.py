@@ -11,7 +11,6 @@ import base64
 import mimetypes
 import os
 import threading
-import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +18,8 @@ from typing import Optional, Sequence
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import requests
+from google import genai
+from google.genai import types
 
 __all__ = [
     "StoredImage",
@@ -455,7 +456,7 @@ class ImageStorageManager:
         self,
         prompt: str,
         *,
-        size: Optional[str] = "1024x1024",
+        size: Optional[str] = None,
         reference_images: Optional[Sequence[GeminiReferenceImage]] = None,
         model: Optional[str] = None,
         timeout: int = 60,
@@ -465,11 +466,12 @@ class ImageStorageManager:
 
         Args:
             prompt (str): 图像生成或编辑的文本描述。
-            size (Optional[str]): 期望的输出尺寸（如 ``"1024x1024"``）或别名。
+            size (Optional[str]): 输出比例，可选 ``"1:1"``、``"3:4"``、``"4:3"``、``"9:16"``、``"16:9"``。
+                当用户未指定比例时请勿传入参数，传入 ``None`` 表示不指定比例。
             reference_images (Optional[Sequence[GeminiReferenceImage]]):
                 参考图像列表，每项为 ``(mime_type, base64_data)``。
             model (Optional[str]): Gemini 图像模型名称，默认 ``gemini-2.5-flash-image``。
-            timeout (int): HTTP 请求超时时间（秒），发生 5xx 或请求异常时会在默认三次内重试。
+            timeout (int): HTTP 请求超时时间（秒）。
 
         Returns:
             GeneratedImage: 保存后的图像信息。
@@ -491,15 +493,27 @@ class ImageStorageManager:
         model_name = model or os.environ.get(
             "GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image"
         )
-        endpoint = os.environ.get(
-            "GEMINI_IMAGE_ENDPOINT",
-            f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent",
-        )
 
-        parts: list[dict[str, object]] = []
+        ratio = size.strip() if isinstance(size, str) else None
+        allowed_ratio = {"1:1", "3:4", "4:3", "9:16", "16:9"}
+        if ratio:
+            assert ratio in allowed_ratio, f"aspect ratio 仅支持 {sorted(allowed_ratio)}"
+
+        client = genai.Client(api_key=api_key)
+
+        config_kwargs: dict[str, object] = {}
+        if timeout is not None:
+            config_kwargs["http_options"] = types.HttpOptions(
+                timeout=int(timeout * 1000)
+            )
+        if ratio:
+            config_kwargs["aspect_ratio"] = ratio
+
+        prompt_clean = prompt.strip()
+
         if reference_images:
-            normalized_refs: list[GeminiReferenceImage] = []
-            for mime_type, data_b64 in reference_images:
+            normalized_refs: list[types.RawReferenceImage] = []
+            for idx, (mime_type, data_b64) in enumerate(reference_images, start=1):
                 assert (
                     isinstance(mime_type, str)
                     and mime_type.startswith("image/")
@@ -507,112 +521,56 @@ class ImageStorageManager:
                 assert (
                     isinstance(data_b64, str) and data_b64.strip()
                 ), "参考图像 Base64 数据不能为空"
-                normalized_refs.append((mime_type.strip(), data_b64.strip()))
-            for mime_type, data_b64 in normalized_refs:
-                parts.append(
-                    {
-                        "inline_data": {
-                            "mime_type": mime_type,
-                            "data": data_b64,
-                        }
-                    }
+                try:
+                    image_bytes = base64.b64decode(data_b64.strip(), validate=True)
+                except Exception as exc:
+                    raise ValueError("参考图像 Base64 数据无效") from exc
+                normalized_refs.append(
+                    types.RawReferenceImage(
+                        reference_id=idx,
+                        reference_image=types.Image(
+                            image_bytes=image_bytes, mime_type=mime_type.strip()
+                        ),
+                    )
                 )
-
-        parts.append({"text": prompt.strip()})
-
-        gen_config: dict[str, object] = {"responseModalities": ["Image"]}
-
-        payload: dict[str, object] = {"contents": [{"parts": parts}]}
-        if gen_config:
-            payload["generationConfig"] = gen_config
-
-        headers = {
-            "Content-Type": "application/json",
-            "x-goog-api-key": api_key,
-        }
-        max_attempts = 3
-        retry_interval = 2
-        data: dict[str, object] | None = None
-        attempt = 0
-        while attempt < max_attempts:
-            attempt += 1
-            try:
-                response = requests.post(
-                    endpoint, headers=headers, json=payload, timeout=timeout
-                )
-            except requests.RequestException as exc:
-                if attempt >= max_attempts:
-                    raise RuntimeError(
-                        f"Gemini 图像接口请求失败：{exc}"
-                    ) from exc
-                time.sleep(retry_interval)
-                continue
-
-            if response.status_code == 200:
-                data = response.json()
-                break
-
-            body_text = response.text.strip()
-            if response.status_code >= 500 and attempt < max_attempts:
-                print(
-                    f"警告：Gemini 图像生成 HTTP {response.status_code}，将在 {retry_interval} 秒后重试，响应：{body_text}",
-                    flush=True,
-                )
-                time.sleep(retry_interval)
-                continue
-
-            raise ValueError(
-                f"Gemini 图像生成失败: {response.status_code} {body_text}"
+            edit_config = (
+                types.EditImageConfig(**config_kwargs) if config_kwargs else None
             )
-
-        if data is None:
-            raise RuntimeError(
-                "Gemini 图像生成接口多次重试仍失败，请稍后再试。"
+            response = client.models.edit_image(
+                model=model_name,
+                prompt=prompt_clean,
+                reference_images=normalized_refs,
+                config=edit_config,
             )
-
-        #print(f"Gemini 响应: {data}", flush=True)
-        candidates = data.get("candidates") or []
-        if not candidates:
-            print(f"ERROR: 完整 Gemini 响应内容: {data}", flush=True)
-            raise RuntimeError("Gemini 响应缺少候选结果")
-        first_candidate = candidates[0] if len(candidates) > 0 else None
-        if isinstance(first_candidate, dict):
-            finish_reason = first_candidate.get("finishReason") or first_candidate.get("finish_reason")
-            if finish_reason == "PROHIBITED_CONTENT":
-                finish_message = (
-                    first_candidate.get("finishMessage")
-                    or first_candidate.get("finish_message")
-                    or "Gemini 判定请求涉及受限内容"
-                )
-                raise RuntimeError(f"Gemini 拒绝生成图像：{finish_message}")
-            parts_data = (first_candidate.get("content") or {}).get("parts")
         else:
-            parts_data = None
-        if not parts_data:
-            print(f"ERROR: 完整 Gemini 响应内容: {data}", flush=True)
-            raise RuntimeError("Gemini 响应缺少内容片段")
+            gen_config = (
+                types.GenerateImagesConfig(**config_kwargs)
+                if config_kwargs
+                else None
+            )
+            response = client.models.generate_images(
+                model=model_name, prompt=prompt_clean, config=gen_config
+            )
 
-        inline_data = None
-        for part in parts_data:
-            if not isinstance(part, dict):
-                continue
-            if "inlineData" in part and isinstance(part["inlineData"], dict):
-                inline_data = part["inlineData"]
-                break
-            if "inline_data" in part and isinstance(part["inline_data"], dict):
-                inline_data = part["inline_data"]
-                break
+        generated = getattr(response, "generated_images", None) or []
+        if not generated:
+            print(f"ERROR: 完整 Gemini 响应内容: {response}", flush=True)
+            raise RuntimeError("Gemini 响应缺少生成图像")
 
-        if not inline_data:
-            print(f"ERROR: 完整 Gemini 响应内容: {data}", flush=True)
+        first = generated[0]
+        if getattr(first, "rai_filtered_reason", None):
+            raise RuntimeError(
+                f"Gemini 拒绝生成图像：{first.rai_filtered_reason}"
+            )
+
+        image_obj = getattr(first, "image", None)
+        if not image_obj or not getattr(image_obj, "image_bytes", None):
+            print(f"ERROR: 完整 Gemini 响应内容: {response}", flush=True)
             raise RuntimeError("Gemini 响应未返回图像数据")
 
-        b64_data = inline_data.get("data")
-        mime_type = inline_data.get("mimeType") or inline_data.get("mime_type")
-        if not b64_data:
-            print(f"ERROR: 完整 Gemini 响应内容: {data}", flush=True)
-            raise RuntimeError("Gemini 图像数据为空")
-        if not mime_type:
-            mime_type = "image/png"
+        mime_type = getattr(image_obj, "mime_type", None) or "image/png"
+        b64_data = base64.b64encode(image_obj.image_bytes).decode("ascii")
 
-        return self.save_generated_image(b64_data, prompt.strip(), mime_type)
+        prompt_text = getattr(first, "enhanced_prompt", None) or prompt_clean
+
+        return self.save_generated_image(b64_data, prompt_text, mime_type)
