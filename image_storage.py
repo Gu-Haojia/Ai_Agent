@@ -501,19 +501,25 @@ class ImageStorageManager:
 
         client = genai.Client(api_key=api_key)
 
-        config_kwargs: dict[str, object] = {}
-        if timeout is not None:
-            config_kwargs["http_options"] = types.HttpOptions(
-                timeout=int(timeout * 1000)
-            )
+        http_options = None
         if ratio:
-            config_kwargs["aspect_ratio"] = ratio
+            http_options = types.HttpOptions(
+                timeout=int(timeout * 1000) if timeout is not None else None,
+                extra_body={"generationConfig": {"aspectRatio": ratio}},
+            )
+        elif timeout is not None:
+            http_options = types.HttpOptions(timeout=int(timeout * 1000))
+
+        config = types.GenerateContentConfig(
+            response_modalities=["IMAGE"],
+            http_options=http_options,
+        )
 
         prompt_clean = prompt.strip()
 
+        parts: list[types.Part] = []
         if reference_images:
-            normalized_refs: list[types.RawReferenceImage] = []
-            for idx, (mime_type, data_b64) in enumerate(reference_images, start=1):
+            for mime_type, data_b64 in reference_images:
                 assert (
                     isinstance(mime_type, str)
                     and mime_type.startswith("image/")
@@ -525,52 +531,68 @@ class ImageStorageManager:
                     image_bytes = base64.b64decode(data_b64.strip(), validate=True)
                 except Exception as exc:
                     raise ValueError("参考图像 Base64 数据无效") from exc
-                normalized_refs.append(
-                    types.RawReferenceImage(
-                        reference_id=idx,
-                        reference_image=types.Image(
-                            image_bytes=image_bytes, mime_type=mime_type.strip()
-                        ),
+                parts.append(
+                    types.Part(
+                        inline_data=types.Blob(
+                            data=image_bytes, mime_type=mime_type.strip()
+                        )
                     )
                 )
-            edit_config = (
-                types.EditImageConfig(**config_kwargs) if config_kwargs else None
-            )
-            response = client.models.edit_image(
-                model=model_name,
-                prompt=prompt_clean,
-                reference_images=normalized_refs,
-                config=edit_config,
-            )
-        else:
-            gen_config = (
-                types.GenerateImagesConfig(**config_kwargs)
-                if config_kwargs
-                else None
-            )
-            response = client.models.generate_images(
-                model=model_name, prompt=prompt_clean, config=gen_config
-            )
 
-        generated = getattr(response, "generated_images", None) or []
-        if not generated:
+        parts.append(types.Part(text=prompt_clean))
+        contents = [types.Content(role="user", parts=parts)]
+
+        response = client.models.generate_content(
+            model=model_name, contents=contents, config=config
+        )
+
+        candidates = getattr(response, "candidates", None) or []
+        if not candidates:
             print(f"ERROR: 完整 Gemini 响应内容: {response}", flush=True)
-            raise RuntimeError("Gemini 响应缺少生成图像")
+            raise RuntimeError("Gemini 响应缺少候选结果")
 
-        first = generated[0]
-        if getattr(first, "rai_filtered_reason", None):
-            raise RuntimeError(
-                f"Gemini 拒绝生成图像：{first.rai_filtered_reason}"
-            )
+        first = candidates[0]
+        finish_reason = getattr(first, "finish_reason", None)
+        if finish_reason in {
+            types.FinishReason.PROHIBITED_CONTENT,
+            types.FinishReason.SAFETY,
+            types.FinishReason.IMAGE_SAFETY,
+            types.FinishReason.BLOCKLIST,
+        }:
+            finish_message = getattr(first, "finish_message", None) or "Gemini 判定请求涉及受限内容"
+            raise RuntimeError(f"Gemini 拒绝生成图像：{finish_message}")
 
-        image_obj = getattr(first, "image", None)
-        if not image_obj or not getattr(image_obj, "image_bytes", None):
+        content = getattr(first, "content", None)
+        parts_data = getattr(content, "parts", None) if content else None
+        if not parts_data:
+            print(f"ERROR: 完整 Gemini 响应内容: {response}", flush=True)
+            raise RuntimeError("Gemini 响应缺少内容片段")
+
+        inline_data = None
+        text_outputs: list[str] = []
+        for part in parts_data:
+            if getattr(part, "text", None):
+                text_outputs.append(str(part.text))
+            blob = getattr(part, "inline_data", None)
+            if blob and getattr(blob, "data", None) and getattr(blob, "mime_type", ""):
+                inline_data = blob
+                break
+
+        if not inline_data:
             print(f"ERROR: 完整 Gemini 响应内容: {response}", flush=True)
             raise RuntimeError("Gemini 响应未返回图像数据")
 
-        mime_type = getattr(image_obj, "mime_type", None) or "image/png"
-        b64_data = base64.b64encode(image_obj.image_bytes).decode("ascii")
+        raw_bytes = inline_data.data
+        if isinstance(raw_bytes, str):
+            try:
+                raw_bytes = base64.b64decode(raw_bytes, validate=True)
+            except Exception:
+                raw_bytes = raw_bytes.encode("utf-8")
+        assert isinstance(raw_bytes, (bytes, bytearray)), "返回的图像数据格式异常"
 
-        prompt_text = getattr(first, "enhanced_prompt", None) or prompt_clean
+        mime_type = getattr(inline_data, "mime_type", None) or "image/png"
+        b64_data = base64.b64encode(raw_bytes).decode("ascii")
+
+        prompt_text = " ".join(text_outputs).strip() or prompt_clean
 
         return self.save_generated_image(b64_data, prompt_text, mime_type)
