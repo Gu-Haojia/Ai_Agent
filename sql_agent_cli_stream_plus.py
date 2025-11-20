@@ -123,13 +123,11 @@ def _ensure_gemini_env_once() -> None:
     if _ENV_GEMINI_CHECKED:
         return
     key = (
-        os.environ.get("GOOGLE_API_KEY")
-        or os.environ.get("GEMINI_API_KEY")
-        or os.environ.get("GOOGLE_GENERATIVE_AI_API_KEY")
+        os.environ.get("GEMINI_API_KEY")
     )
     assert key, "缺少 GOOGLE_API_KEY / GEMINI_API_KEY 环境变量。"
-    if not os.environ.get("GOOGLE_API_KEY"):
-        os.environ["GOOGLE_API_KEY"] = key
+#    if not os.environ.get("GOOGLE_API_KEY"):
+#        os.environ["GOOGLE_API_KEY"] = key
     _ENV_GEMINI_CHECKED = True
 
 

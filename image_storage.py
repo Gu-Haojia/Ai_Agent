@@ -499,7 +499,7 @@ class ImageStorageManager:
         if ratio:
             assert ratio in allowed_ratio, f"aspect ratio 仅支持 {sorted(allowed_ratio)}"
 
-        client = genai.Client(api_key=api_key)
+        client = genai.Client()
 
         http_options = None
         if timeout is not None:
