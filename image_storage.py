@@ -511,6 +511,7 @@ class ImageStorageManager:
             http_options = types.HttpOptions(timeout=int(timeout * 1000))
 
         config = types.GenerateContentConfig(
+            response_modalities=["Image"],
             http_options=http_options,
         )
 
