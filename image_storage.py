@@ -11,6 +11,7 @@ import base64
 import mimetypes
 import os
 import threading
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +21,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 import requests
 from google import genai
 from google.genai import types
+from google.genai import errors
 
 __all__ = [
     "StoredImage",
@@ -545,9 +547,27 @@ class ImageStorageManager:
         parts.append(types.Part(text=prompt_clean))
         contents = [types.Content(role="user", parts=parts)]
 
-        response = client.models.generate_content(
-            model=model_name, contents=contents, config=config
-        )
+        max_attempts = 2
+        response = None
+        for attempt in range(max_attempts):
+            try:
+                response = client.models.generate_content(
+                    model=model_name, contents=contents, config=config
+                )
+                break
+            except errors.ClientError as exc:
+                status = getattr(exc, "status_code", None)
+                if status and int(status) >= 500 and attempt + 1 < max_attempts:
+                    print(
+                        f"警告：Gemini 图像生成 HTTP {status}，准备重试…",
+                        flush=True,
+                    )
+                    time.sleep(1)
+                    continue
+                raise
+
+        if response is None:
+            raise RuntimeError("Gemini 图像生成接口无响应")
 
         candidates = getattr(response, "candidates", None) or []
         if not candidates:
