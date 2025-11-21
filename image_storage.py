@@ -11,6 +11,7 @@ import base64
 import mimetypes
 import os
 import threading
+from io import BytesIO
 import time
 import uuid
 from dataclasses import dataclass
@@ -614,8 +615,25 @@ class ImageStorageManager:
         assert isinstance(raw_bytes, (bytes, bytearray)), "返回的图像数据格式异常"
 
         mime_type = getattr(inline_data, "mime_type", None) or "image/png"
-        b64_data = base64.b64encode(raw_bytes).decode("ascii")
+
+        cleaned_bytes = raw_bytes
+        cleaned_mime = mime_type
+        try:
+            from PIL import Image
+
+            with Image.open(BytesIO(raw_bytes)) as im:
+                # 强制去除元数据，转存为 PNG，避免下游预览因 EXIF/JFIF 差异产生异常。
+                mode = "RGBA" if im.mode == "RGBA" else "RGB"
+                converted = im.convert(mode)
+                buf = BytesIO()
+                converted.save(buf, format="PNG")
+                cleaned_bytes = buf.getvalue()
+                cleaned_mime = "image/png"
+        except Exception:
+            pass
+
+        b64_data = base64.b64encode(cleaned_bytes).decode("ascii")
 
         prompt_text = " ".join(text_outputs).strip() or prompt_clean
 
-        return self.save_generated_image(b64_data, prompt_text, mime_type)
+        return self.save_generated_image(b64_data, prompt_text, cleaned_mime)
