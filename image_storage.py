@@ -462,7 +462,7 @@ class ImageStorageManager:
         size: Optional[str] = None,
         reference_images: Optional[Sequence[GeminiReferenceImage]] = None,
         model: Optional[str] = None,
-        timeout: int = 30,
+        timeout: int = 120,
     ) -> GeneratedImage:
         """
         使用 Gemini API 生成或编辑图像，并将结果保存到本地。
