@@ -592,8 +592,8 @@ class ImageStorageManager:
             types.FinishReason.IMAGE_SAFETY,
             types.FinishReason.BLOCKLIST,
         }:
-            finish_message = getattr(first, "finish_message", None) or "Gemini 判定请求涉及受限内容"
-            raise RuntimeError(f"Gemini 拒绝生成图像：{finish_message}")
+            finish_message = getattr(first, "finish_message", None) or "Gemini 判定请求涉及受限内容: "
+            raise RuntimeError(f"Gemini 拒绝生成图像：{finish_message+finish_reason}")
 
         content = getattr(first, "content", None)
         parts_data = getattr(content, "parts", None) if content else None
