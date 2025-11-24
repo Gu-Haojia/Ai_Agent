@@ -565,14 +565,14 @@ class ImageStorageManager:
                     model=model_name, contents=contents, config=config
                 )
                 break
-            except errors.ClientError as exc:
+            except (errors.ClientError, errors.ServerError) as exc:
                 status = getattr(exc, "status_code", None)
                 if status and int(status) >= 500 and attempt + 1 < max_attempts:
                     print(
                         f"警告：Gemini 图像生成 HTTP {status}，准备重试…",
                         flush=True,
                     )
-                    time.sleep(1)
+                    time.sleep(5)
                     continue
                 raise
 
