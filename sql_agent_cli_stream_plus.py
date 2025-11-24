@@ -1417,7 +1417,7 @@ class SQLCheckpointAgentStreamingPlus:
         @tool #raw api 1.39.1
         def generate_local_image(
             prompt: str,
-            size: Optional[str] = None,
+            aspect_ratio: Optional[str] = None,
             reference_images: Optional[list[str]] = None,
         ) -> str:
             """
@@ -1425,7 +1425,7 @@ class SQLCheckpointAgentStreamingPlus:
 
             Args:
                 prompt (str): 图像描述或编辑指令，必须包含清晰主体与风格，一定要在prompt中体现用户需求，越详细越好，如果用户指定了prompt，直接复制即可，例如 “Transform the photo into a high-end studio portrait in the style of Apple executive headshots.The subject is shown in a half-body composition, wearing professional yet minimalist attire, with a natural and confident expression.Use soft directional lighting to gently highlight the facial features, leaving subtle catchlights in the eyes.The background shouldbe a smooth gradient in neutral tones (light gray or off-white), with clear separation between subject and background.Add a touch of refined film grain for texture, and keep the atmosphere calm, timeless, and sophisticated.Composition should follow minimalist principles, with negative space and non-centered framing for a modern look.--no text, logos, distracting objects, clutter”
-                size (Optional[str]): 输出比例（aspect ratio），仅允许 ``"1:1"``、``"2:3"``、``"3:2"``、``"3:4"``、``"4:3"``、``"9:16"``、``"16:9"``。
+                aspect_ratio (Optional[str]): 输出比例（aspect ratio），仅允许 ``"1:1"``、``"2:3"``、``"3:2"``、``"3:4"``、``"4:3"``、``"9:16"``、``"16:9"``。
                     在用户未显式指定比例时，不要传入该参数；传入 ``None`` 表示不指定比例。
                 reference_images (Optional[list[str]]):
                     参考图像文件名列表，文件需已保存在图像存储目录中。
@@ -1445,7 +1445,7 @@ class SQLCheckpointAgentStreamingPlus:
             assert prompt_text, "prompt 不能为空"
 
             manager = self._require_image_manager()
-            size_norm = size.strip() if isinstance(size, str) else None
+            size_norm = aspect_ratio.strip() if isinstance(aspect_ratio, str) else None
 
             references: list[tuple[str, str]] = []
             if reference_images:
@@ -1465,7 +1465,7 @@ class SQLCheckpointAgentStreamingPlus:
 
             image = manager.generate_image_via_gemini(
                 prompt=prompt_text,
-                size=size_norm,
+                aspect_ratio=size_norm,
                 reference_images=references or None,
             )
             self._generated_images.append(image)

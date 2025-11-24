@@ -459,7 +459,7 @@ class ImageStorageManager:
         self,
         prompt: str,
         *,
-        size: Optional[str] = None,
+        aspect_ratio: Optional[str] = None,
         reference_images: Optional[Sequence[GeminiReferenceImage]] = None,
         model: Optional[str] = None,
         timeout: int = 180,
@@ -469,7 +469,7 @@ class ImageStorageManager:
 
         Args:
             prompt (str): 图像生成或编辑的文本描述。
-            size (Optional[str]): 输出比例，可选 ``"1:1"``、``"2:3"``、``"3:2"``、``"3:4"``、``"4:3"``、``"9:16"``、``"16:9"``。
+            aspect_ratio (Optional[str]): 输出比例，可选 ``"1:1"``、``"2:3"``、``"3:2"``、``"3:4"``、``"4:3"``、``"9:16"``、``"16:9"``。
                 当用户未指定比例时请勿传入参数，传入 ``None`` 表示不指定比例。
             reference_images (Optional[Sequence[GeminiReferenceImage]]):
                 参考图像列表，每项为 ``(mime_type, base64_data)``。
@@ -497,7 +497,7 @@ class ImageStorageManager:
             "GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image"
         )
 
-        ratio = size.strip() if isinstance(size, str) else None
+        ratio = aspect_ratio.strip() if isinstance(aspect_ratio, str) else None
         allowed_ratio = {"1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9"}
         if ratio:
             assert ratio in allowed_ratio, f"aspect ratio 仅支持 {sorted(allowed_ratio)}"
