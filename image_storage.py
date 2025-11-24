@@ -557,7 +557,7 @@ class ImageStorageManager:
         parts.append(types.Part(text=prompt_clean))
         contents = [types.Content(role="user", parts=parts)]
 
-        max_attempts = 2
+        max_attempts = 5
         response = None
         for attempt in range(max_attempts):
             try:
@@ -574,7 +574,7 @@ class ImageStorageManager:
                         f"警告：Gemini 图像生成 HTTP {status}，准备重试…",
                         flush=True,
                     )
-                    time.sleep(5)
+                    time.sleep(15)
                     continue
                 raise
 
