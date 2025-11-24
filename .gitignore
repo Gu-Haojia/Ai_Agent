@@ -53,5 +53,6 @@ images/
 ticket_data/
 
 # Old files
+old/
 sql_agent_cli_stream_plus-g2.py
 sql_agent_cli_stream_plus-g3.py
