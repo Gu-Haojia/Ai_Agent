@@ -713,7 +713,7 @@ class SQLCheckpointAgentStreamingPlus:
             llm_tools_auto = llm
             llm_tools_none = llm
         else:
-            llm = init_chat_model(model_name, thinking_budget=-1)
+            llm = init_chat_model(model_name)
             tools = []
             if self._enable_tools:
                 from langchain_tavily import TavilySearch
