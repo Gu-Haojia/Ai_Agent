@@ -1358,6 +1358,11 @@ class QQBotHandler(BaseHTTPRequestHandler):
             os.environ["SYS_MSG_FILE"] = path
             try:
                 new_agent = _build_agent_from_env()
+                image_mgr = QQBotHandler.image_storage
+                assert isinstance(
+                    image_mgr, ImageStorageManager
+                ), "图像管理器尚未初始化"
+                new_agent.set_image_manager(image_mgr)
                 QQBotHandler.agent = new_agent
                 msg = f"已切换到 {name} 并重建 Agent。需要清除记忆请使用/forget 命令。"
             except AssertionError as e:
