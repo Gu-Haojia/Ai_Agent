@@ -460,6 +460,7 @@ class ImageStorageManager:
         prompt: str,
         *,
         aspect_ratio: Optional[str] = None,
+        size: Optional[str] = None,
         reference_images: Optional[Sequence[GeminiReferenceImage]] = None,
         model: Optional[str] = None,
         timeout: int = 180,
@@ -471,6 +472,7 @@ class ImageStorageManager:
             prompt (str): 图像生成或编辑的文本描述。
             aspect_ratio (Optional[str]): 输出比例，可选 ``"1:1"``、``"2:3"``、``"3:2"``、``"3:4"``、``"4:3"``、``"9:16"``、``"16:9"``。
                 当用户未指定比例时请勿传入参数，传入 ``None`` 表示不指定比例。
+            size (Optional[str]): 输出分辨率，可选 ``"1K"``、``"2K"``、``"4K"``，默认不传（API 默认为 1K）。未显式指定时请勿传入。
             reference_images (Optional[Sequence[GeminiReferenceImage]]):
                 参考图像列表，每项为 ``(mime_type, base64_data)``。
             model (Optional[str]): Gemini 图像模型名称，默认 ``gemini-2.5-flash-image``。
@@ -501,6 +503,10 @@ class ImageStorageManager:
         allowed_ratio = {"1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9"}
         if ratio:
             assert ratio in allowed_ratio, f"aspect ratio 仅支持 {sorted(allowed_ratio)}"
+        size_norm = size.strip().upper() if isinstance(size, str) else None
+        allowed_size = {"1K", "2K", "4K"}
+        if size_norm:
+            assert size_norm in allowed_size, f"size 仅支持 {sorted(allowed_size)}"
 
         client = genai.Client()
 
@@ -511,6 +517,9 @@ class ImageStorageManager:
         image_cfg = None
         if ratio:
             image_cfg = types.ImageConfig(aspect_ratio=ratio)
+        if size_norm:
+            image_cfg = image_cfg or types.ImageConfig()
+            image_cfg.image_size = size_norm
 
         config = (
             types.GenerateContentConfig(
