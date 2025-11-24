@@ -567,6 +567,8 @@ class ImageStorageManager:
                 break
             except (errors.ClientError, errors.ServerError) as exc:
                 status = getattr(exc, "status_code", None)
+                if status is None and hasattr(exc, "code"):
+                    status = getattr(exc, "code")
                 if status and int(status) >= 500 and attempt + 1 < max_attempts:
                     print(
                         f"警告：Gemini 图像生成 HTTP {status}，准备重试…",
