@@ -462,14 +462,14 @@ class ImageStorageManager:
         size: Optional[str] = None,
         reference_images: Optional[Sequence[GeminiReferenceImage]] = None,
         model: Optional[str] = None,
-        timeout: int = 120,
+        timeout: int = 180,
     ) -> GeneratedImage:
         """
         使用 Gemini API 生成或编辑图像，并将结果保存到本地。
 
         Args:
             prompt (str): 图像生成或编辑的文本描述。
-            size (Optional[str]): 输出比例，可选 ``"1:1"``、``"3:4"``、``"4:3"``、``"9:16"``、``"16:9"``。
+            size (Optional[str]): 输出比例，可选 ``"1:1"``、``"2:3"``、``"3:2"``、``"3:4"``、``"4:3"``、``"9:16"``、``"16:9"``。
                 当用户未指定比例时请勿传入参数，传入 ``None`` 表示不指定比例。
             reference_images (Optional[Sequence[GeminiReferenceImage]]):
                 参考图像列表，每项为 ``(mime_type, base64_data)``。
@@ -498,7 +498,7 @@ class ImageStorageManager:
         )
 
         ratio = size.strip() if isinstance(size, str) else None
-        allowed_ratio = {"1:1", "3:4", "4:3", "9:16", "16:9"}
+        allowed_ratio = {"1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9"}
         if ratio:
             assert ratio in allowed_ratio, f"aspect ratio 仅支持 {sorted(allowed_ratio)}"
 
