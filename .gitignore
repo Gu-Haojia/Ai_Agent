@@ -10,6 +10,8 @@ __pycache__/
 .venv/
 venv/
 .venv311/
+.venv311 - GM3/
+.venv311 - GM2/
 
 # OS / Editors
 .DS_Store
@@ -41,8 +43,15 @@ logs/
 prompt/
 prompts/
 AGENTS.md
+
+# Excutable scripts
 run_qq_group_bot.sh
+run_qq_bot.bat
 
 # Data
 images/
 ticket_data/
+
+# Old files
+sql_agent_cli_stream_plus-g2.py
+sql_agent_cli_stream_plus-g3.py
