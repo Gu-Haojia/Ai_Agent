@@ -1339,17 +1339,17 @@ class QQBotHandler(BaseHTTPRequestHandler):
 
         if cmd == "/cmd" and len(parts) == 1:
             msg = (
-                "高性能AI萝卜子-小妃那 Ver. 2.0\n"
+                "高性能AI萝卜子-たきな Ver. 3.0\n"
                 "可用命令:\n"
                 "1) /cmd — 命令列表\n"
                 "2) /switch — 可用 prompts\n"
-                "3) /switch <name> — 切换到 <name> prompt\n"
+                "3) /switch <name> — 切换prompt\n"
                 "4) /clear — 清除当前群聊全部记忆\n"
                 "5) /whoami — 你是？\n"
                 "6) /token — 输出当前 token 数\n"
                 "7) /forget - 清除上下文记忆\n"
                 "8) /rmdata - 清除长期记忆\n"
-                "9) /power - 切换 Gemini 模型并重建 Agent"
+                "9) /power - 切换后端可用模型"
             )
             _send_group_msg(
                 self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
