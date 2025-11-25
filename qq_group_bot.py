@@ -1278,6 +1278,28 @@ class QQBotHandler(BaseHTTPRequestHandler):
         QQBotHandler.save_namespace_store()
         return new_ns
 
+    @classmethod
+    def rebuild_agent(cls) -> SQLCheckpointAgentStreamingPlus:
+        """
+        基于当前环境变量重建 Agent 并更新共享实例。
+
+        Args:
+            cls (type[QQBotHandler]): 当前 Handler 类引用。
+
+        Returns:
+            SQLCheckpointAgentStreamingPlus: 重建后的 Agent 实例。
+
+        Raises:
+            AssertionError: 当图像存储管理器未初始化时抛出。
+            Exception: 构建 Agent 或注入依赖时的其他异常。
+        """
+        new_agent = _build_agent_from_env()
+        image_mgr = cls.image_storage
+        assert isinstance(image_mgr, ImageStorageManager), "图像存储管理器尚未初始化"
+        new_agent.set_image_manager(image_mgr)
+        cls.agent = new_agent
+        return new_agent
+
     def _handle_commands(self, group_id: int, user_id: int, text: str) -> bool:
         """处理内部命令。
 
@@ -1326,7 +1348,8 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 "5) /whoami — 你是？\n"
                 "6) /token — 输出当前 token 数\n"
                 "7) /forget - 清除上下文记忆\n"
-                "8) /rmdata - 清除长期记忆"
+                "8) /rmdata - 清除长期记忆\n"
+                "9) /power - 切换 Gemini 模型并重建 Agent"
             )
             _send_group_msg(
                 self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
@@ -1357,14 +1380,36 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 return True
             os.environ["SYS_MSG_FILE"] = path
             try:
-                new_agent = _build_agent_from_env()
-                image_mgr = QQBotHandler.image_storage
-                assert isinstance(
-                    image_mgr, ImageStorageManager
-                ), "图像管理器尚未初始化"
-                new_agent.set_image_manager(image_mgr)
-                QQBotHandler.agent = new_agent
+                self.rebuild_agent()
                 msg = f"已切换到 {name} 并重建 Agent。需要清除记忆请使用/forget 命令。"
+            except AssertionError as e:
+                msg = f"切换失败：{e}"
+            except Exception as e:
+                msg = f"切换失败（内部错误）：{e}"
+            _send_group_msg(
+                self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
+            )
+            return True
+
+        if cmd == "/power" and len(parts) == 1:
+            candidates = (
+                "google_genai:gemini-2.5-pro",
+                "google_genai:gemini-3-pro-preview",
+            )
+            current_model = self.agent._config.model_name
+            try:
+                assert current_model, "当前 Agent 模型未配置。"
+                assert (
+                    current_model in candidates
+                ), f"当前模型 {current_model} 不在可切换列表，请先配置为 Gemini 候选模型。"
+                next_model = (
+                    candidates[1]
+                    if current_model == candidates[0]
+                    else candidates[0]
+                )
+                os.environ["MODEL_NAME"] = next_model
+                self.rebuild_agent()
+                msg = f"模型已切换：{current_model} -> {next_model}，Agent 已重建。"
             except AssertionError as e:
                 msg = f"切换失败：{e}"
             except Exception as e:
