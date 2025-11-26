@@ -142,6 +142,32 @@ class ImageStorageManager:
             path.write_bytes(data)
         return path
 
+    @staticmethod
+    def _extract_block_reason(response: object) -> Optional[str]:
+        """
+        从 Gemini 响应中提取阻断原因。
+
+        Args:
+            response (object): Gemini 原始响应对象。
+
+        Returns:
+            Optional[str]: 阻断原因字符串，未包含阻断信息则返回 ``None``。
+
+        Raises:
+            None: 本方法不会主动抛出异常。
+        """
+        prompt_feedback = getattr(response, "prompt_feedback", None)
+        if prompt_feedback is None:
+            return None
+        block_reason = getattr(prompt_feedback, "block_reason", None)
+        if block_reason is None:
+            return None
+        block_value = getattr(block_reason, "value", None)
+        if isinstance(block_value, str) and block_value.strip():
+            return block_value.strip()
+        block_str = str(block_reason).strip()
+        return block_str or None
+
     def _generate_url_candidates(self, url: str) -> list[str]:
         """根据已知规则生成优先尝试的下载地址列表。"""
         parsed = urlparse(url)
@@ -581,10 +607,12 @@ class ImageStorageManager:
         if response is None:
             raise RuntimeError("Gemini 图像生成接口无响应")
 
+        block_reason = self._extract_block_reason(response)
         candidates = getattr(response, "candidates", None) or []
         if not candidates:
             print(f"ERROR: 完整 Gemini 响应内容: {response}", flush=True)
-            raise RuntimeError("Gemini 响应缺少候选结果")
+            reason_suffix = f"，阻断原因：{block_reason}" if block_reason else ""
+            raise RuntimeError(f"Gemini 响应缺少候选结果{reason_suffix}")
 
         first = candidates[0]
         finish_reason = getattr(first, "finish_reason", None)
