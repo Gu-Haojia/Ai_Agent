@@ -597,7 +597,7 @@ class ImageStorageManager:
                     status = getattr(exc, "code")
                 if status and int(status) >= 500 and attempt + 1 < max_attempts and int(status) != 503:
                     print(
-                        f"警告：Gemini 图像生成 HTTP {status}，准备重试…",
+                        f"警告：图像生成 HTTP {status}，准备重试…",
                         flush=True,
                     )
                     time.sleep(15)
@@ -605,14 +605,14 @@ class ImageStorageManager:
                 raise
 
         if response is None:
-            raise RuntimeError("Gemini 图像生成接口无响应")
+            raise RuntimeError("图像生成接口无响应")
 
         block_reason = self._extract_block_reason(response)
         candidates = getattr(response, "candidates", None) or []
         if not candidates:
-            print(f"ERROR: 完整 Gemini 响应内容: {response}", flush=True)
+            print(f"ERROR: 完整响应内容: {response}", flush=True)
             reason_suffix = f"，阻断原因：{block_reason}" if block_reason else ""
-            raise RuntimeError(f"Gemini 响应缺少候选结果{reason_suffix}")
+            raise RuntimeError(f"响应缺少候选结果{reason_suffix}")
 
         first = candidates[0]
         finish_reason = getattr(first, "finish_reason", None)
@@ -628,8 +628,8 @@ class ImageStorageManager:
         content = getattr(first, "content", None)
         parts_data = getattr(content, "parts", None) if content else None
         if not parts_data:
-            print(f"ERROR: 完整 Gemini 响应内容: {response}", flush=True)
-            raise RuntimeError("Gemini 响应缺少内容片段")
+            print(f"ERROR: 完整响应内容: {response}", flush=True)
+            raise RuntimeError("响应缺少内容片段")
 
         inline_data = None
         text_outputs: list[str] = []
@@ -642,8 +642,8 @@ class ImageStorageManager:
                 break
 
         if not inline_data:
-            print(f"ERROR: 完整 Gemini 响应内容: {response}", flush=True)
-            raise RuntimeError("Gemini 响应未返回图像数据")
+            print(f"ERROR: 完整响应内容: {response}", flush=True)
+            raise RuntimeError("响应未返回图像数据")
 
         raw_bytes = inline_data.data
         if isinstance(raw_bytes, str):
