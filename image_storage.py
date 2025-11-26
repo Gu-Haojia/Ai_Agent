@@ -489,7 +489,7 @@ class ImageStorageManager:
         size: Optional[str] = None,
         reference_images: Optional[Sequence[GeminiReferenceImage]] = None,
         model: Optional[str] = None,
-        timeout: int = 180,
+        timeout: Optional[int] = None,
     ) -> GeneratedImage:
         """
         使用 Gemini API 生成或编辑图像，并将结果保存到本地。
@@ -550,7 +550,7 @@ class ImageStorageManager:
         config = (
             types.GenerateContentConfig(
                 image_config=image_cfg,
-                http_options=http_options,
+                #http_options=http_options,
             )
             if (image_cfg is not None or http_options is not None)
             else None
