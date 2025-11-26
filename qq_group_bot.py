@@ -1307,6 +1307,8 @@ class QQBotHandler(BaseHTTPRequestHandler):
         - /cmd                → 返回命令列表
         - /switch             → 列出 prompts 目录下可用文件名（不含后缀）
         - /switch <name>      → 切换到 prompts/<name>.txt（设置 SYS_MSG_FILE）并重建 Agent
+        - /power              → 在 Gemini 文本模型之间切换并重建 Agent
+        - /image              → 在 Gemini 生图模型之间切换
         - /clear              → 为当前群新建线程
         - /whoami             → 先回当前系统提示词，再基于“你是谁”生成一条消息
         - /token              → 统计当前群对应线程的消息 token 数
@@ -1349,7 +1351,8 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 "6) /token — 输出当前 token 数\n"
                 "7) /forget - 清除上下文记忆\n"
                 "8) /rmdata - 清除长期记忆\n"
-                "9) /power - 切换后端可用模型"
+                "9) /power - 切换后端可用模型\n"
+                "10) /image - 切换生图模型"
             )
             _send_group_msg(
                 self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
@@ -1382,6 +1385,32 @@ class QQBotHandler(BaseHTTPRequestHandler):
             try:
                 self.rebuild_agent()
                 msg = f"已切换到 {name} 并重建 Agent。需要清除记忆请使用/forget 命令。"
+            except AssertionError as e:
+                msg = f"切换失败：{e}"
+            except Exception as e:
+                msg = f"切换失败（内部错误）：{e}"
+            _send_group_msg(
+                self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
+            )
+            return True
+
+        if cmd == "/image" and len(parts) == 1:
+            candidates = (
+                "gemini-3-pro-image-preview",
+                "gemini-2.5-flash-image",
+            )
+            current_model = os.environ.get("GEMINI_IMAGE_MODEL") or candidates[1]
+            try:
+                assert (
+                    current_model in candidates
+                ), f"当前模型 {current_model} 不在可切换列表，请先设置为 Gemini 生图模型。"
+                next_model = (
+                    candidates[1]
+                    if current_model == candidates[0]
+                    else candidates[0]
+                )
+                os.environ["GEMINI_IMAGE_MODEL"] = next_model
+                msg = f"生图模型已切换：{current_model} -> {next_model}。"
             except AssertionError as e:
                 msg = f"切换失败：{e}"
             except Exception as e:
