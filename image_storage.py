@@ -543,7 +543,7 @@ class ImageStorageManager:
         image_cfg = None
         if ratio:
             image_cfg = types.ImageConfig(aspect_ratio=ratio)
-        if size_norm:
+        if size_norm and model_name != "gemini-2.5-flash-image":
             image_cfg = image_cfg or types.ImageConfig()
             image_cfg.image_size = size_norm
 
