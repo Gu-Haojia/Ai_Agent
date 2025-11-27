@@ -869,9 +869,9 @@ class SQLCheckpointAgentStreamingPlus:
                             hl (str): Google 语言参数，默认 ``zh-CN``。
                             currency (str): 货币代码，例如``CNY``、``USD``。
 
-            Returns:
-                str: SerpAPI 原始响应的 JSON 字符串。注意核对货币单位默认是人民币（CNY）。
-                    当外部请求异常时返回错误描述字符串。
+                        Returns:
+                            str: SerpAPI 原始响应的 JSON 字符串。注意核对货币单位默认是人民币（CNY）。
+                                当外部请求异常时返回错误描述字符串。
 
                         Raises:
                             ValueError: 当参数非法或外部接口调用失败时抛出。
@@ -944,9 +944,9 @@ class SQLCheckpointAgentStreamingPlus:
                             adults (int): 成人数量，默认 1。
                             type (str): 行程类型，支持 ``round_trip``（默认）或 ``one_way``。
 
-            Returns:
-                str: SerpAPI 原始响应的 JSON 字符串。注意核对请求货币单位。
-                    当外部请求异常时返回错误描述字符串。
+                        Returns:
+                            str: SerpAPI 原始响应的 JSON 字符串。注意核对请求货币单位。
+                                当外部请求异常时返回错误描述字符串。
 
                         Raises:
                             ValueError: 当参数非法或外部接口调用失败时抛出。
@@ -1087,9 +1087,9 @@ class SQLCheckpointAgentStreamingPlus:
                             end_addr (str): 终点地址（字符串格式，尽量使用地点当地语言），例如“新宿駅”。
                             travel_time (str | None): 可选，出发/到达的当地时间，格式 ``depart_at:2024-12-16T13:56`` 或 ``arrive_by:2024-12-16T13:56``。
 
-            Returns:
-                str: 裁剪后的路线 JSON 字符串，仅包含前两段 directions；
-                    当外部请求异常时返回错误描述字符串。
+                        Returns:
+                            str: 裁剪后的路线 JSON 字符串，仅包含前两段 directions；
+                                当外部请求异常时返回错误描述字符串。
 
                         Raises:
                             ValueError: 当 SerpAPI 调用失败时抛出。
@@ -1124,8 +1124,8 @@ class SQLCheckpointAgentStreamingPlus:
                                 - URL 示例: "https://example.com/image.jpg"
                                 - 本地文件名示例: "my_photo.png"
 
-            Returns:
-                str: 过滤后的 SerpAPI 响应 JSON 字符串；当外部请求异常时返回错误描述字符串。
+                        Returns:
+                            str: 过滤后的 SerpAPI 响应 JSON 字符串；当外部请求异常时返回错误描述字符串。
 
                         Raises:
                             ValueError: 当上传或 SerpAPI 调用失败时抛出。
@@ -1167,8 +1167,8 @@ class SQLCheckpointAgentStreamingPlus:
                                 - URL 示例: "https://example.com/image.jpg"
                                 - 本地文件名示例: "my_photo.png"
 
-            Returns:
-                str: 过滤后的 Google Lens JSON 结果；当外部请求异常时返回错误描述字符串。
+                        Returns:
+                            str: 过滤后的 Google Lens JSON 结果；当外部请求异常时返回错误描述字符串。
 
                         Raises:
                             ValueError: 当上传或 SerpAPI 调用失败时抛出。
