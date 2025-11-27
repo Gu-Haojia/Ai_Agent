@@ -1467,7 +1467,8 @@ class SQLCheckpointAgentStreamingPlus:
                     在用户未显式指定比例时，不要传入该参数；传入 ``None`` 表示不指定比例。
                 size (Optional[str]): 输出分辨率，允许 ``"1K"``、``"2K"``、``"4K"``，默认不传（API 默认为 1K）。未指定时不要传。
                 reference_images (Optional[list[str]]):
-                    参考图像文件名列表，文件需已保存在图像存储目录中。
+                    参考图像列表，元素可为已保存的文件名或 HTTP(S) URL；
+                    传入 URL 时会自动下载到图像存储 incoming 目录，再作为参考图参与生成。
 
             Returns:
                 str: JSON 字符串，包含 ``path``、``mime_type`` 与 ``text``。
@@ -1484,28 +1485,39 @@ class SQLCheckpointAgentStreamingPlus:
             assert prompt_text, "prompt 不能为空"
 
             manager = self._require_image_manager()
-            size_norm = aspect_ratio.strip() if isinstance(aspect_ratio, str) else None
+            aspect_ratio_norm = (
+                aspect_ratio.strip() if isinstance(aspect_ratio, str) else None
+            )
             resolution = size.strip().upper() if isinstance(size, str) else None
 
             references: list[tuple[str, str]] = []
             if reference_images:
                 assert isinstance(
                     reference_images, list
-                ), "reference_images 必须为文件名列表"
+                ), "reference_images 必须为文件名或 URL 列表"
 
                 for item in reference_images:
                     assert (
                         isinstance(item, str) and item.strip()
                     ), "reference_images 包含空字符串"
-                    name = item.strip()
-                    stored_image = manager.load_stored_image(name)
-                    references.append(
-                        (stored_image.mime_type, stored_image.base64_data)
-                    )
+                    name_or_url = item.strip()
+                    if name_or_url.startswith(("http://", "https://")):
+                        stored_remote = manager.save_remote_image(name_or_url)
+                        assert (
+                            stored_remote is not None
+                        ), "参考图像下载失败或格式不受支持"
+                        references.append(
+                            (stored_remote.mime_type, stored_remote.base64_data)
+                        )
+                    else:
+                        stored_image = manager.load_stored_image(name_or_url)
+                        references.append(
+                            (stored_image.mime_type, stored_image.base64_data)
+                        )
 
             image = manager.generate_image_via_gemini(
                 prompt=prompt_text,
-                aspect_ratio=size_norm,
+                aspect_ratio=aspect_ratio_norm,
                 size=resolution,
                 reference_images=references or None,
             )
