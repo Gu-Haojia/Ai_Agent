@@ -2011,6 +2011,8 @@ class _FakeStreamingEcho:
 
 
 if __name__ == "__main__":
+    from qq_group_bot import _load_env_from_files
+    _load_env_from_files([".env.local", ".env"])
     # 按需启动/停止本机 brew postgresql，便于你的调试
     os.system("brew services start postgresql")
     # wait for postgresql to be ready
