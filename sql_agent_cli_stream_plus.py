@@ -869,8 +869,9 @@ class SQLCheckpointAgentStreamingPlus:
                             hl (str): Google 语言参数，默认 ``zh-CN``。
                             currency (str): 货币代码，例如``CNY``、``USD``。
 
-                        Returns:
-                            str: SerpAPI 原始响应的 JSON 字符串。注意核对货币单位默认是人民币（CNY）。
+            Returns:
+                str: SerpAPI 原始响应的 JSON 字符串。注意核对货币单位默认是人民币（CNY）。
+                    当外部请求异常时返回错误描述字符串。
 
                         Raises:
                             ValueError: 当参数非法或外部接口调用失败时抛出。
@@ -889,32 +890,35 @@ class SQLCheckpointAgentStreamingPlus:
                         if sort_by is not None:
                             request_kwargs["sort_by"] = sort_by
 
-                        request_model = GoogleHotelsRequest(**request_kwargs)
-                        raw_payload = google_hotels_client.search(request_model)
-                        payload = sanitize_hotels_payload(raw_payload)
-                        summary = google_hotels_formatter.summarize(payload)
-                        timestamp = time.strftime("[%m-%d %H:%M:%S]", time.localtime())
-                        # 打印工具参数（包含排序映射后的结果）
-                        normalized_args = request_model.model_dump(exclude_none=True)
-                        print(
-                            f"\033[94m{timestamp}\033[0m [GoogleHotels Tool] 参数：{json.dumps(normalized_args, ensure_ascii=False)}",
-                            flush=True,
-                        )
+                        try:
+                            request_model = GoogleHotelsRequest(**request_kwargs)
+                            raw_payload = google_hotels_client.search(request_model)
+                            payload = sanitize_hotels_payload(raw_payload)
+                            summary = google_hotels_formatter.summarize(payload)
+                            timestamp = time.strftime("[%m-%d %H:%M:%S]", time.localtime())
+                            # 打印工具参数（包含排序映射后的结果）
+                            normalized_args = request_model.model_dump(exclude_none=True)
+                            print(
+                                f"\033[94m{timestamp}\033[0m [GoogleHotels Tool] 参数：{json.dumps(normalized_args, ensure_ascii=False)}",
+                                flush=True,
+                            )
 
-                        if summary:
-                            console_text = json.dumps(
-                                summary, ensure_ascii=False, indent=2
-                            )
-                            print(
-                                f"\033[94m{timestamp}\033[0m [GoogleHotels Tool] 摘要：\n{console_text}",
-                                flush=True,
-                            )
-                        else:
-                            print(
-                                f"\033[94m{timestamp}\033[0m [GoogleHotels Tool] 摘要：暂无可用酒店信息。",
-                                flush=True,
-                            )
-                        return json.dumps(payload, ensure_ascii=False)
+                            if summary:
+                                console_text = json.dumps(
+                                    summary, ensure_ascii=False, indent=2
+                                )
+                                print(
+                                    f"\033[94m{timestamp}\033[0m [GoogleHotels Tool] 摘要：\n{console_text}",
+                                    flush=True,
+                                )
+                            else:
+                                print(
+                                    f"\033[94m{timestamp}\033[0m [GoogleHotels Tool] 摘要：暂无可用酒店信息。",
+                                    flush=True,
+                                )
+                            return json.dumps(payload, ensure_ascii=False)
+                        except Exception as exc:
+                            return f"Google Hotels 查询失败：{exc}"
 
                     tools.append(google_hotels_search)
 
@@ -940,46 +944,50 @@ class SQLCheckpointAgentStreamingPlus:
                             adults (int): 成人数量，默认 1。
                             type (str): 行程类型，支持 ``round_trip``（默认）或 ``one_way``。
 
-                        Returns:
-                            str: SerpAPI 原始响应的 JSON 字符串。注意核对请求货币单位。
+            Returns:
+                str: SerpAPI 原始响应的 JSON 字符串。注意核对请求货币单位。
+                    当外部请求异常时返回错误描述字符串。
 
                         Raises:
                             ValueError: 当参数非法或外部接口调用失败时抛出。
                         """
 
-                        request_kwargs: dict[str, Any] = {
-                            "departure_id": departure_id,
-                            "arrival_id": arrival_id,
-                            "outbound_date": outbound_date,
-                            "return_date": return_date,
-                            "adults": adults,
-                            "sort_by": sort_by,
-                            "trip_type": type,
-                        }
-                        request_model = GoogleFlightsRequest(**request_kwargs)
-                        raw_payload = google_flights_client.search(request_model)
-                        payload = sanitize_flights_payload(raw_payload)
-                        summary = google_flights_formatter.summarize(payload)
-                        timestamp = time.strftime("[%m-%d %H:%M:%S]", time.localtime())
-                        normalized_args = request_model.model_dump(exclude_none=True)
-                        print(
-                            f"\033[94m{timestamp}\033[0m [GoogleFlights Tool] 参数：{json.dumps(normalized_args, ensure_ascii=False)}",
-                            flush=True,
-                        )
-                        if summary:
-                            console_text = json.dumps(
-                                summary, ensure_ascii=False, indent=2
-                            )
+                        try:
+                            request_kwargs: dict[str, Any] = {
+                                "departure_id": departure_id,
+                                "arrival_id": arrival_id,
+                                "outbound_date": outbound_date,
+                                "return_date": return_date,
+                                "adults": adults,
+                                "sort_by": sort_by,
+                                "trip_type": type,
+                            }
+                            request_model = GoogleFlightsRequest(**request_kwargs)
+                            raw_payload = google_flights_client.search(request_model)
+                            payload = sanitize_flights_payload(raw_payload)
+                            summary = google_flights_formatter.summarize(payload)
+                            timestamp = time.strftime("[%m-%d %H:%M:%S]", time.localtime())
+                            normalized_args = request_model.model_dump(exclude_none=True)
                             print(
-                                f"\033[94m{timestamp}\033[0m [GoogleFlights Tool] 摘要：\n{console_text}",
+                                f"\033[94m{timestamp}\033[0m [GoogleFlights Tool] 参数：{json.dumps(normalized_args, ensure_ascii=False)}",
                                 flush=True,
                             )
-                        else:
-                            print(
-                                f"\033[94m{timestamp}\033[0m [GoogleFlights Tool] 摘要：暂无可用航班信息。",
-                                flush=True,
-                            )
-                        return json.dumps(payload, ensure_ascii=False)
+                            if summary:
+                                console_text = json.dumps(
+                                    summary, ensure_ascii=False, indent=2
+                                )
+                                print(
+                                    f"\033[94m{timestamp}\033[0m [GoogleFlights Tool] 摘要：\n{console_text}",
+                                    flush=True,
+                                )
+                            else:
+                                print(
+                                    f"\033[94m{timestamp}\033[0m [GoogleFlights Tool] 摘要：暂无可用航班信息。",
+                                    flush=True,
+                                )
+                            return json.dumps(payload, ensure_ascii=False)
+                        except Exception as exc:
+                            return f"Google Flights 查询失败：{exc}"
 
                     tools.append(google_flights_search)
 
@@ -1079,26 +1087,30 @@ class SQLCheckpointAgentStreamingPlus:
                             end_addr (str): 终点地址（字符串格式，尽量使用地点当地语言），例如“新宿駅”。
                             travel_time (str | None): 可选，出发/到达的当地时间，格式 ``depart_at:2024-12-16T13:56`` 或 ``arrive_by:2024-12-16T13:56``。
 
-                        Returns:
-                            str: 裁剪后的路线 JSON 字符串，仅包含前两段 directions。
+            Returns:
+                str: 裁剪后的路线 JSON 字符串，仅包含前两段 directions；
+                    当外部请求异常时返回错误描述字符串。
 
                         Raises:
                             ValueError: 当 SerpAPI 调用失败时抛出。
                         """
 
-                        normalized_time = _normalize_directions_time_arg(travel_time)
-                        result = google_directions_client.search(
-                            start_addr,
-                            end_addr,
-                            time=normalized_time,
-                        )
-                        trimmed = _trim_directions_payload(result)
-                        timestamp = time.strftime("[%m-%d %H:%M:%S]", time.localtime())
-                        print(
-                            f"\033[94m{timestamp}\033[0m [GoogleDirections Tool] 起点：{start_addr} 终点：{end_addr} 时间：{travel_time} 返回段数：{len(trimmed.get('directions', []))}",
-                            flush=True,
-                        )
-                        return json.dumps(trimmed, ensure_ascii=False)
+                        try:
+                            normalized_time = _normalize_directions_time_arg(travel_time)
+                            result = google_directions_client.search(
+                                start_addr,
+                                end_addr,
+                                time=normalized_time,
+                            )
+                            trimmed = _trim_directions_payload(result)
+                            timestamp = time.strftime("[%m-%d %H:%M:%S]", time.localtime())
+                            print(
+                                f"\033[94m{timestamp}\033[0m [GoogleDirections Tool] 起点：{start_addr} 终点：{end_addr} 时间：{travel_time} 返回段数：{len(trimmed.get('directions', []))}",
+                                flush=True,
+                            )
+                            return json.dumps(trimmed, ensure_ascii=False)
+                        except Exception as exc:
+                            return f"Google Maps 路线查询失败：{exc}"
 
                     tools.append(google_maps_directions)
 
@@ -1112,8 +1124,8 @@ class SQLCheckpointAgentStreamingPlus:
                                 - URL 示例: "https://example.com/image.jpg"
                                 - 本地文件名示例: "my_photo.png"
 
-                        Returns:
-                            str: 过滤后的 SerpAPI 响应 JSON 字符串。
+            Returns:
+                str: 过滤后的 SerpAPI 响应 JSON 字符串；当外部请求异常时返回错误描述字符串。
 
                         Raises:
                             ValueError: 当上传或 SerpAPI 调用失败时抛出。
@@ -1124,21 +1136,24 @@ class SQLCheckpointAgentStreamingPlus:
                             isinstance(image_url, str) and image_url.strip()
                         ), "image_url 不能为空"
                         normalized_input = image_url.strip()
-                        if normalized_input.lower().startswith(("http://", "https://")):
-                            prepared = normalized_input
-                        else:
-                            manager = self._require_image_manager()
-                            image_path = manager.resolve_image_path(normalized_input)
-                            prepared = str(image_path)
+                        try:
+                            if normalized_input.lower().startswith(("http://", "https://")):
+                                prepared = normalized_input
+                            else:
+                                manager = self._require_image_manager()
+                                image_path = manager.resolve_image_path(normalized_input)
+                                prepared = str(image_path)
 
-                        result = reverse_image_tool.run(prepared)
-                        timestamp = time.strftime("[%m-%d %H:%M:%S]", time.localtime())
-                        results_count = len(result.get("image_results", []))
-                        print(
-                            f"\033[94m{timestamp}\033[0m [GoogleReverseImage Tool] URL：{result.get('source_image_url')}，命中数量：{results_count}",
-                            flush=True,
-                        )
-                        return json.dumps(result, ensure_ascii=False)
+                            result = reverse_image_tool.run(prepared)
+                            timestamp = time.strftime("[%m-%d %H:%M:%S]", time.localtime())
+                            results_count = len(result.get("image_results", []))
+                            print(
+                                f"\033[94m{timestamp}\033[0m [GoogleReverseImage Tool] URL：{result.get('source_image_url')}，命中数量：{results_count}",
+                                flush=True,
+                            )
+                            return json.dumps(result, ensure_ascii=False)
+                        except Exception as exc:
+                            return f"Google 反向搜图失败：{exc}"
 
                     # tools.append(google_reverse_image_search)  #暂时关闭反向搜图工具
 
@@ -1152,8 +1167,8 @@ class SQLCheckpointAgentStreamingPlus:
                                 - URL 示例: "https://example.com/image.jpg"
                                 - 本地文件名示例: "my_photo.png"
 
-                        Returns:
-                            str: 过滤后的 Google Lens JSON 结果。
+            Returns:
+                str: 过滤后的 Google Lens JSON 结果；当外部请求异常时返回错误描述字符串。
 
                         Raises:
                             ValueError: 当上传或 SerpAPI 调用失败时抛出。
@@ -1164,22 +1179,25 @@ class SQLCheckpointAgentStreamingPlus:
                             isinstance(image_url, str) and image_url.strip()
                         ), "image_url 不能为空"
                         normalized_input = image_url.strip()
-                        if normalized_input.lower().startswith(("http://", "https://")):
-                            prepared = normalized_input
-                        else:
-                            manager = self._require_image_manager()
-                            image_path = manager.resolve_image_path(normalized_input)
-                            prepared = str(image_path)
+                        try:
+                            if normalized_input.lower().startswith(("http://", "https://")):
+                                prepared = normalized_input
+                            else:
+                                manager = self._require_image_manager()
+                                image_path = manager.resolve_image_path(normalized_input)
+                                prepared = str(image_path)
 
-                        result = google_lens_tool.run(prepared)
-                        timestamp = time.strftime("[%m-%d %H:%M:%S]", time.localtime())
-                        knowledge_count = len(result.get("knowledge_graph", []))
-                        matches_count = len(result.get("visual_matches", []))
-                        print(
-                            f"\033[94m{timestamp}\033[0m [GoogleLens Tool] URL：{result.get('source_image_url')}，知识图谱条目：{knowledge_count}，视觉匹配条目：{matches_count}",
-                            flush=True,
-                        )
-                        return json.dumps(result, ensure_ascii=False)
+                            result = google_lens_tool.run(prepared)
+                            timestamp = time.strftime("[%m-%d %H:%M:%S]", time.localtime())
+                            knowledge_count = len(result.get("knowledge_graph", []))
+                            matches_count = len(result.get("visual_matches", []))
+                            print(
+                                f"\033[94m{timestamp}\033[0m [GoogleLens Tool] URL：{result.get('source_image_url')}，知识图谱条目：{knowledge_count}，视觉匹配条目：{matches_count}",
+                                flush=True,
+                            )
+                            return json.dumps(result, ensure_ascii=False)
+                        except Exception as exc:
+                            return f"Google Lens 识别失败：{exc}"
 
                     tools.append(google_lens_search)
 
