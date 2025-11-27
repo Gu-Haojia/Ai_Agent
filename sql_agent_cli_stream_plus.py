@@ -1469,9 +1469,11 @@ class SQLCheckpointAgentStreamingPlus:
                 reference_images (Optional[list[str]]):
                     参考图像列表，元素可为已保存的文件名或 HTTP(S) URL；
                     传入 URL 时会自动下载到图像存储 incoming 目录，再作为参考图参与生成。
+                    若下载失败则直接返回错误描述，不会向 QQ 侧抛出异常。
 
             Returns:
-                str: JSON 字符串，包含 ``path``、``mime_type`` 与 ``text``。
+                str: JSON 字符串，包含 ``path``、``mime_type`` 与 ``text``；
+                    当参考图像下载失败或格式不支持时返回错误描述字符串。
 
             Raises:
                 AssertionError: 当参数非法或参考图像不可用时抛出。
@@ -1502,10 +1504,12 @@ class SQLCheckpointAgentStreamingPlus:
                     ), "reference_images 包含空字符串"
                     name_or_url = item.strip()
                     if name_or_url.startswith(("http://", "https://")):
-                        stored_remote = manager.save_remote_image(name_or_url)
-                        assert (
-                            stored_remote is not None
-                        ), "参考图像下载失败或格式不受支持"
+                        try:
+                            stored_remote = manager.save_remote_image(name_or_url)
+                        except Exception as exc:
+                            return f"参考图像下载失败：{exc}"
+                        if stored_remote is None:
+                            return "参考图像格式不受支持（可能为 GIF 等动图）"
                         references.append(
                             (stored_remote.mime_type, stored_remote.base64_data)
                         )
