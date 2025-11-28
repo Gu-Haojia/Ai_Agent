@@ -1201,6 +1201,48 @@ class SQLCheckpointAgentStreamingPlus:
 
                     tools.append(google_lens_search)
 
+                @tool("load_image_data_url")
+                def load_image_data_url(image: str) -> str:
+                    """
+                    读取 URL 或已保存文件名的图像，并返回可供 LLM 消费的 data URL。
+
+                    Args:
+                        image (str): HTTP(S) URL 或已保存的图像文件名（仅文件名，禁止包含路径）。
+
+                    Returns:
+                        str: JSON 字符串，包含 ``content``（标准多模态 message 片段列表，含 ``type=image_url`` 与 ``url`` 字段）、``mime_type``、``path``；
+                            当下载/加载失败或格式不支持时返回错误描述字符串。
+
+                    Raises:
+                        AssertionError: 当 image 为空或仅包含空白字符时抛出。
+                    """
+
+                    _ensure_common_env_once()
+                    assert isinstance(image, str) and image.strip(), "image 不能为空"
+                    source = image.strip()
+                    manager = self._require_image_manager()
+                    try:
+                        if source.lower().startswith(("http://", "https://")):
+                            stored = manager.save_remote_image(source)
+                            if stored is None:
+                                return "图像格式不受支持（可能为 GIF 动图）。"
+                        else:
+                            stored = manager.load_stored_image(source)
+                    except Exception as exc:
+                        return f"加载图像失败：{exc}"
+
+                    data_url = stored.data_url()
+                    payload = {
+                        "content": [
+                            {"type": "image_url", "image_url": {"url": data_url}}
+                        ],
+                        "mime_type": stored.mime_type,
+                        "path": str(stored.path),
+                    }
+                    return json.dumps(payload, ensure_ascii=False)
+
+                tools.append(load_image_data_url)
+
                 from langchain_experimental.utilities import PythonREPL
 
                 @tool("python_repl")
