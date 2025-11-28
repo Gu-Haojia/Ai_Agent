@@ -1211,7 +1211,7 @@ class SQLCheckpointAgentStreamingPlus:
 
                     Returns:
                         list[dict[str, Any]]: 标准多模态 message 片段列表，形如
-                            ``[{"type": "image_url", "image_url": {"url": "<data-url>"}, "mime_type": "...", "path": "..."}]``。
+                            ``[{"type": "image_url", "image_url": {"url": "<data-url>"}}]``。
                             当下载/加载失败或格式不支持时返回错误描述字符串。
 
                     Raises:
@@ -1233,14 +1233,7 @@ class SQLCheckpointAgentStreamingPlus:
                         return f"加载图像失败：{exc}"
 
                     data_url = stored.data_url()
-                    return [
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": data_url},
-                            "mime_type": stored.mime_type,
-                            "path": str(stored.path),
-                        }
-                    ]
+                    return [{"type": "image_url", "image_url": {"url": data_url}}]
 
                 tools.append(load_image_data_url)
 
