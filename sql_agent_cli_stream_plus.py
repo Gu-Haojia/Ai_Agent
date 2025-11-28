@@ -1202,15 +1202,15 @@ class SQLCheckpointAgentStreamingPlus:
                     tools.append(google_lens_search)
 
                 @tool("load_image_data_url")
-                def load_image_data_url(image: str) -> str:
+                def load_image_data_url(image: str) -> dict[str, Any]:
                     """
-                    读取 URL 或已保存文件名的图像，并返回可供 LLM 消费的 data URL。
+                    读取 URL 或已保存文件名的图像，并返回可供 LLM 消费的图片消息片段。
 
                     Args:
                         image (str): HTTP(S) URL 或已保存的图像文件名（仅文件名，禁止包含路径）。
 
                     Returns:
-                        str: JSON 字符串，包含 ``content``（标准多模态 message 片段列表，含 ``type=image_url`` 与 ``url`` 字段）、``mime_type``、``path``；
+                        dict[str, Any]: 标准多模态 message 片段，形如 ``{"type": "image_url", "image_url": {"url": "<data-url>"}, "mime_type": "...", "path": "..."}``。
                             当下载/加载失败或格式不支持时返回错误描述字符串。
 
                     Raises:
@@ -1232,14 +1232,12 @@ class SQLCheckpointAgentStreamingPlus:
                         return f"加载图像失败：{exc}"
 
                     data_url = stored.data_url()
-                    payload = {
-                        "content": [
-                            {"type": "image_url", "image_url": {"url": data_url}}
-                        ],
+                    return {
+                        "type": "image_url",
+                        "image_url": {"url": data_url},
                         "mime_type": stored.mime_type,
                         "path": str(stored.path),
                     }
-                    return json.dumps(payload, ensure_ascii=False)
 
                 tools.append(load_image_data_url)
 
