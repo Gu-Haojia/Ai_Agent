@@ -1307,7 +1307,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
         - /cmd                → 返回命令列表
         - /switch             → 列出 prompts 目录下可用文件名（不含后缀）
         - /switch <name>      → 切换到 prompts/<name>.txt（设置 SYS_MSG_FILE）并重建 Agent
-        - /power              → 在 Gemini 文本模型之间切换并重建 Agent
+        - /boost              → 在 Gemini 文本模型之间切换并重建 Agent
         - /image              → 在 Gemini 生图模型之间切换
         - /clear              → 为当前群新建线程
         - /whoami             → 先回当前系统提示词，再基于“你是谁”生成一条消息
@@ -1351,7 +1351,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 "6) /token — 输出当前 token 数\n"
                 "7) /forget - 清除上下文记忆\n"
                 "8) /rmdata - 清除长期记忆\n"
-                "9) /power - 切换后端可用模型\n"
+                "9) /boost - 切换后端可用模型\n"
                 "10) /image - 切换生图模型"
             )
             _send_group_msg(
@@ -1420,7 +1420,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
             )
             return True
 
-        if cmd == "/power" and len(parts) == 1:
+        if cmd == "/boost" and len(parts) == 1:
             candidates = (
                 "google_genai:gemini-2.5-pro",
                 "google_genai:gemini-3-pro-preview",
