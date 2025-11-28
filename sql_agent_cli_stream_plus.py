@@ -1202,18 +1202,16 @@ class SQLCheckpointAgentStreamingPlus:
                     tools.append(google_lens_search)
 
                 @tool("load_image_data_url")
-                def load_image_data_url(image: str, use_data_url: bool = False) -> str:
+                def load_image_data_url(image: str) -> str:
                     """
                     读取 URL 或已保存文件名的图像，并返回可供 LLM 消费的 data URL。
 
                     Args:
                         image (str): HTTP(S) URL 或已保存的图像文件名（仅文件名，禁止包含路径）。
-                        use_data_url (bool): 是否强制返回 base64 data URL。
-                            默认 False，优先返回网络可访问的短链以降低 token 占用。
 
                     Returns:
                         str: JSON 字符串，包含 ``content``（标准多模态 message 片段列表，含 ``type=image_url`` 与 ``url`` 字段）、``mime_type``、``path``；
-                            当下载/加载失败或格式不支持时返回错误描述字符串。默认返回短链，若设置 use_data_url=True 则返回 base64 data URL。
+                            当下载/加载失败或格式不支持时返回错误描述字符串。
 
                     Raises:
                         AssertionError: 当 image 为空或仅包含空白字符时抛出。
@@ -1222,49 +1220,24 @@ class SQLCheckpointAgentStreamingPlus:
                     _ensure_common_env_once()
                     assert isinstance(image, str) and image.strip(), "image 不能为空"
                     source = image.strip()
-                    use_b64 = bool(use_data_url)
                     manager = self._require_image_manager()
-                    mime_type = ""
-                    path_str = ""
                     try:
                         if source.lower().startswith(("http://", "https://")):
-                            if use_b64:
-                                stored = manager.save_remote_image(source)
-                                if stored is None:
-                                    return "图像格式不受支持（可能为 GIF 动图）。"
-                                mime_type = stored.mime_type
-                                path_str = str(stored.path)
-                                prepared_url = stored.data_url()
-                            else:
-                                prepared_url = source
-                                try:
-                                    stored = manager.save_remote_image(source)
-                                    if stored:
-                                        mime_type = stored.mime_type
-                                        path_str = str(stored.path)
-                                except Exception:
-                                    mime_type = ""
-                                    path_str = ""
+                            stored = manager.save_remote_image(source)
+                            if stored is None:
+                                return "图像格式不受支持（可能为 GIF 动图）。"
                         else:
                             stored = manager.load_stored_image(source)
-                            mime_type = stored.mime_type
-                            path_str = str(stored.path)
-                            if use_b64:
-                                prepared_url = stored.data_url()
-                            else:
-                                uploader = ReverseImageUploader()
-                                prepared_url = uploader.upload(stored.path)
                     except Exception as exc:
                         return f"加载图像失败：{exc}"
 
-                    if not prepared_url:
-                        return "图像处理失败：无法生成可访问的 URL。"
-
+                    data_url = stored.data_url()
                     payload = {
-                        "content": [{"type": "image_url", "image_url": {"url": prepared_url}}],
-                        "mime_type": mime_type or None,
-                        "path": path_str or None,
-                        "use_data_url": use_b64,
+                        "content": [
+                            {"type": "image_url", "image_url": {"url": data_url}}
+                        ],
+                        "mime_type": stored.mime_type,
+                        "path": str(stored.path),
                     }
                     return json.dumps(payload, ensure_ascii=False)
 
