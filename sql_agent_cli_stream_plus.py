@@ -1210,7 +1210,7 @@ class SQLCheckpointAgentStreamingPlus:
                         image (str): HTTP(S) URL 或已保存的图像文件名（仅文件名，禁止包含路径）。
 
                     Returns:
-                        str: JSON 字符串，包含 ``data_url``、``mime_type``、``path``；
+                        str: JSON 字符串，包含 ``content``（标准多模态 message 片段列表，含 ``type=image_url`` 与 ``url`` 字段）、``mime_type``、``path``；
                             当下载/加载失败或格式不支持时返回错误描述字符串。
 
                     Raises:
@@ -1231,8 +1231,11 @@ class SQLCheckpointAgentStreamingPlus:
                     except Exception as exc:
                         return f"加载图像失败：{exc}"
 
+                    data_url = stored.data_url()
                     payload = {
-                        "data_url": stored.data_url(),
+                        "content": [
+                            {"type": "image_url", "image_url": {"url": data_url}}
+                        ],
                         "mime_type": stored.mime_type,
                         "path": str(stored.path),
                     }
