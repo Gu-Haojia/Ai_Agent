@@ -196,9 +196,10 @@ def _extract_text_content(message: Any) -> str:
             str: 处理后的文本。
         """
 
-        if os.environ.get("FORMAT"):
-            return text.replace("**", "")
-        return text
+        # 强制开启格式化：默认写入 FORMAT=1，再执行去除加粗符号。
+        if os.environ.get("FORMAT") != "1":
+            os.environ["FORMAT"] = "1"
+        return text.replace("**", "")
 
     def _blocks_to_text(blocks: Sequence[Any]) -> str:
         texts: list[str] = []
