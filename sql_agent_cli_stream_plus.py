@@ -185,6 +185,21 @@ def _extract_text_content(message: Any) -> str:
     if message is None:
         return ""
 
+    def _apply_format(text: str) -> str:
+        """
+        根据环境变量 FORMAT 选择性去除 Markdown 加粗符号。
+
+        Args:
+            text (str): 原始文本。
+
+        Returns:
+            str: 处理后的文本。
+        """
+
+        if os.environ.get("FORMAT"):
+            return text.replace("**", "")
+        return text
+
     def _blocks_to_text(blocks: Sequence[Any]) -> str:
         texts: list[str] = []
         for block in blocks:
@@ -204,7 +219,20 @@ def _extract_text_content(message: Any) -> str:
     if isinstance(blocks, Sequence) and blocks:
         text = _blocks_to_text(blocks)
         if text:
-            return text
+            return _apply_format(text)
+
+    content = getattr(message, "content", None)
+    if isinstance(content, Sequence) and not isinstance(
+        content, (str, bytes, bytearray)
+    ):
+        text = _blocks_to_text(content)
+        if text:
+            return _apply_format(text)
+
+    if isinstance(content, str):
+        return _apply_format(content)
+
+    return _apply_format(str(message))
 
 
 
