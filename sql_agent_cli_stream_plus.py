@@ -222,18 +222,6 @@ def _extract_text_content(message: Any) -> str:
         if text:
             return _apply_format(text)
 
-    content = getattr(message, "content", None)
-    if isinstance(content, Sequence) and not isinstance(
-        content, (str, bytes, bytearray)
-    ):
-        text = _blocks_to_text(content)
-        if text:
-            return _apply_format(text)
-
-    if isinstance(content, str):
-        return _apply_format(content)
-
-    return _apply_format(str(message))
 
 
 
