@@ -1262,7 +1262,7 @@ class SQLCheckpointAgentStreamingPlus:
                         return f"加载图像失败：{exc}"
 
                     data_url = stored.data_url()
-                    return [{"type": "image_url", "image_url": {"url": data_url}}]
+                    return [{"type": "text", "text": "这是对象图片的base64数据:"},{"type": "image_url", "image_url": {"url": data_url}}]
 
                 tools.append(load_image_data_url)
 
