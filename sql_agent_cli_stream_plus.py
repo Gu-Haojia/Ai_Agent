@@ -171,7 +171,24 @@ def _sanitize_for_logging(payload: object) -> str:
     return sanitized
 
 
-def _extract_text_content(message: Any) -> str:
+def _apply_format(text: str) -> str:
+    """
+    根据环境变量 FORMAT 统一移除 Markdown 加粗符号。
+
+    Args:
+        text (str): 原始字符串。
+
+    Returns:
+        str: 已去除 ``**`` 的字符串。
+    """
+
+    # 强制开启格式化：默认写入 FORMAT=1，再执行去除加粗符号。
+    if os.environ.get("FORMAT") != "1":
+        os.environ["FORMAT"] = "1"
+    return text.replace("**", "")
+
+
+def _extract_text_content(message: Any) -> Optional[str]:
     """
     提取 LangChain v1 消息中的 type=text 内容，兼容旧版纯字符串结构。
 
@@ -179,27 +196,11 @@ def _extract_text_content(message: Any) -> str:
         message (Any): LangChain 消息对象或其 content 字段。
 
     Returns:
-        str: 抽取后的纯文本；若不存在文本块则回退为字符串化结果。
+        Optional[str]: 抽取后的纯文本；若不存在文本块则返回 None。
     """
 
     if message is None:
-        return ""
-
-    def _apply_format(text: str) -> str:
-        """
-        根据环境变量 FORMAT 选择性去除 Markdown 加粗符号。
-
-        Args:
-            text (str): 原始文本。
-
-        Returns:
-            str: 处理后的文本。
-        """
-
-        # 强制开启格式化：默认写入 FORMAT=1，再执行去除加粗符号。
-        if os.environ.get("FORMAT") != "1":
-            os.environ["FORMAT"] = "1"
-        return text.replace("**", "")
+        return None
 
     def _blocks_to_text(blocks: Sequence[Any]) -> str:
         texts: list[str] = []
@@ -230,9 +231,26 @@ def _extract_text_content(message: Any) -> str:
         if text:
             return _apply_format(text)
 
-    if isinstance(content, str):
-        return _apply_format(content)
+    return None
 
+
+def _extract_text_for_token_count(message: Any) -> str:
+    """
+    提取用于 token 统计的文本。
+
+    优先复用 ``_extract_text_content``（遇到纯工具调用时会返回 None），
+    当未取到文本时回退为格式化后的字符串化结果，避免 join 时出现 None。
+
+    Args:
+        message (Any): LangChain 消息对象。
+
+    Returns:
+        str: 可用于 token 统计的文本。
+    """
+
+    text = _extract_text_content(message)
+    if text is not None and text != "":
+        return text
     return _apply_format(str(message))
 
 
@@ -1923,7 +1941,7 @@ class SQLCheckpointAgentStreamingPlus:
 
         parts: list[str] = []
         for m in messages:
-            parts.append(_extract_text_content(m))
+            parts.append(_extract_text_for_token_count(m))
         text = "\n".join(parts)
 
         try:
