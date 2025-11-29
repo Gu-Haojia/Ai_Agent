@@ -625,9 +625,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
             content.append(
                 {
                     "type": "image_url",
-                    "image_url": {
-                        "url": _resolve_stored_image_url(stored, use_base64)
-                    },
+                    "image_url": {"url": _resolve_stored_image_url(stored, use_base64)},
                 }
             )
         return content
@@ -1159,52 +1157,6 @@ class QQBotHandler(BaseHTTPRequestHandler):
             else:
                 answer = cleaned or ("（图片已发送）" if downloaded else cleaned)
 
-        # 解析 Agent 回复中的 CQ 图片段并下载本地
-        cq_pattern = re.compile(r"\[CQ:image,([^\]]+)\]")
-        cq_matches = list(cq_pattern.finditer(answer))
-        if cq_matches:
-            manager = self._require_image_storage()
-            failed_urls: list[str] = []
-            success = False
-            for match in cq_matches:
-                data_str = match.group(1)
-                params = {}
-                for part in data_str.split(","):
-                    if "=" in part:
-                        k, v = part.split("=", 1)
-                        params[k.strip()] = v.strip()
-                file_val = params.get("file") or ""
-                if not file_val:
-                    continue
-                if file_val.startswith("base64://"):
-                    raw_b64 = file_val[len("base64://") :]
-                    try:
-                        stored = manager.save_base64_image(raw_b64)
-                        image_payloads.append((stored.base64_data, stored.mime_type))
-                        success = True
-                    except Exception as err:
-                        failed_urls.append("base64-data")
-                        sys.stderr.write(f"[Chat] 保存CQ Base64图片失败: {err}\n")
-                    continue
-                if file_val.startswith("http"):
-                    try:
-                        saved = manager.save_remote_image(file_val)
-                        if saved:
-                            image_payloads.append((saved.base64_data, saved.mime_type))
-                            success = True
-                    except Exception as err:
-                        failed_urls.append(file_val)
-                        sys.stderr.write(
-                            f"[Chat] 下载CQ图片失败: {file_val} -> {err}\n"
-                        )
-            if cq_matches:
-                answer = cq_pattern.sub("", answer).strip()
-            if failed_urls and success:
-                note = "（部分图片下载失败，已忽略无法访问的 CQ 图片链接）"
-                answer = f"{answer}\n{note}" if answer else note
-            elif failed_urls and not success and not image_payloads:
-                answer = answer or "（未能下载图片，请稍后重试）"
-
         if answer:
             # 计算字数
             char_count = len(answer)
@@ -1405,9 +1357,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
                     current_model in candidates
                 ), f"当前模型 {current_model} 不在可切换列表，请先设置为 Gemini 生图模型。"
                 next_model = (
-                    candidates[1]
-                    if current_model == candidates[0]
-                    else candidates[0]
+                    candidates[1] if current_model == candidates[0] else candidates[0]
                 )
                 os.environ["GEMINI_IMAGE_MODEL"] = next_model
                 msg = f"生图模型已切换：{current_model} -> {next_model}。"
@@ -1432,9 +1382,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
                     current_model in candidates
                 ), f"当前模型 {current_model} 不在可切换列表，请先配置为 Gemini 候选模型。"
                 next_model = (
-                    candidates[1]
-                    if current_model == candidates[0]
-                    else candidates[0]
+                    candidates[1] if current_model == candidates[0] else candidates[0]
                 )
                 os.environ["MODEL_NAME"] = next_model
                 self.rebuild_agent()
