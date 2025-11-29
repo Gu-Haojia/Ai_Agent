@@ -229,9 +229,18 @@ def _extract_text_content(message: Any) -> str:
         text = _blocks_to_text(content)
         if text:
             return _apply_format(text)
+        # 全为非文本块（如 tool_call）时不打印内部结构
+        return ""
 
     if isinstance(content, str):
         return _apply_format(content)
+
+    kwargs = getattr(message, "additional_kwargs", {}) or {}
+    if isinstance(kwargs, dict) and (
+        kwargs.get("function_call") or kwargs.get("tool_calls")
+    ):
+        # LangChain 工具调用消息无文本，避免输出参数结构
+        return ""
 
     return _apply_format(str(message))
 
