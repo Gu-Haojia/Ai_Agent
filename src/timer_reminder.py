@@ -101,6 +101,17 @@ class TimerReminderManager:
         )
         self._thread.start()
 
+    def stop(self) -> None:
+        """
+        停止后台调度线程。
+
+        Raises:
+            None.
+        """
+        self._stop_event.set()
+        if self._thread.is_alive():
+            self._thread.join(timeout=3)
+
     def create_timer(
         self,
         time_expression: str,

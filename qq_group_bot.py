@@ -1245,6 +1245,10 @@ class QQBotHandler(BaseHTTPRequestHandler):
             AssertionError: 当图像存储管理器未初始化时抛出。
             Exception: 构建 Agent 或注入依赖时的其他异常。
         """
+        old_agent = getattr(cls, "agent", None)
+        if isinstance(old_agent, SQLCheckpointAgentStreamingPlus):
+            # 停止旧 Agent 的后台调度线程，避免提醒任务重复触发
+            old_agent.shutdown()
         new_agent = _build_agent_from_env()
         image_mgr = cls.image_storage
         assert isinstance(image_mgr, ImageStorageManager), "图像存储管理器尚未初始化"
