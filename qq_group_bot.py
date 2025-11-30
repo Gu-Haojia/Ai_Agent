@@ -1569,6 +1569,7 @@ def main() -> None:
     daily_time = os.environ.get("DAILY_TASK_TIME", "09:00").strip()
     daily_groups = parse_daily_task_groups(daily_env)
     daily_task = DailyWeatherTask(
+        agent,
         _send_daily_text,
         daily_groups,
         question=daily_question,
@@ -1582,6 +1583,7 @@ def main() -> None:
     nightly_time = os.environ.get("NIGHTLY_TASK_TIME", "21:00").strip()
     nightly_groups = parse_daily_task_groups(nightly_env)
     nightly_task = DailyWeatherTask(
+        agent,
         _send_daily_text,
         nightly_groups,
         question=nightly_question,
@@ -1595,6 +1597,7 @@ def main() -> None:
     ticket_times = parse_schedule_times(ticket_time_raw)
     ticket_groups = parse_daily_task_groups(ticket_env)
     ticket_task = DailyTicketTask(
+        agent,
         _send_daily_text,
         ticket_groups,
         run_time=ticket_times,
