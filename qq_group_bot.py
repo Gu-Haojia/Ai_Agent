@@ -1504,6 +1504,21 @@ def _build_agent_from_env() -> SQLCheckpointAgentStreamingPlus:
     return agent
 
 
+def _get_shared_agent() -> SQLCheckpointAgentStreamingPlus:
+    """
+    返回当前共享的 Agent 实例。
+
+    Returns:
+        SQLCheckpointAgentStreamingPlus: 最新可用的 Agent。
+
+    Raises:
+        AssertionError: 当共享 Agent 尚未初始化或类型不符时抛出。
+    """
+    shared_agent = QQBotHandler.agent
+    assert isinstance(shared_agent, SQLCheckpointAgentStreamingPlus), "共享 Agent 尚未初始化"
+    return shared_agent
+
+
 def main() -> None:
     """启动 HTTP 服务器，接收 OneBot 回调并处理群消息。"""
     # 必须使用虚拟环境
@@ -1559,6 +1574,7 @@ def main() -> None:
         daily_groups,
         question=daily_question,
         run_time=daily_time,
+        agent_provider=_get_shared_agent,
     )
     daily_task.start()
 
@@ -1572,6 +1588,7 @@ def main() -> None:
         nightly_groups,
         question=nightly_question,
         run_time=nightly_time,
+        agent_provider=_get_shared_agent,
     )
     nightly_task.start()
 
@@ -1584,6 +1601,7 @@ def main() -> None:
         _send_daily_text,
         ticket_groups,
         run_time=ticket_times,
+        agent_provider=_get_shared_agent,
     )
     ticket_task.start()
 
