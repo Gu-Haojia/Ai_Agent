@@ -1223,7 +1223,7 @@ class SQLCheckpointAgentStreamingPlus:
                             image_url (str): 图片的在线 URL 或本地文件名。例如：
                                 - URL 示例: "https://example.com/image.jpg"
                                 - 本地文件名示例: "my_photo.png"
-                            hl (str | None, optional): 语言参数；允许 ``None``（默认，不附带 hl）、``ja`` 或 ``zh-cn``。
+                            hl (str | None, optional): 语言参数；允许 ``None``、``ja`` 或 ``zh-cn``，未指明不要传。
 
                         Returns:
                             str: 过滤后的 Google Lens JSON 结果；当外部请求异常时返回错误描述字符串。
