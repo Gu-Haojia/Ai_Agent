@@ -1215,7 +1215,7 @@ class SQLCheckpointAgentStreamingPlus:
                     # tools.append(google_reverse_image_search)  #暂时关闭反向搜图工具
 
                     @tool("google_lens_search")
-                    def google_lens_search(image_url: str) -> str:
+                    def google_lens_search(image_url: str, hl: str | None = None) -> str:
                         """
                         Google Lens 图像识别工具。用户没有明确指出“视觉搜索”时不可使用。
 
@@ -1223,11 +1223,13 @@ class SQLCheckpointAgentStreamingPlus:
                             image_url (str): 图片的在线 URL 或本地文件名。例如：
                                 - URL 示例: "https://example.com/image.jpg"
                                 - 本地文件名示例: "my_photo.png"
+                            hl (str | None, optional): 语言参数；允许 ``None``（默认，不附带 hl）、``ja`` 或 ``zh-cn``。
 
                         Returns:
                             str: 过滤后的 Google Lens JSON 结果；当外部请求异常时返回错误描述字符串。
 
                         Raises:
+                            AssertionError: 当 ``hl`` 不在允许范围时抛出。
                             ValueError: 当上传或 SerpAPI 调用失败时抛出。
                             FileNotFoundError: 当本地图片不存在时抛出。
                         """
@@ -1235,6 +1237,7 @@ class SQLCheckpointAgentStreamingPlus:
                         assert (
                             isinstance(image_url, str) and image_url.strip()
                         ), "image_url 不能为空"
+                        assert hl in {None, "ja", "zh-cn"}, "hl 仅支持 None、ja、zh-cn"
                         normalized_input = image_url.strip()
                         try:
                             if normalized_input.lower().startswith(("http://", "https://")):
@@ -1244,12 +1247,12 @@ class SQLCheckpointAgentStreamingPlus:
                                 image_path = manager.resolve_image_path(normalized_input)
                                 prepared = str(image_path)
 
-                            result = google_lens_tool.run(prepared)
+                            result = google_lens_tool.run(prepared, hl=hl)
                             timestamp = time.strftime("[%m-%d %H:%M:%S]", time.localtime())
                             knowledge_count = len(result.get("knowledge_graph", []))
                             matches_count = len(result.get("visual_matches", []))
                             print(
-                                f"\033[94m{timestamp}\033[0m [GoogleLens Tool] URL：{result.get('source_image_url')}，知识图谱条目：{knowledge_count}，视觉匹配条目：{matches_count}",
+                                f"\033[94m{timestamp}\033[0m [GoogleLens Tool] URL：{result.get('source_image_url')}，hl：{hl or '默认'}，知识图谱条目：{knowledge_count}，视觉匹配条目：{matches_count}",
                                 flush=True,
                             )
                             return json.dumps(result, ensure_ascii=False)

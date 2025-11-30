@@ -12,6 +12,8 @@ import requests
 
 from src.google_reverse_image_tool import ReverseImageUploader
 
+LENS_SUPPORTED_HL: set[str | None] = {None, "ja", "zh-cn"}
+
 
 @dataclass(frozen=True)
 class GoogleLensClient:
@@ -28,28 +30,34 @@ class GoogleLensClient:
     endpoint: str = "https://serpapi.com/search"
     timeout_seconds: int = 30
 
-    def search(self, image_url: str) -> dict[str, Any]:
+    def search(self, image_url: str, hl: str | None = None) -> dict[str, Any]:
         """
         使用指定图片 URL 调用 Google Lens。
 
         Args:
             image_url (str): 待识别图片的公网 URL。
+            hl (str | None): 语言参数；允许 ``None``（默认，不传递）、``ja`` 或 ``zh-cn``。
 
         Returns:
             dict[str, Any]: SerpAPI 返回的 JSON 数据。
 
         Raises:
             AssertionError: 当 ``image_url`` 为空字符串时抛出。
+            AssertionError: 当 ``hl`` 不在允许范围内时抛出。
             ValueError: 当网络请求失败、鉴权失败或 SerpAPI 返回错误时抛出。
         """
 
         assert isinstance(image_url, str) and image_url.strip(), "image_url 必须为非空字符串。"
+        assert hl in LENS_SUPPORTED_HL, "hl 仅支持 None、ja、zh-cn。"
 
         params = {
             "engine": "google_lens",
             "url": image_url,
             "api_key": self.api_key,
         }
+
+        if hl is not None:
+            params["hl"] = hl
 
         try:
             response = requests.get(
@@ -93,12 +101,13 @@ class GoogleLensTool:
     client: GoogleLensClient
     uploader: ReverseImageUploader
 
-    def run(self, image_url_or_name: str) -> dict[str, Any]:
+    def run(self, image_url_or_name: str, hl: str | None = None) -> dict[str, Any]:
         """
         根据图片 URL 或本地文件名执行 Google Lens 搜索。
 
         Args:
             image_url_or_name (str): 图片的网络地址或本地文件名 / 路径。
+            hl (str | None, optional): 语言参数；允许 ``None``（默认，不附带 hl）、``ja`` 或 ``zh-cn``。
 
         Returns:
             dict[str, Any]: 清洗后的查询结果数据；视觉匹配仅保留 title/source/link/position，
@@ -106,6 +115,7 @@ class GoogleLensTool:
 
         Raises:
             AssertionError: 当输入参数为空时抛出。
+            AssertionError: 当 ``hl`` 不在允许范围内时抛出。
             ValueError: 当上传或 SerpAPI 调用失败时抛出。
             FileNotFoundError: 当本地文件找不到时抛出。
         """
@@ -113,9 +123,10 @@ class GoogleLensTool:
         assert (
             isinstance(image_url_or_name, str) and image_url_or_name.strip()
         ), "image_url_or_name 不能为空。"
+        assert hl in LENS_SUPPORTED_HL, "hl 仅支持 None、ja、zh-cn。"
 
         target_url = self._prepare_image_url(image_url_or_name.strip())
-        raw_payload = self.client.search(target_url)
+        raw_payload = self.client.search(target_url, hl=hl)
         sanitized = self._sanitize_payload(raw_payload)
         sanitized["source_image_url"] = target_url
         return sanitized
