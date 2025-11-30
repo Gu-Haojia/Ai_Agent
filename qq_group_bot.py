@@ -1504,6 +1504,21 @@ def _build_agent_from_env() -> SQLCheckpointAgentStreamingPlus:
     return agent
 
 
+def _get_shared_agent() -> SQLCheckpointAgentStreamingPlus:
+    """
+    返回当前共享的 Agent 实例。
+
+    Returns:
+        SQLCheckpointAgentStreamingPlus: 最新可用的 Agent。
+
+    Raises:
+        AssertionError: 当共享 Agent 尚未初始化或类型不符时抛出。
+    """
+    shared_agent = QQBotHandler.agent
+    assert isinstance(shared_agent, SQLCheckpointAgentStreamingPlus), "共享 Agent 尚未初始化"
+    return shared_agent
+
+
 def main() -> None:
     """启动 HTTP 服务器，接收 OneBot 回调并处理群消息。"""
     # 必须使用虚拟环境
@@ -1554,11 +1569,11 @@ def main() -> None:
     daily_time = os.environ.get("DAILY_TASK_TIME", "09:00").strip()
     daily_groups = parse_daily_task_groups(daily_env)
     daily_task = DailyWeatherTask(
-        agent,
         _send_daily_text,
         daily_groups,
         question=daily_question,
         run_time=daily_time,
+        agent_provider=_get_shared_agent,
     )
     daily_task.start()
 
@@ -1567,11 +1582,11 @@ def main() -> None:
     nightly_time = os.environ.get("NIGHTLY_TASK_TIME", "21:00").strip()
     nightly_groups = parse_daily_task_groups(nightly_env)
     nightly_task = DailyWeatherTask(
-        agent,
         _send_daily_text,
         nightly_groups,
         question=nightly_question,
         run_time=nightly_time,
+        agent_provider=_get_shared_agent,
     )
     nightly_task.start()
 
@@ -1580,10 +1595,10 @@ def main() -> None:
     ticket_times = parse_schedule_times(ticket_time_raw)
     ticket_groups = parse_daily_task_groups(ticket_env)
     ticket_task = DailyTicketTask(
-        agent,
         _send_daily_text,
         ticket_groups,
         run_time=ticket_times,
+        agent_provider=_get_shared_agent,
     )
     ticket_task.start()
 
@@ -1610,6 +1625,8 @@ def main() -> None:
     print(
         "------------------------------------------------------------------------------------------------------------------"
     )
+    # 释放局部对 Agent 的引用，避免 /boost 重建后旧实例因本地变量滞留无法回收
+    del agent
     try:
         server.serve_forever(poll_interval=0.5)
     except KeyboardInterrupt:

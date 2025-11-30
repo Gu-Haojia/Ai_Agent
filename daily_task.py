@@ -23,6 +23,7 @@ if False:  # pragma: no cover - 类型检查使用，避免循环导入
 
 
 SendGroupText: TypeAlias = Callable[[int, str], None]
+AgentProvider: TypeAlias = Callable[[], SQLCheckpointAgentStreamingPlus]
 
 
 def parse_daily_task_groups(raw: str) -> tuple[int, ...]:
@@ -100,21 +101,22 @@ class DailyWeatherTask:
 
     def __init__(
         self,
-        agent: SQLCheckpointAgentStreamingPlus,
         send_func: SendGroupText,
         group_ids: Sequence[int],
         run_time: str = "09:00",
         question: str = "今天的天气",
+        *,
+        agent_provider: AgentProvider,
     ) -> None:
         """
         初始化调度器。
 
         Args:
-            agent (SQLCheckpointAgentStreamingPlus): 已初始化的 Agent 实例。
             send_func (SendGroupText): 发送文本到群聊的回调函数。
             group_ids (Sequence[int]): 准备广播的目标群号列表。
             run_time (str): 每日触发时间，必须为 HH:MM（24 小时制）。
             question (str): 提问内容，默认“今天的天气”。
+            agent_provider (AgentProvider): 获取 Agent 的回调，必须提供。
 
         Raises:
             AssertionError: 当参数不符合预期时抛出。
@@ -126,11 +128,11 @@ class DailyWeatherTask:
         except ValueError as exc:
             raise AssertionError("run_time 必须为 HH:MM（24 小时制）") from exc
         assert callable(send_func), "send_func 必须可调用"
-        assert isinstance(agent, SQLCheckpointAgentStreamingPlus), "agent 类型非法"
+        assert callable(agent_provider), "agent_provider 必须可调用"
         normalized_groups = tuple(int(gid) for gid in group_ids if int(gid) > 0)
 
-        self._agent = agent
         self._send_func = send_func
+        self._agent_provider: AgentProvider = agent_provider
         self._group_ids: tuple[int, ...] = normalized_groups
         self._run_time = run_time
         self._question = question.strip()
@@ -189,8 +191,10 @@ class DailyWeatherTask:
             flush=True,
         )
         try:
+            agent = self._agent_provider()
+            assert isinstance(agent, SQLCheckpointAgentStreamingPlus), "Agent 未初始化或类型非法"
             thread_id = self._build_thread_id()
-            answer = self._agent.chat_once_stream(self._question, thread_id=thread_id)
+            answer = agent.chat_once_stream(self._question, thread_id=thread_id)
             assert isinstance(answer, str) and answer.strip(), "Agent 未返回文本内容"
             reply = answer.strip()
         except Exception as err:
@@ -239,34 +243,35 @@ class DailyTicketTask:
 
     def __init__(
         self,
-        agent: SQLCheckpointAgentStreamingPlus,
         send_func: SendGroupText,
         group_ids: Sequence[int],
         run_time: str | Sequence[str] = "10:00",
         prompt: str = "检测到偶像大师抽选更新了，请使用工具的update模式，整理详细的新抽选信息列表。并创建截止时间提前一小时的reminder（提醒必须有明确是针对什么公演的什么抽选），通知群1070489110的用户2920504178。",
         query: Optional[AsobiTicketQuery] = None,
+        *,
+        agent_provider: AgentProvider,
     ) -> None:
         """
         初始化抽選检测调度器。
 
         Args:
-            agent (SQLCheckpointAgentStreamingPlus): 已初始化的 Agent 实例。
             send_func (SendGroupText): 发送文本到群聊的回调函数。
             group_ids (Sequence[int]): 准备广播的目标群号列表。
             run_time (str | Sequence[str]): 每日触发时间，可以为单个字符串或逗号分隔的时间序列。
             prompt (str): 当检测到更新时，发送给 Agent 的提问。
             query (Optional[AsobiTicketQuery]): 可选的查询实例，未提供时自动创建。
+            agent_provider (AgentProvider): 获取 Agent 的回调，必须提供。
 
         Raises:
             AssertionError: 当参数不符合预期时抛出。
         """
         assert isinstance(prompt, str) and prompt.strip(), "prompt 不能为空"
         assert callable(send_func), "send_func 必须可调用"
-        assert isinstance(agent, SQLCheckpointAgentStreamingPlus), "agent 类型非法"
+        assert callable(agent_provider), "agent_provider 必须可调用"
         normalized_groups = tuple(int(gid) for gid in group_ids if int(gid) > 0)
 
-        self._agent = agent
         self._send_func = send_func
+        self._agent_provider: AgentProvider = agent_provider
         self._group_ids: tuple[int, ...] = normalized_groups
         self._run_times: tuple[str, ...] = parse_schedule_times(run_time)
         self._prompt = prompt.strip()
@@ -343,8 +348,10 @@ class DailyTicketTask:
             return
 
         try:
+            agent = self._agent_provider()
+            assert isinstance(agent, SQLCheckpointAgentStreamingPlus), "Agent 未初始化或类型非法"
             thread_id = self._build_thread_id()
-            answer = self._agent.chat_once_stream(self._prompt, thread_id=thread_id)
+            answer = agent.chat_once_stream(self._prompt, thread_id=thread_id)
             assert isinstance(answer, str) and answer.strip(), "Agent 未返回文本内容"
             reply = answer.strip()
         except Exception as err:
