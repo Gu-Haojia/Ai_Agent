@@ -710,6 +710,16 @@ class SQLCheckpointAgentStreamingPlus:
         # Agent 启动时恢复并调度尚未过期的提醒
         self._reminder_scheduler.restore_pending()
 
+    def shutdown(self) -> None:
+        """
+        停止 Agent 的后台调度资源。
+
+        Raises:
+            None.
+        """
+        if isinstance(self._reminder_scheduler, TimerReminderManager):
+            self._reminder_scheduler.stop()
+
     def set_memory_namespace(self, namespace: str) -> None:
         """
         设置当前会话关联的持久记忆命名空间。
