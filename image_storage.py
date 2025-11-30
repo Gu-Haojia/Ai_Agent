@@ -267,6 +267,7 @@ class ImageStorageManager:
         Raises:
             AssertionError: 当 URL 无效或无法确定扩展名时抛出。
             RuntimeError: 当网络请求失败或返回内容为空时抛出。
+            AssertionError: 当返回内容不是图片时抛出。
         """
         assert url and url.startswith("http"), "仅支持通过 HTTP(S) 下载图像"
         last_error = ""
@@ -293,6 +294,10 @@ class ImageStorageManager:
                 )
             except AssertionError as err:
                 last_error = str(err)
+                continue
+            if not mime.startswith("image/"):
+                last_error = f"返回的资源不是图片，Content-Type: {mime or '未知'}"
+                mime = ""
                 continue
             if mime == "image/gif":
                 # GIF 动图不参与多模态分析，直接忽略并结束
