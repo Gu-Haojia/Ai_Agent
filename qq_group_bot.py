@@ -1625,8 +1625,6 @@ def main() -> None:
     print(
         "------------------------------------------------------------------------------------------------------------------"
     )
-    # 清理局部引用，避免 /boost 重建后旧 Agent 因本地变量滞留无法被回收
-    del agent
     try:
         server.serve_forever(poll_interval=0.5)
     except KeyboardInterrupt:
