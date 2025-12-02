@@ -1277,7 +1277,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
 
         def _invoke() -> str:
             chat_model = init_chat_model(model_name)
-            result = chat_model.invoke("Hello, world!")
+            result = chat_model.invoke("现在是api测试，不要进行任何推理，只需回复 'Hello, world!' 即可。")
             content = getattr(result, "content", None)
             text = content if isinstance(content, str) else str(result)
             assert text.strip(), "模型返回内容为空"
@@ -1542,7 +1542,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 msg = (
                     f"API 检测成功：{model_name}\n"
                     f"耗时：{duration:.2f} 秒\n"
-                    f"返回：{display_reply}"
+                    #f"返回：{display_reply}"
                 )
             except TimeoutError as e:
                 msg = f"API 调用超时：{e}"
