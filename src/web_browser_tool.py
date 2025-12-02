@@ -165,7 +165,34 @@ class WebBrowserTool(BaseTool):
         run_manager: CallbackManagerForToolRun | None = None,
     ) -> str:
         """
-        同步执行工具逻辑。
+        同步执行工具逻辑，增加异常兜底，避免错误向上冒泡。
+
+        Args:
+            url (str): 目标网页地址。
+            question (str | None): 需要查找的问题内容；空值表示输出摘要。
+            run_manager (CallbackManagerForToolRun | None): LangChain 回调管理器。
+
+        Returns:
+            str: 成功时返回 LLM 基于网页内容生成的回答；
+                发生异常时返回错误描述字符串，避免 QQ Bot 崩溃。
+        """
+
+        try:
+            return self._run_core(url, question, run_manager)
+        except Exception as exc:
+            timestamp = time.strftime("[%m-%d %H:%M:%S]", time.localtime())
+            error_message = f"WebBrowser 工具执行失败：{exc}"
+            print(f"{timestamp} [WebBrowserTool][Error] {error_message}", flush=True)
+            return error_message
+
+    def _run_core(
+        self,
+        url: str,
+        question: str | None,
+        run_manager: CallbackManagerForToolRun | None,
+    ) -> str:
+        """
+        执行网页抓取与 LLM 总结的核心逻辑。
 
         Args:
             url (str): 目标网页地址。
