@@ -39,6 +39,7 @@ import os
 import re
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from pathlib import Path
 from dataclasses import dataclass
 from hashlib import sha1
@@ -169,6 +170,7 @@ def _load_env_from_files(files: list[str]) -> None:
 _load_env_from_files([".env.local", ".env"])
 
 # 复用现有 Agent
+from langchain.chat_models import init_chat_model
 from sql_agent_cli_stream_plus import (
     AgentConfig,
     SQLCheckpointAgentStreamingPlus,
@@ -1256,6 +1258,47 @@ class QQBotHandler(BaseHTTPRequestHandler):
         cls.agent = new_agent
         return new_agent
 
+    def _run_api_check(self, model_name: str) -> tuple[str, float]:
+        """
+        使用指定模型执行 Hello, world 诊断并统计耗时。
+
+        Args:
+            model_name (str): 需要检测的模型名称。
+
+        Returns:
+            tuple[str, float]: 返回文本与耗时（秒）。
+
+        Raises:
+            AssertionError: 当模型名称为空时抛出。
+            TimeoutError: 当模型调用超过 60 秒未返回时抛出。
+            Exception: 初始化或调用模型时的其他异常。
+        """
+        assert model_name and model_name.strip(), "模型名称不可为空"
+
+        def _invoke() -> str:
+            chat_model = init_chat_model(model_name)
+            result = chat_model.invoke("Hello, world!")
+            content = getattr(result, "content", None)
+            text = content if isinstance(content, str) else str(result)
+            assert text.strip(), "模型返回内容为空"
+            return text.strip()
+
+        start = time.perf_counter()
+        executor = ThreadPoolExecutor(max_workers=1)
+        future = executor.submit(_invoke)
+        try:
+            reply = future.result(timeout=60)
+        except FuturesTimeoutError as exc:
+            future.cancel()
+            executor.shutdown(wait=False, cancel_futures=True)
+            raise TimeoutError("API 调用超时，超过 60 秒未返回。") from exc
+        except Exception:
+            executor.shutdown(wait=False, cancel_futures=True)
+            raise
+        executor.shutdown(wait=True, cancel_futures=True)
+        duration = time.perf_counter() - start
+        return reply, duration
+
     def _handle_commands(self, group_id: int, user_id: int, text: str) -> bool:
         """处理内部命令。
 
@@ -1269,6 +1312,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
         - /whoami             → 先回当前系统提示词，再基于“你是谁”生成一条消息
         - /token              → 统计当前群对应线程的消息 token 数
         - /forget             → 清除当前线程的上下文记忆
+        - /apicheck           → 使用当前模型自检 API 调用耗时
 
         Args:
             group_id (int): 群号
@@ -1308,7 +1352,8 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 "7) /forget - 清除上下文记忆\n"
                 "8) /rmdata - 清除长期记忆\n"
                 "9) /boost - 切换后端可用模型\n"
-                "10) /image - 切换生图模型"
+                "10) /image - 切换生图模型\n"
+                "11) /apicheck - 检测当前模型 API 是否可用"
             )
             _send_group_msg(
                 self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
@@ -1481,6 +1526,30 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 msg = f"统计失败：{e}"
             except Exception as e:
                 msg = f"统计失败（内部错误）：{e}"
+            _send_group_msg(
+                self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
+            )
+            return True
+
+        if cmd == "/apicheck" and len(parts) == 1:
+            model_name = self.agent._config.model_name
+            try:
+                assert model_name, "当前 Agent 模型未配置。"
+                reply, duration = self._run_api_check(model_name)
+                display_reply = (
+                    reply if len(reply) <= 500 else reply[:500] + "…(截断)"
+                )
+                msg = (
+                    f"API 检测成功：{model_name}\n"
+                    f"耗时：{duration:.2f} 秒\n"
+                    f"返回：{display_reply}"
+                )
+            except TimeoutError as e:
+                msg = f"API 调用超时：{e}"
+            except AssertionError as e:
+                msg = f"检测失败：{e}"
+            except Exception as e:
+                msg = f"检测失败（内部错误）：{e}"
             _send_group_msg(
                 self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
             )
