@@ -122,12 +122,10 @@ def _ensure_gemini_env_once() -> None:
     global _ENV_GEMINI_CHECKED
     if _ENV_GEMINI_CHECKED:
         return
-    key = (
-        os.environ.get("GEMINI_API_KEY")
-    )
+    key = os.environ.get("GEMINI_API_KEY")
     assert key, "缺少 GOOGLE_API_KEY / GEMINI_API_KEY 环境变量。"
-#    if not os.environ.get("GOOGLE_API_KEY"):
-#        os.environ["GOOGLE_API_KEY"] = key
+    #    if not os.environ.get("GOOGLE_API_KEY"):
+    #        os.environ["GOOGLE_API_KEY"] = key
     _ENV_GEMINI_CHECKED = True
 
 
@@ -252,7 +250,6 @@ def _extract_text_for_token_count(message: Any) -> str:
     if text is not None and text != "":
         return text
     return _apply_format(str(message))
-
 
 
 def _infer_model_provider(model_name: str) -> str:
@@ -815,7 +812,6 @@ class SQLCheckpointAgentStreamingPlus:
                 if os.environ.get("TAVILY_API_KEY"):
                     tools = [TavilySearch(max_results=3)]
 
-
                 summary_model_name = os.environ.get("SUMMARY_MODEL", "").strip()
                 assert (
                     summary_model_name
@@ -952,9 +948,13 @@ class SQLCheckpointAgentStreamingPlus:
                             raw_payload = google_hotels_client.search(request_model)
                             payload = sanitize_hotels_payload(raw_payload)
                             summary = google_hotels_formatter.summarize(payload)
-                            timestamp = time.strftime("[%m-%d %H:%M:%S]", time.localtime())
+                            timestamp = time.strftime(
+                                "[%m-%d %H:%M:%S]", time.localtime()
+                            )
                             # 打印工具参数（包含排序映射后的结果）
-                            normalized_args = request_model.model_dump(exclude_none=True)
+                            normalized_args = request_model.model_dump(
+                                exclude_none=True
+                            )
                             print(
                                 f"\033[94m{timestamp}\033[0m [GoogleHotels Tool] 参数：{json.dumps(normalized_args, ensure_ascii=False)}",
                                 flush=True,
@@ -1023,8 +1023,12 @@ class SQLCheckpointAgentStreamingPlus:
                             raw_payload = google_flights_client.search(request_model)
                             payload = sanitize_flights_payload(raw_payload)
                             summary = google_flights_formatter.summarize(payload)
-                            timestamp = time.strftime("[%m-%d %H:%M:%S]", time.localtime())
-                            normalized_args = request_model.model_dump(exclude_none=True)
+                            timestamp = time.strftime(
+                                "[%m-%d %H:%M:%S]", time.localtime()
+                            )
+                            normalized_args = request_model.model_dump(
+                                exclude_none=True
+                            )
                             print(
                                 f"\033[94m{timestamp}\033[0m [GoogleFlights Tool] 参数：{json.dumps(normalized_args, ensure_ascii=False)}",
                                 flush=True,
@@ -1153,14 +1157,18 @@ class SQLCheckpointAgentStreamingPlus:
                         """
 
                         try:
-                            normalized_time = _normalize_directions_time_arg(travel_time)
+                            normalized_time = _normalize_directions_time_arg(
+                                travel_time
+                            )
                             result = google_directions_client.search(
                                 start_addr,
                                 end_addr,
                                 time=normalized_time,
                             )
                             trimmed = _trim_directions_payload(result)
-                            timestamp = time.strftime("[%m-%d %H:%M:%S]", time.localtime())
+                            timestamp = time.strftime(
+                                "[%m-%d %H:%M:%S]", time.localtime()
+                            )
                             print(
                                 f"\033[94m{timestamp}\033[0m [GoogleDirections Tool] 起点：{start_addr} 终点：{end_addr} 时间：{travel_time} 返回段数：{len(trimmed.get('directions', []))}",
                                 flush=True,
@@ -1194,15 +1202,21 @@ class SQLCheckpointAgentStreamingPlus:
                         ), "image_url 不能为空"
                         normalized_input = image_url.strip()
                         try:
-                            if normalized_input.lower().startswith(("http://", "https://")):
+                            if normalized_input.lower().startswith(
+                                ("http://", "https://")
+                            ):
                                 prepared = normalized_input
                             else:
                                 manager = self._require_image_manager()
-                                image_path = manager.resolve_image_path(normalized_input)
+                                image_path = manager.resolve_image_path(
+                                    normalized_input
+                                )
                                 prepared = str(image_path)
 
                             result = reverse_image_tool.run(prepared)
-                            timestamp = time.strftime("[%m-%d %H:%M:%S]", time.localtime())
+                            timestamp = time.strftime(
+                                "[%m-%d %H:%M:%S]", time.localtime()
+                            )
                             results_count = len(result.get("image_results", []))
                             print(
                                 f"\033[94m{timestamp}\033[0m [GoogleReverseImage Tool] URL：{result.get('source_image_url')}，命中数量：{results_count}",
@@ -1215,7 +1229,9 @@ class SQLCheckpointAgentStreamingPlus:
                     # tools.append(google_reverse_image_search)  #暂时关闭反向搜图工具
 
                     @tool("google_lens_search")
-                    def google_lens_search(image_url: str, hl: str | None = None) -> str:
+                    def google_lens_search(
+                        image_url: str, hl: str | None = None
+                    ) -> str:
                         """
                         Google Lens 图像识别工具。用户没有明确指出“视觉搜索”时不可使用。
 
@@ -1240,15 +1256,21 @@ class SQLCheckpointAgentStreamingPlus:
                         assert hl in {None, "ja", "zh-cn"}, "hl 仅支持 None、ja、zh-cn"
                         normalized_input = image_url.strip()
                         try:
-                            if normalized_input.lower().startswith(("http://", "https://")):
+                            if normalized_input.lower().startswith(
+                                ("http://", "https://")
+                            ):
                                 prepared = normalized_input
                             else:
                                 manager = self._require_image_manager()
-                                image_path = manager.resolve_image_path(normalized_input)
+                                image_path = manager.resolve_image_path(
+                                    normalized_input
+                                )
                                 prepared = str(image_path)
 
                             result = google_lens_tool.run(prepared, hl=hl)
-                            timestamp = time.strftime("[%m-%d %H:%M:%S]", time.localtime())
+                            timestamp = time.strftime(
+                                "[%m-%d %H:%M:%S]", time.localtime()
+                            )
                             knowledge_count = len(result.get("knowledge_graph", []))
                             matches_count = len(result.get("visual_matches", []))
                             print(
@@ -1293,7 +1315,10 @@ class SQLCheckpointAgentStreamingPlus:
                         return f"加载图像失败：{exc}"
 
                     data_url = stored.data_url()
-                    return [{"type": "text", "text": "这是对象图片的base64数据:"},{"type": "image_url", "image_url": {"url": data_url}}]
+                    return [
+                        {"type": "text", "text": "这是对象图片的base64数据:"},
+                        {"type": "image_url", "image_url": {"url": data_url}},
+                    ]
 
                 tools.append(load_image_data_url)
 
@@ -1565,7 +1590,7 @@ class SQLCheckpointAgentStreamingPlus:
 
                 tools.append(nbnhhsh)
 
-        @tool #raw api 1.39.1
+        @tool  # raw api 1.39.1
         def generate_local_image(
             prompt: str,
             aspect_ratio: Optional[str] = None,
@@ -1631,16 +1656,26 @@ class SQLCheckpointAgentStreamingPlus:
                             (stored_image.mime_type, stored_image.base64_data)
                         )
 
-            try:
+            REPORT_ERROR = True  # 是否返回错误信息给LLM
+            if REPORT_ERROR:
+                try:
+                    image = manager.generate_image_via_gemini(
+                        prompt=prompt_text,
+                        aspect_ratio=aspect_ratio_norm,
+                        size=resolution,
+                        reference_images=references or None,
+                    )
+                except Exception as exc:
+                    print(f"ERROR: generate_image_via_gemini 失败：{exc}", flush=True)
+                    return f"本次生图失败，如果你决定给出最终回复，请完整包含错误信息：{exc}"
+            else:
                 image = manager.generate_image_via_gemini(
                     prompt=prompt_text,
                     aspect_ratio=aspect_ratio_norm,
                     size=resolution,
                     reference_images=references or None,
                 )
-            except Exception as exc:
-                print(f"ERROR: generate_image_via_gemini 失败：{exc}", flush=True)
-                return f"生图失败：{exc}"
+
             self._generated_images.append(image)
             payload = {
                 "path": str(image.path),
@@ -2023,10 +2058,7 @@ class SQLCheckpointAgentStreamingPlus:
                         if tt.strip():
                             last_text = tt
                             break
-                if (
-                    last_role != "Tool"
-                    and len(last_text) > 120
-                ):
+                if last_role != "Tool" and len(last_text) > 120:
                     last_text = last_text[:117] + "..."
 
             line = f"[{idx}] node={current_node} latest={last_text} messages={len(msgs)} next={next_nodes}"
@@ -2145,6 +2177,7 @@ class _FakeStreamingEcho:
 
 if __name__ == "__main__":
     from qq_group_bot import _load_env_from_files
+
     _load_env_from_files([".env.local", ".env"])
     # 按需启动/停止本机 brew postgresql，便于你的调试
     os.system("brew services start postgresql")
