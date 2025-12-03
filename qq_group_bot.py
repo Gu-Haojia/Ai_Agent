@@ -1198,7 +1198,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
 
         # 正常结束
         print(
-                f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m \033[34m[Chat]\033[0m Request finished. Thread unlocked."
+                f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m \033[34m[END]\033[0m Request finished. Thread unlocked."
             )
         self._send_no_content()
 
