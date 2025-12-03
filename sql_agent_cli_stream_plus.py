@@ -1587,12 +1587,10 @@ class SQLCheckpointAgentStreamingPlus:
 
             Returns:
                 str: JSON 字符串，包含 ``path``、``mime_type`` 与 ``text``；
-                    当参考图像下载失败或格式不支持时返回错误描述字符串。
+                    当参考图像下载失败或模型生成异常时返回错误描述字符串。
 
             Raises:
                 AssertionError: 当参数非法或参考图像不可用时抛出。
-                RuntimeError: 当 Gemini 未返回有效图像时抛出。
-                ValueError: 当接口调用失败时抛出。
             """
 
             _ensure_common_env_once()
@@ -1633,12 +1631,16 @@ class SQLCheckpointAgentStreamingPlus:
                             (stored_image.mime_type, stored_image.base64_data)
                         )
 
-            image = manager.generate_image_via_gemini(
-                prompt=prompt_text,
-                aspect_ratio=aspect_ratio_norm,
-                size=resolution,
-                reference_images=references or None,
-            )
+            try:
+                image = manager.generate_image_via_gemini(
+                    prompt=prompt_text,
+                    aspect_ratio=aspect_ratio_norm,
+                    size=resolution,
+                    reference_images=references or None,
+                )
+            except Exception as exc:
+                print(f"ERROR: generate_image_via_gemini 失败：{exc}", flush=True)
+                return f"生图失败：{exc}"
             self._generated_images.append(image)
             payload = {
                 "path": str(image.path),
