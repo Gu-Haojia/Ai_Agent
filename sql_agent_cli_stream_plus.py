@@ -1587,71 +1587,65 @@ class SQLCheckpointAgentStreamingPlus:
 
             Returns:
                 str: JSON 字符串，包含 ``path``、``mime_type`` 与 ``text``；
-                    当参考图像下载失败、参数非法或模型生成异常时返回错误描述字符串。
+                    当参考图像下载失败或格式不支持时返回错误描述字符串。
 
             Raises:
-                None: 运行时异常会被捕获并转为错误字符串返回。
+                AssertionError: 当参数非法或参考图像不可用时抛出。
+                RuntimeError: 当 Gemini 未返回有效图像时抛出。
+                ValueError: 当接口调用失败时抛出。
             """
 
-            def _build_payload() -> str:
-                _ensure_common_env_once()
-                _ensure_gemini_env_once()
-                prompt_text = prompt.strip()
-                assert prompt_text, "prompt 不能为空"
+            _ensure_common_env_once()
+            _ensure_gemini_env_once()
+            prompt_text = prompt.strip()
+            assert prompt_text, "prompt 不能为空"
 
-                manager = self._require_image_manager()
-                aspect_ratio_norm = (
-                    aspect_ratio.strip() if isinstance(aspect_ratio, str) else None
-                )
-                resolution = size.strip().upper() if isinstance(size, str) else None
+            manager = self._require_image_manager()
+            aspect_ratio_norm = (
+                aspect_ratio.strip() if isinstance(aspect_ratio, str) else None
+            )
+            resolution = size.strip().upper() if isinstance(size, str) else None
 
-                references: list[tuple[str, str]] = []
-                if reference_images:
-                    assert isinstance(
-                        reference_images, list
-                    ), "reference_images 必须为文件名或 URL 列表"
+            references: list[tuple[str, str]] = []
+            if reference_images:
+                assert isinstance(
+                    reference_images, list
+                ), "reference_images 必须为文件名或 URL 列表"
 
-                    for item in reference_images:
-                        assert (
-                            isinstance(item, str) and item.strip()
-                        ), "reference_images 包含空字符串"
-                        name_or_url = item.strip()
-                        if name_or_url.startswith(("http://", "https://")):
-                            try:
-                                stored_remote = manager.save_remote_image(name_or_url)
-                            except Exception as exc:
-                                return f"参考图像下载失败：{exc}"
-                            if stored_remote is None:
-                                return "参考图像格式不受支持（可能为 GIF 等动图）"
-                            references.append(
-                                (stored_remote.mime_type, stored_remote.base64_data)
-                            )
-                        else:
-                            stored_image = manager.load_stored_image(name_or_url)
-                            references.append(
-                                (stored_image.mime_type, stored_image.base64_data)
-                            )
+                for item in reference_images:
+                    assert (
+                        isinstance(item, str) and item.strip()
+                    ), "reference_images 包含空字符串"
+                    name_or_url = item.strip()
+                    if name_or_url.startswith(("http://", "https://")):
+                        try:
+                            stored_remote = manager.save_remote_image(name_or_url)
+                        except Exception as exc:
+                            return f"参考图像下载失败：{exc}"
+                        if stored_remote is None:
+                            return "参考图像格式不受支持（可能为 GIF 等动图）"
+                        references.append(
+                            (stored_remote.mime_type, stored_remote.base64_data)
+                        )
+                    else:
+                        stored_image = manager.load_stored_image(name_or_url)
+                        references.append(
+                            (stored_image.mime_type, stored_image.base64_data)
+                        )
 
-                image = manager.generate_image_via_gemini(
-                    prompt=prompt_text,
-                    aspect_ratio=aspect_ratio_norm,
-                    size=resolution,
-                    reference_images=references or None,
-                )
-                self._generated_images.append(image)
-                payload = {
-                    "path": str(image.path),
-                    "mime_type": image.mime_type,
-                    "text": image.prompt,
-                }
-                return json.dumps(payload, ensure_ascii=False)
-
-            try:
-                return _build_payload()
-            except Exception as exc:
-                error_message = f"生图失败：{exc}"
-                print(f"ERROR: generate_local_image 捕获异常：{exc}", flush=True)
-                return error_message
+            image = manager.generate_image_via_gemini(
+                prompt=prompt_text,
+                aspect_ratio=aspect_ratio_norm,
+                size=resolution,
+                reference_images=references or None,
+            )
+            self._generated_images.append(image)
+            payload = {
+                "path": str(image.path),
+                "mime_type": image.mime_type,
+                "text": image.prompt,
+            }
+            return json.dumps(payload, ensure_ascii=False)
 
         tools.append(generate_local_image)
 
