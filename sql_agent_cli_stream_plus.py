@@ -1667,7 +1667,7 @@ class SQLCheckpointAgentStreamingPlus:
                     )
                 except Exception as exc:
                     print(f"ERROR: generate_image_via_gemini 失败：{exc}", flush=True)
-                    return f"本次生图失败，如果你决定给出最终回复，请完整包含错误信息：{exc}"
+                    return f"本次生图失败，如果你决定给出最终回复，请必须在回复中完整输出下面的错误信息：{exc}"
             else:
                 image = manager.generate_image_via_gemini(
                     prompt=prompt_text,
