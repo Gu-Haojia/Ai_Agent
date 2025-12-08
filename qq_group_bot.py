@@ -1071,10 +1071,10 @@ class QQBotHandler(BaseHTTPRequestHandler):
                         summary = "（引用消息未提供文本）"
                     if content.images:
                         summary += f"（包含{len(content.images)}张图片）"
-                    context_lines.append(f"引用消息{idx}: {summary}")
-                context_lines.append(f"当前消息: {user_text}")
+                    context_lines.append(f"引用消息{idx}: [{summary}]")
+                context_lines.append(f"当前消息: [{user_text}]")
                 user_text = "\n".join(context_lines)
-            model_input = f"Group_id: [{group_id}]; User_id: [{user_id}]; User_name: {author}; Msg: {user_text}"
+            model_input = f"Group_id: [{group_id}]; User_id: [{user_id}]; User_name: {author}; Msg:\n[{user_text}]"
             image_segments: list[ImageSegmentInfo] = []
             if parsed.images:
                 image_segments.extend(parsed.images)
