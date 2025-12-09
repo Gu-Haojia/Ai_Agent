@@ -403,10 +403,10 @@ class ImageStorageManager:
         self, url: str, filename_hint: Optional[str] = None
     ) -> StoredVideo:
         """
-        下载并保存远程短视频，返回内联所需的 Base64 数据。
+        下载并保存远程短视频（或读取可访问的本地文件），返回内联所需的 Base64 数据。
 
         Args:
-            url (str): 视频下载地址，仅支持 HTTP(S)。
+            url (str): 视频下载地址，支持 HTTP(S) 或可直接访问的本地绝对路径/file:// 路径。
             filename_hint (Optional[str]): 原始文件名提示，用于推断扩展名。
 
         Returns:
@@ -416,7 +416,30 @@ class ImageStorageManager:
             AssertionError: 当 URL 无效、视频类型不受支持或体积超限时抛出。
             RuntimeError: 当网络请求失败或响应为空时抛出。
         """
-        assert url and url.startswith("http"), "仅支持通过 HTTP(S) 下载视频"
+        assert url, "视频 URL 不能为空"
+        if url.startswith("file://"):
+            local_path = Path(url[len("file://") :])
+        else:
+            local_path = Path(url)
+
+        if local_path.is_absolute() and local_path.is_file():
+            data = local_path.read_bytes()
+            if len(data) > self._max_video_bytes:
+                raise AssertionError(
+                    f"视频体积超过 {self._max_video_bytes // (1024 * 1024)}MB，无法内联分析。"
+                )
+            mime = self._guess_video_mime("", str(local_path), filename_hint, data[:512])
+            suffix = local_path.suffix or {
+                "video/mp4": ".mp4",
+                "video/webm": ".webm",
+                "video/quicktime": ".mov",
+                "video/x-msvideo": ".avi",
+            }.get(mime, ".mp4")
+            path = self._write_bytes(self._incoming_video_dir, data, suffix)
+            b64 = base64.b64encode(data).decode("ascii")
+            return StoredVideo(path=path, mime_type=mime, base64_data=b64)
+
+        assert url.startswith("http"), "仅支持通过 HTTP(S) 下载视频或可访问的本地文件"
         resp = requests.get(url, stream=True, timeout=30, headers=self._video_http_headers)
         if resp.status_code != 200:
             raise RuntimeError(f"下载视频失败：HTTP {resp.status_code}")
