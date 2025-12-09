@@ -144,29 +144,6 @@ def _fetch_message_content(
     if body.get("status") != "ok" or body.get("retcode") not in {0, None}:
         raise RuntimeError(f"get_msg failed: retcode={body.get('retcode')}")
     data = body.get("data") or {}
-    # 调试：记录引用消息的段落结构，便于排查视频 URL 缺失
-    try:
-        msg_field = data.get("message")
-        if isinstance(msg_field, list):
-            seg_summaries: list[str] = []
-            for idx, seg in enumerate(msg_field, 1):
-                if not isinstance(seg, dict):
-                    continue
-                seg_type = seg.get("type")
-                seg_data = seg.get("data") or {}
-                url_preview = str(seg_data.get("url") or "")[:80]
-                file_id = seg_data.get("file") or seg_data.get("file_id") or ""
-                name = seg_data.get("name") or ""
-                seg_summaries.append(
-                    f"{idx}:{seg_type} url={url_preview} file_id={file_id} name={name}"
-                )
-            if seg_summaries:
-                print(
-                    f"[ReplyDebug] message_id={message_id} segments={' | '.join(seg_summaries)}",
-                    flush=True,
-                )
-    except Exception:
-        pass
     return _extract_message_content(data.get("message"), data.get("raw_message"))
 
 
@@ -1276,11 +1253,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
             if video_segments and storage:
                 seen_video_tokens: set[str] = set()
                 for seg in video_segments:
-                    if not seg.url:
-                        sys.stderr.write(
-                            f"[Chat] 视频段缺少 URL，无法下载: file_id={seg.file_id} name={seg.filename}\n"
-                        )
-                        assert seg.url, "当前仅支持通过 URL 获取的视频消息"
+                    assert seg.url, "当前仅支持通过 URL 获取的视频消息"
                     token = seg.url or seg.file_id or seg.filename or ""
                     if token and token in seen_video_tokens:
                         continue
