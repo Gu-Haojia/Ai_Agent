@@ -1275,6 +1275,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
                         stored_images.append(saved)
             if video_segments and storage:
                 seen_video_tokens: set[str] = set()
+                failed_videos: list[str] = []
                 for seg in video_segments:
                     if not seg.url:
                         sys.stderr.write(
@@ -1286,8 +1287,21 @@ class QQBotHandler(BaseHTTPRequestHandler):
                         continue
                     if token:
                         seen_video_tokens.add(token)
-                    stored = storage.save_remote_video(seg.url, seg.filename)
-                    stored_videos.append(stored)
+                    try:
+                        stored = storage.save_remote_video(seg.url, seg.filename)
+                        stored_videos.append(stored)
+                    except Exception as err:
+                        failed_videos.append(
+                            f"url={seg.url} name={seg.filename} err={err}"
+                        )
+                        sys.stderr.write(
+                            f"[Chat] 下载视频失败，已跳过: url={seg.url} name={seg.filename} err={err}\n"
+                        )
+                if failed_videos:
+                    model_input += (
+                        "\n提示：存在无法下载的视频，已跳过："
+                        + "; ".join(failed_videos)
+                    )
             payload = (
                 self._build_multimodal_content(
                     model_input,
