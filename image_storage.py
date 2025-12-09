@@ -1,7 +1,7 @@
 """
-图像存储与生成管理模块。
+图像/视频存储与生成管理模块。
 
-提供统一的入站图像下载存储、模型生成图像落盘、
+提供统一的入站图像、短视频下载存储、模型生成图像落盘、
 以及向多模态模型投喂数据所需的 Base64 数据等能力。
 """
 
@@ -26,6 +26,7 @@ from google.genai import errors
 
 __all__ = [
     "StoredImage",
+    "StoredVideo",
     "GeneratedImage",
     "ImageStorageManager",
 ]
@@ -64,12 +65,34 @@ class GeneratedImage:
     prompt: str
 
 
+@dataclass(frozen=True)
+class StoredVideo:
+    """本地化保存后的入站视频信息。"""
+
+    path: Path
+    mime_type: str
+    base64_data: str
+
+    def inline_media(self) -> dict[str, object]:
+        """
+        构造多模态模型可消费的 media 片段。
+
+        Returns:
+            dict[str, object]: 包含 mime_type 与 data 的 media 结构。
+
+        Raises:
+            AssertionError: 当缺少必要字段时抛出。
+        """
+        assert self.mime_type and self.base64_data, "视频缺少必要元数据"
+        return {"mime_type": self.mime_type, "data": self.base64_data}
+
+
 class ImageStorageManager:
     """
-    负责管理 QQ Bot 入站/出站图像的本地存储。
+    负责管理 QQ Bot 入站/出站图像与视频的本地存储。
 
     - 所有图像将保存在 base_dir 下的 incoming/generated 子目录；
-    - 入站图像保存后提供 Base64 编码，便于向多模态模型提供数据；
+    - 入站图像与短视频保存后提供 Base64 编码，便于向多模态模型提供数据；
     - 生成图像调用 OpenAI Images API，落盘后返回路径供 Bot 发送 CQ 图片。
     """
 
@@ -77,11 +100,14 @@ class ImageStorageManager:
         assert isinstance(base_dir, str) and base_dir.strip(), "base_dir 不能为空"
         self._base_dir = Path(base_dir).expanduser().resolve()
         self._incoming_dir = self._base_dir / "incoming"
+        self._incoming_video_dir = self._incoming_dir / "video"
         self._generated_dir = self._base_dir / "generated"
         self._incoming_dir.mkdir(parents=True, exist_ok=True)
+        self._incoming_video_dir.mkdir(parents=True, exist_ok=True)
         self._generated_dir.mkdir(parents=True, exist_ok=True)
         self._image_model = image_model or os.environ.get("IMAGE_MODEL_NAME", "gpt-image-1")
         self._lock = threading.Lock()
+        self._max_video_bytes = 32 * 1024 * 1024  # 32MB 上限，避免超大视频内联
         self._http_headers = {
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -90,6 +116,8 @@ class ImageStorageManager:
             "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
         }
+        self._video_http_headers = dict(self._http_headers)
+        self._video_http_headers["Accept"] = "video/mp4,video/*;q=0.9,*/*;q=0.1"
 
     @staticmethod
     def _infer_mime(data: bytes, fallback: Optional[str]) -> str:
@@ -120,6 +148,46 @@ class ImageStorageManager:
         if fallback:
             return fallback
         raise AssertionError("无法识别图像 MIME 类型")
+
+    @staticmethod
+    def _guess_video_mime(
+        content_type: str, url: str, filename_hint: Optional[str], sample: bytes
+    ) -> str:
+        """
+        推断视频 MIME 类型，兼容 NapCat 返回的短视频。
+
+        优先级：HTTP Content-Type → 文件名/URL 后缀 → 数据头嗅探。
+
+        Args:
+            content_type (str): HTTP 头中的 Content-Type。
+            url (str): 视频原始 URL。
+            filename_hint (Optional[str]): 文件名提示。
+            sample (bytes): 用于嗅探的二进制前缀数据。
+
+        Returns:
+            str: 视频 MIME 类型，例如 ``video/mp4``。
+
+        Raises:
+            AssertionError: 当无法确定视频类型时抛出。
+        """
+        normalized = (content_type or "").split(";")[0].strip().lower()
+        if normalized.startswith("video/"):
+            return normalized
+        for candidate in (filename_hint, url):
+            if not candidate:
+                continue
+            guessed = mimetypes.guess_type(candidate)[0]
+            if guessed and guessed.startswith("video/"):
+                return guessed
+        if sample:
+            head = sample[:16]
+            # MP4 / MOV: ftyp box
+            if b"ftyp" in head:
+                return "video/mp4"
+            # WebM/Matroska: EBML 魔数
+            if head.startswith(b"\x1A\x45\xDF\xA3"):
+                return "video/webm"
+        raise AssertionError("无法识别视频 MIME 类型")
 
     def _write_bytes(self, directory: Path, data: bytes, suffix: str) -> Path:
         """将二进制图像写入指定目录。
@@ -331,6 +399,66 @@ class ImageStorageManager:
         b64 = base64.b64encode(data).decode("ascii")
         return StoredImage(path=path, mime_type=mime, base64_data=b64)
 
+    def save_remote_video(
+        self, url: str, filename_hint: Optional[str] = None
+    ) -> StoredVideo:
+        """
+        下载并保存远程短视频，返回内联所需的 Base64 数据。
+
+        Args:
+            url (str): 视频下载地址，仅支持 HTTP(S)。
+            filename_hint (Optional[str]): 原始文件名提示，用于推断扩展名。
+
+        Returns:
+            StoredVideo: 本地化后的视频信息。
+
+        Raises:
+            AssertionError: 当 URL 无效、视频类型不受支持或体积超限时抛出。
+            RuntimeError: 当网络请求失败或响应为空时抛出。
+        """
+        assert url and url.startswith("http"), "仅支持通过 HTTP(S) 下载视频"
+        resp = requests.get(url, stream=True, timeout=30, headers=self._video_http_headers)
+        if resp.status_code != 200:
+            raise RuntimeError(f"下载视频失败：HTTP {resp.status_code}")
+        content_type = resp.headers.get("Content-Type") or ""
+        buf = BytesIO()
+        total = 0
+        try:
+            for chunk in resp.iter_content(chunk_size=256 * 1024):
+                if not chunk:
+                    continue
+                total += len(chunk)
+                if total > self._max_video_bytes:
+                    raise AssertionError(
+                        f"视频体积超过 {self._max_video_bytes // (1024 * 1024)}MB，无法内联分析。"
+                    )
+                buf.write(chunk)
+        finally:
+            resp.close()
+        data = buf.getvalue()
+        if not data:
+            raise RuntimeError("视频内容为空")
+        mime = self._guess_video_mime(content_type, url, filename_hint, data[:512])
+        if not mime.startswith("video/"):
+            raise AssertionError(f"返回的资源不是视频，Content-Type: {mime}")
+        suffix_map = {
+            "video/mp4": ".mp4",
+            "video/webm": ".webm",
+            "video/quicktime": ".mov",
+            "video/x-msvideo": ".avi",
+        }
+        suffix = suffix_map.get(mime)
+        if not suffix:
+            guessed = mimetypes.guess_extension(mime, strict=False)
+            if guessed:
+                suffix = guessed
+        if not suffix and filename_hint and "." in filename_hint:
+            suffix = "." + filename_hint.rsplit(".", 1)[-1]
+        assert suffix, "无法确定视频文件扩展名"
+        path = self._write_bytes(self._incoming_video_dir, data, suffix)
+        b64 = base64.b64encode(data).decode("ascii")
+        return StoredVideo(path=path, mime_type=mime, base64_data=b64)
+
     def save_generated_image(self, b64_data: str, prompt: str, mime_type: str) -> GeneratedImage:
         """
         将模型生成的 Base64 图像保存到磁盘。
@@ -451,6 +579,60 @@ class ImageStorageManager:
                 return candidate.resolve()
 
         raise FileNotFoundError(f"找不到图像文件: {normalized}")
+
+    def load_stored_video(self, filename: str) -> StoredVideo:
+        """
+        根据文件名读取已保存的视频。
+
+        Args:
+            filename (str): 视频文件名，仅支持纯文件名。
+
+        Returns:
+            StoredVideo: 匹配到的视频信息。
+
+        Raises:
+            AssertionError: 当文件名无效或文件不存在时抛出。
+        """
+
+        assert isinstance(filename, str) and filename.strip(), "filename 不能为空"
+        normalized = filename.strip()
+        assert Path(normalized).name == normalized, "filename 不允许包含路径"
+        target = self._incoming_video_dir / normalized
+        if not target.is_file():
+            raise AssertionError(f"找不到已保存的视频文件: {normalized}")
+
+        data_bytes = target.read_bytes()
+        guessed = mimetypes.guess_type(str(target))[0]
+        mime = (
+            guessed
+            if guessed and guessed.startswith("video/")
+            else self._guess_video_mime(guessed or "", str(target), normalized, data_bytes[:512])
+        )
+        encoded = base64.b64encode(data_bytes).decode("ascii")
+        return StoredVideo(path=target, mime_type=mime, base64_data=encoded)
+
+    def resolve_video_path(self, filename: str) -> Path:
+        """
+        根据文件名获取视频的绝对路径。
+
+        Args:
+            filename (str): 视频文件名，仅支持纯文件名。
+
+        Returns:
+            Path: 匹配到的视频绝对路径。
+
+        Raises:
+            AssertionError: 当文件名为空或包含路径分隔符时抛出。
+            FileNotFoundError: 当未找到对应视频时抛出。
+        """
+
+        assert isinstance(filename, str) and filename.strip(), "filename 不能为空"
+        normalized = filename.strip()
+        assert Path(normalized).name == normalized, "filename 不允许包含路径"
+        target = self._incoming_video_dir / normalized
+        if target.is_file():
+            return target.resolve()
+        raise FileNotFoundError(f"找不到视频文件: {normalized}")
 
     def generate_image_via_openai(self, prompt: str, size: str = "1024x1024") -> GeneratedImage:
         """

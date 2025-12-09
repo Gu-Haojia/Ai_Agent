@@ -86,7 +86,7 @@ def _extract_message_content(
     message: object, raw_fallback: Optional[str] = None
 ) -> MessageContent:
     """
-    从消息对象提取文本与图像信息。
+    从消息对象提取文本、图像与视频信息。
 
     Args:
         message (object): OneBot 返回的 message 字段。
@@ -97,21 +97,22 @@ def _extract_message_content(
     """
 
     if isinstance(message, list):
-        text, _at_me, images, _reply_ids = _normalize_message_segments(message)
-        return MessageContent(text=text, images=images)
+        text, _at_me, images, _reply_ids, videos = _normalize_message_segments(message)
+        return MessageContent(text=text, images=images, videos=videos)
 
     raw = str(message or raw_fallback or "")
     raw, _ = _extract_reply_ids_from_raw(raw)
     images = _extract_cq_images(raw) if raw else ()
+    videos = _extract_cq_videos(raw) if raw else ()
     print(f"[Debug] Alternative way enabled", flush=True)
-    return MessageContent(text=raw, images=images)
+    return MessageContent(text=raw, images=images, videos=videos)
 
 
 def _fetch_message_content(
     api_base: str, message_id: str, access_token: str = ""
 ) -> MessageContent:
     """
-    通过 OneBot HTTP API 获取指定消息的文本与图像内容。
+    通过 OneBot HTTP API 获取指定消息的文本、图像与视频内容。
 
     Args:
         api_base (str): OneBot HTTP API 的基地址。
@@ -176,7 +177,7 @@ from sql_agent_cli_stream_plus import (
     SQLCheckpointAgentStreamingPlus,
 )
 from src.google_reverse_image_tool import ReverseImageUploader
-from image_storage import GeneratedImage, ImageStorageManager, StoredImage
+from image_storage import GeneratedImage, ImageStorageManager, StoredImage, StoredVideo
 from daily_task import (
     DailyTicketTask,
     DailyWeatherTask,
@@ -361,11 +362,21 @@ class ImageSegmentInfo:
 
 
 @dataclass(frozen=True)
+class VideoSegmentInfo:
+    """消息段中的视频信息。"""
+
+    url: Optional[str]
+    file_id: Optional[str]
+    filename: Optional[str]
+
+
+@dataclass(frozen=True)
 class MessageContent:
-    """标准化的消息内容（文本与图像）。"""
+    """标准化的消息内容（文本、图像与视频）。"""
 
     text: str
     images: tuple[ImageSegmentInfo, ...]
+    videos: tuple[VideoSegmentInfo, ...]
 
 
 @dataclass(frozen=True)
@@ -376,6 +387,7 @@ class ParsedMessage:
     at_me: bool
     images: tuple[ImageSegmentInfo, ...]
     reply_message_ids: tuple[str, ...]
+    videos: tuple[VideoSegmentInfo, ...]
 
 
 def _extract_cq_images(raw: str) -> tuple[ImageSegmentInfo, ...]:
@@ -417,22 +429,65 @@ def _extract_cq_images(raw: str) -> tuple[ImageSegmentInfo, ...]:
     return tuple(images)
 
 
+def _extract_cq_videos(raw: str) -> tuple[VideoSegmentInfo, ...]:
+    """
+    从原始 CQ 文本中解析视频段。
+
+    Args:
+        raw (str): 原始消息字符串。
+
+    Returns:
+        tuple[VideoSegmentInfo, ...]: 解析出的视频段列表。
+    """
+    videos: list[VideoSegmentInfo] = []
+    idx = 0
+    length = len(raw)
+    while idx < length:
+        start = raw.find("[CQ:video", idx)
+        if start == -1:
+            break
+        end = raw.find("]", start)
+        if end == -1:
+            break
+        body = raw[start + 1 : end]
+        parts = body.split(",")
+        data: dict[str, str] = {}
+        for segment in parts[1:]:
+            if "=" not in segment:
+                continue
+            key, value = segment.split("=", 1)
+            data[key.strip()] = value.strip()
+        videos.append(
+            VideoSegmentInfo(
+                url=data.get("url"),
+                file_id=data.get("file") or data.get("file_id"),
+                filename=data.get("file") or data.get("name"),
+            )
+        )
+        idx = end + 1
+    return tuple(videos)
+
+
 def _normalize_message_segments(
     segments: Sequence[dict], self_id: str = ""
-) -> tuple[str, bool, tuple[ImageSegmentInfo, ...], tuple[str, ...]]:
+) -> tuple[
+    str, bool, tuple[ImageSegmentInfo, ...], tuple[str, ...], tuple[VideoSegmentInfo, ...]
+]:
     """
-    将消息段标准化为文本、@ 标记、图像与引用消息 ID。
+    将消息段标准化为文本、@ 标记、图像、视频与引用消息 ID。
 
     Args:
         segments (Sequence[dict]): OneBot 消息段列表。
         self_id (str): 机器人自身 QQ 号，用于识别 @。
 
     Returns:
-        tuple[str, bool, tuple[ImageSegmentInfo, ...], tuple[str, ...]]: 包含文本、是否@、图片段与引用 ID。
+        tuple[str, bool, tuple[ImageSegmentInfo, ...], tuple[str, ...], tuple[VideoSegmentInfo, ...]]:
+            包含文本、是否@、图片段、引用 ID 与视频段。
     """
     texts: list[str] = []
     at_me = False
     images: list[ImageSegmentInfo] = []
+    videos: list[VideoSegmentInfo] = []
     reply_ids: list[str] = []
     for seg in segments:
         if not isinstance(seg, dict):
@@ -477,12 +532,29 @@ def _normalize_message_segments(
                     break
             if candidate:
                 reply_ids.append(candidate)
-    return "".join(texts).strip(), at_me, tuple(images), tuple(reply_ids)
+        elif typ == "video":
+            url = data.get("url")
+            file_id = data.get("file") or data.get("file_id")
+            filename = data.get("name") or data.get("file")
+            videos.append(
+                VideoSegmentInfo(
+                    url=str(url) if url else None,
+                    file_id=str(file_id) if file_id else None,
+                    filename=str(filename) if filename else None,
+                )
+            )
+    return (
+        "".join(texts).strip(),
+        at_me,
+        tuple(images),
+        tuple(reply_ids),
+        tuple(videos),
+    )
 
 
 def _parse_message_and_at(event: dict) -> ParsedMessage:
     """
-    解析 NapCat 群消息，返回文本、@ 状态与图像段。
+    解析 NapCat 群消息，返回文本、@ 状态与多媒体段。
 
     Args:
         event (dict): OneBot v11 事件。
@@ -494,8 +566,10 @@ def _parse_message_and_at(event: dict) -> ParsedMessage:
 
     msg = event.get("message")
     if isinstance(msg, list):
-        text, at_me, images, reply_ids = _normalize_message_segments(msg, self_id)
-        return ParsedMessage(text, at_me, images, reply_ids)
+        text, at_me, images, reply_ids, videos = _normalize_message_segments(
+            msg, self_id
+        )
+        return ParsedMessage(text, at_me, images, reply_ids, videos)
 
     raw = str(event.get("raw_message") or msg or "").strip()
     raw, reply_ids = _extract_reply_ids_from_raw(raw)
@@ -503,8 +577,9 @@ def _parse_message_and_at(event: dict) -> ParsedMessage:
     if self_id and "[CQ:at,qq=" in raw:
         at_me = f"[CQ:at,qq={self_id}]" in raw
     images = _extract_cq_images(raw) if raw else ()
+    videos = _extract_cq_videos(raw) if raw else ()
     print(f"[Debug] Alternative way enabled")
-    return ParsedMessage(raw, at_me, images, reply_ids)
+    return ParsedMessage(raw, at_me, images, reply_ids, videos)
 
 
 def _extract_sender_name(event: dict) -> str:
@@ -587,7 +662,11 @@ class QQBotHandler(BaseHTTPRequestHandler):
 
     @classmethod
     def _build_multimodal_content(
-        cls, model_input: str, images: Sequence[StoredImage]
+        cls,
+        model_input: str,
+        images: Sequence[StoredImage],
+        videos: Sequence[StoredVideo] = (),
+        model_name: str = "",
     ) -> list[dict[str, object]]:
         """
         构造多模态消息内容列表。
@@ -595,17 +674,28 @@ class QQBotHandler(BaseHTTPRequestHandler):
         Args:
             model_input (str): 拼接后的文本输入。
             images (Sequence[StoredImage]): 已保存的图像集合。
+            videos (Sequence[StoredVideo], optional): 已保存的视频集合。
+            model_name (str, optional): 当前使用的模型名称，用于选择视频片段格式。
 
         Returns:
             list[dict[str, object]]: 可直接传递给多模态模型的内容结构，
-                在包含 Base64 数据时会同步提供对应的本地文件名。
+                在包含 Base64 数据时会同步提供对应的本地文件名；视频将采用
+                LangChain / google_genai 兼容的 media 结构。
         """
+        assert model_name or not videos, "存在视频时必须提供模型名称"
         content: list[dict[str, object]] = [{"type": "text", "text": model_input}]
         if images:
             content.append(
                 {
                     "type": "text",
                     "text": f"用户同时附带了 {len(images)} 张图片，请结合视觉分析并不要回传原始图片。",
+                }
+            )
+        if videos:
+            content.append(
+                {
+                    "type": "text",
+                    "text": f"用户同时附带了 {len(videos)} 个视频，请结合视频内容进行理解与推理。",
                 }
             )
         cfg = getattr(cls, "bot_cfg", None)
@@ -630,7 +720,46 @@ class QQBotHandler(BaseHTTPRequestHandler):
                     "image_url": {"url": _resolve_stored_image_url(stored, use_base64)},
                 }
             )
+        for idx, video in enumerate(videos, 1):
+            file_path = Path(video.path)
+            assert file_path.name, "视频文件名不能为空"
+            content.append(
+                {
+                    "type": "text",
+                    "text": (
+                        f"第 {idx} 个视频已经以内嵌形式提供，"
+                        f"本地文件名为 {file_path.name}。"
+                    ),
+                }
+            )
+            content.append(cls._format_video_part(video, model_name))
         return content
+
+    @staticmethod
+    def _format_video_part(video: StoredVideo, model_name: str) -> dict[str, object]:
+        """
+        将存储后的视频转换为模型可消费的消息片段。
+
+        Args:
+            video (StoredVideo): 已保存的视频对象。
+            model_name (str): 当前使用的模型名称。
+
+        Returns:
+            dict[str, object]: 可直接传递给多模态模型的视频片段。
+
+        Raises:
+            AssertionError: 当视频缺少必要信息或模型不支持视频时抛出。
+        """
+        assert isinstance(video, StoredVideo), "video 类型非法"
+        assert video.base64_data and video.mime_type, "视频缺少必要信息"
+        normalized_model = (model_name or "").lower()
+        if "gemini" in normalized_model or "google_genai" in normalized_model:
+            return {
+                "type": "media",
+                "mime_type": video.mime_type,
+                "data": base64.b64decode(video.base64_data),
+            }
+        raise AssertionError("当前模型不支持视频输入，请切换到 Gemini 多模态模型。")
 
     @staticmethod
     def _compose_group_message(
@@ -898,7 +1027,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
         self, message_ids: Sequence[str]
     ) -> list[MessageContent]:
         """
-        批量获取引用消息对应的内容（文本与图像）。
+        批量获取引用消息对应的内容（文本、图像与视频）。
 
         Args:
             message_ids (Sequence[str]): 需要查询的 message_id 列表。
@@ -989,7 +1118,12 @@ class QQBotHandler(BaseHTTPRequestHandler):
         user_id = int(event.get("user_id", 0))
         parsed = _parse_message_and_at(event)
 
-        if not parsed.text and not parsed.images and not parsed.reply_message_ids:
+        if (
+            not parsed.text
+            and not parsed.images
+            and not parsed.videos
+            and not parsed.reply_message_ids
+        ):
             author = _extract_sender_name(event)
             self._log_ignore_request(group_id, user_id, author, "[No text]")
             self._send_no_content()
@@ -1011,6 +1145,8 @@ class QQBotHandler(BaseHTTPRequestHandler):
             msg = parsed.text or ""
             if parsed.images:
                 msg += "[With images]"
+            if parsed.videos:
+                msg += "[With videos]"
             if parsed.reply_message_ids:
                 msg += "[With reply]"
             if not msg:
@@ -1032,10 +1168,15 @@ class QQBotHandler(BaseHTTPRequestHandler):
             msg = parsed.text or ""
             if parsed.reply_message_ids:
                 msg += "[With reply]"
-            if not msg and parsed.images:
-                msg += "[No text, with images]"
-            elif not msg:
-                msg = "[No text]"
+            if not msg:
+                if parsed.images and parsed.videos:
+                    msg += "[No text, with images and videos]"
+                elif parsed.images:
+                    msg += "[No text, with images]"
+                elif parsed.videos:
+                    msg += "[No text, with videos]"
+                else:
+                    msg = "[No text]"
                 # 时间戳信息打印
             print(
                 f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m \033[34m[Chat]\033[0m Request get: Group {group_id} Id {user_id} User {author}: {msg}"
@@ -1057,8 +1198,12 @@ class QQBotHandler(BaseHTTPRequestHandler):
             reply_texts = [c.text for c in reply_contents if c.text]
             user_text = parsed.text
             if not user_text:
-                if parsed.images:
+                if parsed.images and parsed.videos:
+                    user_text = "（用户未提供文本，仅包含图片和视频）"
+                elif parsed.images:
                     user_text = "（用户未提供文本，仅包含图片）"
+                elif parsed.videos:
+                    user_text = "（用户未提供文本，仅包含视频）"
                 elif reply_texts:
                     user_text = "（当前消息正文为空，仅引用其他消息）"
                 else:
@@ -1071,19 +1216,29 @@ class QQBotHandler(BaseHTTPRequestHandler):
                         summary = "（引用消息未提供文本）"
                     if content.images:
                         summary += f"（包含{len(content.images)}张图片）"
+                    if content.videos:
+                        summary += f"（包含{len(content.videos)}个视频）"
                     context_lines.append(f"引用消息{idx}: [{summary}]")
                 context_lines.append(f"当前消息: [{user_text}]")
                 user_text = "\n".join(context_lines)
             model_input = f"Group_id: [{group_id}]; User_id: [{user_id}]; User_name: {author}; Msg:\n[{user_text}]"
             image_segments: list[ImageSegmentInfo] = []
+            video_segments: list[VideoSegmentInfo] = []
             if parsed.images:
                 image_segments.extend(parsed.images)
+            if parsed.videos:
+                video_segments.extend(parsed.videos)
             for content in reply_contents:
                 if content.images:
                     image_segments.extend(content.images)
+                if content.videos:
+                    video_segments.extend(content.videos)
             stored_images: list[StoredImage] = []
-            if image_segments:
+            stored_videos: list[StoredVideo] = []
+            storage: Optional[ImageStorageManager] = None
+            if image_segments or video_segments:
                 storage = self._require_image_storage()
+            if image_segments and storage:
                 seen_tokens: set[str] = set()
                 for seg in image_segments:
                     assert seg.url, "当前仅支持通过 URL 获取的图片消息"
@@ -1095,9 +1250,25 @@ class QQBotHandler(BaseHTTPRequestHandler):
                     saved = storage.save_remote_image(seg.url, seg.filename)
                     if saved:
                         stored_images.append(saved)
+            if video_segments and storage:
+                seen_video_tokens: set[str] = set()
+                for seg in video_segments:
+                    assert seg.url, "当前仅支持通过 URL 获取的视频消息"
+                    token = seg.url or seg.file_id or seg.filename or ""
+                    if token and token in seen_video_tokens:
+                        continue
+                    if token:
+                        seen_video_tokens.add(token)
+                    stored = storage.save_remote_video(seg.url, seg.filename)
+                    stored_videos.append(stored)
             payload = (
-                self._build_multimodal_content(model_input, stored_images)
-                if stored_images
+                self._build_multimodal_content(
+                    model_input,
+                    stored_images,
+                    stored_videos,
+                    self.agent._config.model_name,
+                )
+                if stored_images or stored_videos
                 else model_input
             )
             answer = self.agent.chat_once_stream(
