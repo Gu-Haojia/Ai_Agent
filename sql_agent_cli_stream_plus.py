@@ -136,7 +136,7 @@ _BASE64_DATA_URL_PATTERN = re.compile(
 
 def _sanitize_for_logging(payload: object) -> str:
     """
-    将待写入日志的对象转换为字符串，并将 base64 段落替换为占位符。
+    将待写入日志的对象转换为字符串，视频/图片等二进制段落替换为占位符。
 
     Args:
         payload (object): 待记录的消息对象，可以是字符串、列表或消息实例。
@@ -148,7 +148,23 @@ def _sanitize_for_logging(payload: object) -> str:
         None.
     """
 
-    text = str(payload)
+    def _mask_binary(obj: object) -> object:
+        """递归替换二进制字段，避免视频/图片原始数据写入日志。"""
+        if isinstance(obj, (bytes, bytearray)):
+            return f"[BINARY len={len(obj)}]"
+        if isinstance(obj, dict):
+            masked: dict[object, object] = {}
+            for k, v in obj.items():
+                if str(k).lower() == "data" and isinstance(v, (bytes, bytearray)):
+                    masked[k] = f"[BINARY len={len(v)}]"
+                else:
+                    masked[k] = _mask_binary(v)
+            return masked
+        if isinstance(obj, (list, tuple)):
+            return type(obj)(_mask_binary(x) for x in obj)
+        return obj
+
+    text = str(_mask_binary(payload))
 
     def _replace(match: Match[str]) -> str:
         """
