@@ -1235,7 +1235,6 @@ class QQBotHandler(BaseHTTPRequestHandler):
                     video_segments.extend(content.videos)
             stored_images: list[StoredImage] = []
             stored_videos: list[StoredVideo] = []
-            skipped_videos = 0
             storage: Optional[ImageStorageManager] = None
             if image_segments or video_segments:
                 storage = self._require_image_storage()
@@ -1254,28 +1253,17 @@ class QQBotHandler(BaseHTTPRequestHandler):
             if video_segments and storage:
                 seen_video_tokens: set[str] = set()
                 for seg in video_segments:
-                    url = seg.url or ""
-                    if not (isinstance(url, str) and url.startswith("http")):
-                        skipped_videos += 1
-                        sys.stderr.write(
-                            f"[Chat] 跳过无 URL 视频: file_id={seg.file_id} name={seg.filename}\n"
-                        )
-                        continue
-                    token = url or seg.file_id or seg.filename or ""
+                    assert seg.url, "当前仅支持通过 URL 获取的视频消息"
+                    token = seg.url or seg.file_id or seg.filename or ""
                     if token and token in seen_video_tokens:
                         continue
                     if token:
                         seen_video_tokens.add(token)
-                    stored = storage.save_remote_video(url, seg.filename)
+                    stored = storage.save_remote_video(seg.url, seg.filename)
                     stored_videos.append(stored)
-            model_input_with_notes = model_input
-            if skipped_videos:
-                model_input_with_notes = (
-                    f"{model_input}\n提示：有 {skipped_videos} 个视频缺少可下载的 URL，已忽略。"
-                )
             payload = (
                 self._build_multimodal_content(
-                    model_input_with_notes,
+                    model_input,
                     stored_images,
                     stored_videos,
                     self.agent._config.model_name,
