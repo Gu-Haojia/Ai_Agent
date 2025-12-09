@@ -1118,6 +1118,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
         user_id = int(event.get("user_id", 0))
         parsed = _parse_message_and_at(event)
         try:
+            print(f"[MsgDebug] event={event}", flush=True)
             print(
                 f"[MsgDebug] gid={group_id} uid={user_id} raw={event.get('raw_message')} message={event.get('message')}",
                 flush=True,
