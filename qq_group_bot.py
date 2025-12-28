@@ -1147,16 +1147,6 @@ class QQBotHandler(BaseHTTPRequestHandler):
             self._send_no_content()
             return
         
-        #群限制名单
-        allow_users = getattr(self.bot_cfg, "cmd_allowed_users", ()) or ()
-        if self.bot_cfg.limitlist_groups and group_id in self.bot_cfg.limitlist_groups and user_id not in allow_users:
-            _send_group_msg(
-                self.bot_cfg.api_base,
-                group_id,
-                "果咩，由于制作人即将破产，本服务将于12/31 24:00停止运行QAQ",
-                self.bot_cfg.access_token,
-            )
-            #return
 
         # 仅在被 @ 机器人时响应
         if not parsed.at_me:
@@ -1179,6 +1169,17 @@ class QQBotHandler(BaseHTTPRequestHandler):
         if self._handle_commands(group_id, user_id, t):
             self._send_no_content()
             return
+        
+                #群限制名单
+        allow_users = getattr(self.bot_cfg, "cmd_allowed_users", ()) or ()
+        if self.bot_cfg.limitlist_groups and group_id in self.bot_cfg.limitlist_groups and user_id not in allow_users:
+            _send_group_msg(
+                self.bot_cfg.api_base,
+                group_id,
+                "果咩，由于制作人即将破产，本服务将于12/31 24:00停止运行QAQ",
+                self.bot_cfg.access_token,
+            )
+            #return
 
         # 调用 Agent 生成回复（返回最后聚合文本）
         try:
