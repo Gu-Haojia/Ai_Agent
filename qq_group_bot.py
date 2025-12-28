@@ -1148,7 +1148,8 @@ class QQBotHandler(BaseHTTPRequestHandler):
             return
         
         #群限制名单
-        if self.bot_cfg.limitlist_groups and group_id in self.bot_cfg.limitlist_groups and user_id not in self.bot_cfg.admin_users:
+        allow_users = getattr(self.bot_cfg, "cmd_allowed_users", ()) or ()
+        if self.bot_cfg.limitlist_groups and group_id in self.bot_cfg.limitlist_groups and user_id not in allow_users:
             _send_group_msg(
                 self.bot_cfg.api_base,
                 group_id,
