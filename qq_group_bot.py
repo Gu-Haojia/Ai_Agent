@@ -241,6 +241,7 @@ class BotConfig:
     access_token: str = ""
     allowed_groups: tuple[int, ...] = ()
     blacklist_groups: tuple[int, ...] = ()
+    limitlist_groups: tuple[int, ...] = ()
     cmd_allowed_users: tuple[int, ...] = ()  # 命令白名单用户（为空表示放行）
     use_local_image_base64: bool = True
 
@@ -263,6 +264,12 @@ class BotConfig:
             blacklist = tuple(
                 int(x) for x in blacklist_env.split(",") if x.strip().isdigit()
             )
+        limitlist_env = os.environ.get("LIMIT_GROUPS", "").strip()
+        limitlist: tuple[int, ...] = ()
+        if limitlist_env:
+            limitlist = tuple(
+                int(x) for x in limitlist_env.split(",") if x.strip().isdigit()
+            )        
         # 命令白名单（逗号分隔 QQ 号），为空表示放行
         cmd_env = os.environ.get("CMD_ALLOWED_USERS", "").strip()
         cmd_allowed: tuple[int, ...] = ()
@@ -285,6 +292,7 @@ class BotConfig:
             access_token=access_token,
             allowed_groups=groups,
             blacklist_groups=blacklist,
+            limitlist_groups=limitlist,
             cmd_allowed_users=cmd_allowed,
             use_local_image_base64=use_local_image_base64,
         )
@@ -1138,6 +1146,16 @@ class QQBotHandler(BaseHTTPRequestHandler):
         if self.bot_cfg.blacklist_groups and group_id in self.bot_cfg.blacklist_groups:
             self._send_no_content()
             return
+        
+        #群限制名单
+        if self.bot_cfg.limitlist_groups and group_id in self.bot_cfg.limitlist_groups and user_id not in self.bot_cfg.admin_users:
+            _send_group_msg(
+                self.bot_cfg.api_base,
+                group_id,
+                "果咩，由于制作人即将破产，本服务将于12/31 24:00停止运行QAQ",
+                self.bot_cfg.access_token,
+            )
+            #return
 
         # 仅在被 @ 机器人时响应
         if not parsed.at_me:
@@ -1854,7 +1872,7 @@ def main() -> None:
         f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [QQBot] Listening http://{bot_cfg.host}:{bot_cfg.port} api={bot_cfg.api_base}"
     )
     print(
-        f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [QQBot] Group whitelist={bot_cfg.allowed_groups or 'ALL'} blacklist={bot_cfg.blacklist_groups or 'NONE'}"
+        f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [QQBot] Group whitelist={bot_cfg.allowed_groups or 'ALL'} blacklist={bot_cfg.blacklist_groups or 'NONE'} limitlist={bot_cfg.limitlist_groups or 'NONE'}"
     )
     print(
         f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [QQBot] Model provided by={agent._config.model_name} storage_type={'RAM' if agent._config.use_memory_ckpt else 'ROM'} use_image_base64={bot_cfg.use_local_image_base64}"
