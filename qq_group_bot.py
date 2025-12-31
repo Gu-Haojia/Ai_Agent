@@ -1176,10 +1176,12 @@ class QQBotHandler(BaseHTTPRequestHandler):
             _send_group_msg(
                 self.bot_cfg.api_base,
                 group_id,
-                "果咩，由于制作人即将破产，本服务将于12/31 24:00停止运行QAQ",
+                "果咩，由于制作人即将破产，本服务于12/31 24:00JST限制非管理员调用QAQ",
                 self.bot_cfg.access_token,
             )
-            #return
+            #如果时间大于2026年1月1日0点
+            if time.time() >= time.mktime(time.strptime("2026-01-01 00:00:00", "%Y-%m-%d %H:%M:%S")):
+                return
 
         # 调用 Agent 生成回复（返回最后聚合文本）
         try:
