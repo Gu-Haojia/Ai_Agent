@@ -508,14 +508,24 @@ class MeruMonitorManager:
         Returns:
             str: 合并后的多行字符串。
         """
-        lines = []
         if not items:
             return ""
+        if tag == "SEARCH":
+            return MeruMonitorManager._format_search(items, tag)
+        if tag.startswith("PRICE<="):
+            return MeruMonitorManager._format_price_watch(items, tag)
+        return MeruMonitorManager._format_new_watch(items, tag)
+
+    @staticmethod
+    def _format_search(items: Sequence[MeruSearchResult], tag: str) -> str:
+        """
+        搜索结果格式化（保持原有单行样式）。
+        """
         keyword = items[0].keyword
         header = f"[{tag}]"
         if keyword:
             header = f"{header} | [{keyword}]"
-        lines.append(header)
+        lines = [header]
         for idx, item in enumerate(items, 1):
             price_part = f"¥{item.price}" if item.price is not None else "价格未知"
             parts = [f"#{idx}", item.name or "(无标题)", price_part]
@@ -524,4 +534,62 @@ class MeruMonitorManager:
             if item.url:
                 parts.append(item.url)
             lines.append(" | ".join(parts))
+        return "\n".join(lines)
+
+    @staticmethod
+    def _format_new_watch(items: Sequence[MeruSearchResult], tag: str) -> str:
+        """
+        新品监控格式化。
+        """
+        keyword = items[0].keyword
+        header = f"[{tag}]"
+        if keyword:
+            header = f"{header} | [{keyword}] 检测到新商品！"
+        else:
+            header = f"{header} 检测到新商品！"
+        lines = [
+            header,
+            "=========================",
+        ]
+        for idx, item in enumerate(items, 1):
+            price_part = f"¥{item.price}" if item.price is not None else "价格未知"
+            created = item.created_label or "未知"
+            lines.extend(
+                [
+                    f"#{idx} {item.name or '(无标题)'}",
+                    f"价格：{price_part}",
+                    f"时间：{created}",
+                    f"链接：{item.url}",
+                ]
+            )
+        return "\n".join(lines)
+
+    @staticmethod
+    def _format_price_watch(items: Sequence[MeruSearchResult], tag: str) -> str:
+        """
+        价格提醒格式化。
+        """
+        keyword = items[0].keyword
+        threshold = tag.replace("PRICE<=", "").strip()
+        header_prefix = "[NEW]"
+        if threshold:
+            header = f"{header_prefix} | [{keyword}] | [低于{threshold}]"
+        else:
+            header = f"{header_prefix} | [{keyword}]"
+        lines = [
+            header,
+            "检测到捡漏新商品！",
+            "=========================",
+        ]
+        for idx, item in enumerate(items, 1):
+            price_part = f"¥{item.price}" if item.price is not None else "价格未知"
+            created = item.created_label or "未知"
+            lines.extend(
+                [
+                    f"#{idx} {item.name or '(无标题)'}",
+                    f"价格：{price_part}",
+                    f"时间：{created}",
+                    f"链接：{item.url}",
+                ]
+            )
         return "\n".join(lines)
