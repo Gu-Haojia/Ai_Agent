@@ -37,6 +37,7 @@ import hmac
 import json
 import os
 import re
+import shlex
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
@@ -177,6 +178,7 @@ from sql_agent_cli_stream_plus import (
     SQLCheckpointAgentStreamingPlus,
 )
 from src.google_reverse_image_tool import ReverseImageUploader
+from src.meru_monitor import DEFAULT_LIMIT, MeruMonitorManager
 from image_storage import GeneratedImage, ImageStorageManager, StoredImage, StoredVideo
 from daily_task import (
     DailyTicketTask,
@@ -643,6 +645,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
     bot_cfg: BotConfig
     agent: SQLCheckpointAgentStreamingPlus
     image_storage: Optional[ImageStorageManager] = None
+    meru_monitor: Optional[MeruMonitorManager] = None
     _post_lock: ClassVar[Lock] = Lock()  # 串行化处理 POST 请求
     # 群 -> 线程ID 映射，用于 /clear 后为群对话分配新线程
     _group_threads: dict[int, str] = {}
@@ -667,6 +670,22 @@ class QQBotHandler(BaseHTTPRequestHandler):
         if not isinstance(cls.image_storage, ImageStorageManager):
             raise AssertionError("图像存储管理器尚未配置")
         return cls.image_storage
+
+    @classmethod
+    def _require_meru_monitor(cls) -> MeruMonitorManager:
+        """
+        获取 Meru 监控管理器。
+
+        Returns:
+            MeruMonitorManager: 已注入的监控管理器实例。
+
+        Raises:
+            AssertionError: 当监控管理器未初始化时抛出。
+        """
+        monitor = cls.meru_monitor
+        if not isinstance(monitor, MeruMonitorManager):
+            raise AssertionError("Meru 监控器尚未初始化")
+        return monitor
 
     @classmethod
     def _build_multimodal_content(
@@ -1495,6 +1514,133 @@ class QQBotHandler(BaseHTTPRequestHandler):
         duration = time.perf_counter() - start
         return reply, duration
 
+    def _handle_meru_commands(
+        self, group_id: int, user_id: int, argv: list[str]
+    ) -> bool:
+        """
+        处理 Meru 搜索与新品监控命令。
+
+        Args:
+            group_id (int): 群号。
+            user_id (int): 用户号。
+            argv (list[str]): 解析后的命令参数。
+
+        Returns:
+            bool: True 表示已处理该命令。
+        """
+        assert group_id > 0, "group_id 必须为正整数"
+        assert user_id > 0, "user_id 必须为正整数"
+        if not argv:
+            return False
+        cmd = argv[0]
+        monitor = self._require_meru_monitor()
+
+        def _send_to_group(text: str) -> None:
+            assert text is not None
+            _send_group_msg(
+                self.bot_cfg.api_base, group_id, text, self.bot_cfg.access_token
+            )
+
+        def _send_with_at(text: str) -> None:
+            assert text is not None
+            _send_group_at_message(
+                self.bot_cfg.api_base,
+                group_id,
+                user_id,
+                text,
+                self.bot_cfg.access_token,
+            )
+
+        if cmd == "/merusearch":
+            if len(argv) < 2:
+                _send_to_group('用法: /merusearch "关键词" [limit]')
+                return True
+            keyword = argv[1].strip()
+            if not keyword:
+                _send_to_group("关键词不能为空。")
+                return True
+            limit = DEFAULT_LIMIT
+            if len(argv) >= 3:
+                try:
+                    limit_candidate = int(argv[2])
+                    assert limit_candidate > 0
+                    limit = limit_candidate
+                except Exception:
+                    _send_to_group("limit 必须为正整数。")
+                    return True
+            try:
+                results = monitor.search(keyword, limit=limit)
+            except AssertionError as err:
+                _send_to_group(f"查询失败：{err}")
+                return True
+            except Exception as err:
+                _send_to_group(f"查询失败（接口异常）：{err}")
+                return True
+            if not results:
+                _send_to_group(f"未找到与「{keyword}」相关的在售商品。")
+            else:
+                message = monitor.format_lines(results, "SEARCH")
+                _send_to_group(message)
+            return True
+
+        if cmd == "/meruwatch":
+            if len(argv) == 2 and argv[1].lower() == "off":
+                stopped = monitor.stop_watch()
+                msg = (
+                    "已停止 Meru 新品监控。"
+                    if stopped
+                    else "当前没有运行中的 Meru 监控任务。"
+                )
+                _send_to_group(msg)
+                return True
+            if len(argv) < 3:
+                _send_to_group('用法: /meruwatch "关键词" <间隔秒> [价格阈值]')
+                return True
+            keyword = argv[1].strip()
+            if not keyword:
+                _send_to_group("关键词不能为空。")
+                return True
+            try:
+                interval = float(argv[2])
+                assert interval > 0
+            except Exception:
+                _send_to_group("interval 必须为正数（秒）。")
+                return True
+            price_threshold: Optional[int] = None
+            if len(argv) >= 4:
+                try:
+                    price_candidate = int(argv[3])
+                    assert price_candidate > 0
+                    price_threshold = price_candidate
+                except Exception:
+                    _send_to_group("price 必须为正整数。")
+                    return True
+            try:
+                monitor.start_watch(
+                    keyword=keyword,
+                    interval=interval,
+                    limit_per_cycle=DEFAULT_LIMIT,
+                    price_threshold=price_threshold,
+                    notify=_send_to_group,
+                    notify_price=_send_with_at if price_threshold is not None else None,
+                )
+            except RuntimeError as err:
+                _send_to_group(str(err))
+                return True
+            except AssertionError as err:
+                _send_to_group(f"启动监控失败：{err}")
+                return True
+            except Exception as err:
+                _send_to_group(f"启动监控失败（接口异常）：{err}")
+                return True
+            start_msg = f"开始监控「{keyword}」，轮询间隔 {interval:.0f} 秒。"
+            if price_threshold is not None:
+                start_msg += f" 价格提醒阈值：≤ {price_threshold}。"
+            _send_to_group(start_msg)
+            return True
+
+        return False
+
     def _handle_commands(self, group_id: int, user_id: int, text: str) -> bool:
         """处理内部命令。
 
@@ -1535,6 +1681,21 @@ class QQBotHandler(BaseHTTPRequestHandler):
             )
             return True
 
+        if cmd in {"/merusearch", "/meruwatch"}:
+            try:
+                argv = shlex.split(text)
+            except ValueError as err:
+                _send_group_msg(
+                    self.bot_cfg.api_base,
+                    group_id,
+                    f"命令格式错误：{err}",
+                    self.bot_cfg.access_token,
+                )
+                return True
+            handled = self._handle_meru_commands(group_id, user_id, argv)
+            if handled:
+                return True
+
         if cmd == "/cmd" and len(parts) == 1:
             msg = (
                 "高性能AI萝卜子-たきな Ver. 3.0\n"
@@ -1549,7 +1710,9 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 "8) /rmdata - 清除长期记忆\n"
                 "9) /boost - 切换后端可用模型\n"
                 "10) /image - 切换生图模型\n"
-                "11) /apicheck - 检测当前模型 API 是否可用"
+                "11) /apicheck - 检测当前模型 API 是否可用\n"
+                "12) /merusearch \"关键词\" [limit] - 查询 Meru 最新在售\n"
+                "13) /meruwatch \"关键词\" <间隔秒> [价格阈值] - 新品监控 (/meruwatch off 停止)"
             )
             _send_group_msg(
                 self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
@@ -1820,6 +1983,7 @@ def main() -> None:
     QQBotHandler.bot_cfg = bot_cfg
     QQBotHandler.agent = agent
     QQBotHandler.image_storage = image_manager
+    QQBotHandler.meru_monitor = MeruMonitorManager()
 
     def _send_daily_text(group_id: int, text: str) -> None:
         """
