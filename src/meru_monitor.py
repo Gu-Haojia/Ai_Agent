@@ -500,8 +500,19 @@ class MeruMonitorManager:
             str: 合并后的多行字符串。
         """
         lines = []
+        if not items:
+            return ""
+        keyword = items[0].keyword
+        header = f"[{tag}]"
+        if keyword:
+            header = f"{header} | [{keyword}]"
+        lines.append(header)
         for idx, item in enumerate(items, 1):
-            prefix = f"[{tag}]#{idx}"
-            lines.append(item.to_line(prefix=prefix))
+            price_part = f"¥{item.price}" if item.price is not None else "价格未知"
+            parts = [f"#{idx}", item.name or "(无标题)", price_part]
+            if item.created_label:
+                parts.append(item.created_label)
+            if item.url:
+                parts.append(item.url)
+            lines.append(" | ".join(parts))
         return "\n".join(lines)
-
