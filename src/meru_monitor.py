@@ -331,6 +331,7 @@ class _MeruWatchTask:
                     if len(self._seen) > 400:
                         self._seen = set(item.item_id for item in results)
             except Exception as err:
+                print(f"[MeruWatch] 监控轮询异常: {err}", flush=True)
                 self._notify(f"[MeruWatch] 监控失败：{err}")
             self._stop_event.wait(self._interval)
 
@@ -344,6 +345,10 @@ class _MeruWatchTask:
         subset = list(items)[: self._limit]
         message = self._formatter(subset, "NEW")
         self._notify(message)
+        print(
+            f"[MeruWatch] 发现新品 {len(subset)}/{len(items)} 条，关键词={self._keyword}",
+            flush=True,
+        )
         if self._price_threshold is None or not self._notify_price:
             return
         affordable = [
@@ -357,6 +362,10 @@ class _MeruWatchTask:
             affordable, f"PRICE<= {self._price_threshold}"
         )
         self._notify_price(price_msg)
+        print(
+            f"[MeruWatch] 触发价格提醒 {len(affordable)} 条，阈值={self._price_threshold}",
+            flush=True,
+        )
 
 
 class MeruMonitorManager:

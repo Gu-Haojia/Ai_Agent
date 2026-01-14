@@ -1568,6 +1568,10 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 except Exception:
                     _send_to_group("limit 必须为正整数。")
                     return True
+            print(
+                f"[Meru] 执行搜索 keyword='{keyword}' limit={limit} group={group_id} user={user_id}",
+                flush=True,
+            )
             try:
                 results = monitor.search(keyword, limit=limit)
             except AssertionError as err:
@@ -1592,6 +1596,10 @@ class QQBotHandler(BaseHTTPRequestHandler):
                     else "当前没有运行中的 Meru 监控任务。"
                 )
                 _send_to_group(msg)
+                print(
+                    f"[Meru] 停止监控 group={group_id} user={user_id} result={stopped}",
+                    flush=True,
+                )
                 return True
             if len(argv) < 3:
                 _send_to_group('用法: /meruwatch "关键词" <间隔秒> [价格阈值]')
@@ -1637,6 +1645,11 @@ class QQBotHandler(BaseHTTPRequestHandler):
             if price_threshold is not None:
                 start_msg += f" 价格提醒阈值：≤ {price_threshold}。"
             _send_to_group(start_msg)
+            print(
+                f"[Meru] 启动监控 keyword='{keyword}' interval={interval}s price<={price_threshold} "
+                f"group={group_id} user={user_id}",
+                flush=True,
+            )
             return True
 
         return False
