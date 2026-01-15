@@ -7,12 +7,15 @@ Meru 关键词搜索与监控模块。
 from __future__ import annotations
 
 import base64
+import json
+import os
 import time
 import uuid
 import warnings
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from threading import Event, Lock, Thread
+from pathlib import Path
 from typing import Callable, Optional, Sequence
 
 import jwt
@@ -23,6 +26,7 @@ API_URL = "https://api.mercari.jp/v2/entities:search"
 ITEM_URL = "https://jp.mercari.com/item/{id}"
 DEFAULT_LIMIT = 5
 MAX_WATCH_TASKS = 5
+DEFAULT_STORE_PATH = ".meru_watch.json"
 
 # 静默掉 macOS LibreSSL 的兼容性告警
 warnings.filterwarnings(
@@ -260,6 +264,8 @@ class _MeruWatchTask:
         limit_per_cycle: int,
         price_threshold: Optional[int],
         price_only: bool,
+        group_id: Optional[int],
+        user_id: Optional[int],
         fetcher: Callable[[], Sequence[MeruSearchResult]],
         formatter: Callable[[Sequence[MeruSearchResult], str], str],
         notify: Callable[[str], None],
@@ -274,6 +280,8 @@ class _MeruWatchTask:
             limit_per_cycle (int): 单轮最多推送条目数。
             price_threshold (Optional[int]): 价格提醒阈值。
             price_only (bool): True 时仅对满足价格阈值的商品发出价格提醒。
+            group_id (Optional[int]): 触发命令的群号，用于持久化恢复。
+            user_id (Optional[int]): 触发命令的用户号，用于价格提醒 @。
             fetcher (Callable[[], Sequence[MeruSearchResult]]): 数据获取函数。
             formatter (Callable[[Sequence[MeruSearchResult], str], str]): 结果格式化函数。
             notify (Callable[[str], None]): 新品通知回调。
@@ -289,6 +297,8 @@ class _MeruWatchTask:
         self._interval = interval
         self._limit = limit_per_cycle
         self._price_threshold = price_threshold
+        self._group_id = group_id
+        self._user_id = user_id
         self._fetcher = fetcher
         self._formatter = formatter
         self._notify = notify
@@ -391,22 +401,45 @@ class _MeruWatchTask:
             flush=True,
         )
 
+    def to_state(self) -> dict[str, object]:
+        """
+        导出可持久化的任务配置。
+
+        Returns:
+            dict[str, object]: 任务的关键配置字典。
+        """
+        return {
+            "keyword": self._keyword,
+            "interval": self._interval,
+            "limit_per_cycle": self._limit,
+            "price_threshold": self._price_threshold,
+            "price_only": self._price_only,
+            "group_id": self._group_id,
+            "user_id": self._user_id,
+        }
+
 
 class MeruMonitorManager:
     """
     Meru 搜索与监控管理器，提供一次查询与监控能力。
     """
 
-    def __init__(self, client: Optional[MercariDPoPClient] = None) -> None:
+    def __init__(
+        self,
+        client: Optional[MercariDPoPClient] = None,
+        store_path: str = DEFAULT_STORE_PATH,
+    ) -> None:
         """
         初始化管理器。
 
         Args:
             client (Optional[MercariDPoPClient]): 可选的自定义客户端。
+            store_path (str): 监控任务持久化文件路径。
         """
         self._client = client or MercariDPoPClient()
         self._lock = Lock()
         self._watch_tasks: list[_MeruWatchTask] = []
+        self._store_path = Path(store_path)
 
     def search(self, keyword: str, limit: int = DEFAULT_LIMIT) -> list[MeruSearchResult]:
         """
@@ -430,8 +463,11 @@ class MeruMonitorManager:
         limit_per_cycle: int = DEFAULT_LIMIT,
         price_threshold: Optional[int] = None,
         price_only: bool = False,
+        group_id: Optional[int] = None,
+        user_id: Optional[int] = None,
         notify: Optional[Callable[[str], None]] = None,
         notify_price: Optional[Callable[[str], None]] = None,
+        persist: bool = True,
     ) -> None:
         """
         启动新品监控（全局最多 5 个监控任务）。
@@ -442,8 +478,11 @@ class MeruMonitorManager:
             limit_per_cycle (int): 单轮推送上限。
             price_threshold (Optional[int]): 价格提醒阈值。
             price_only (bool): True 时仅提醒满足价格阈值的商品。
+            group_id (Optional[int]): 触发命令的群号，用于持久化恢复。
+            user_id (Optional[int]): 触发命令的用户号，用于价格提醒 @。
             notify (Optional[Callable[[str], None]]): 新品通知回调。
             notify_price (Optional[Callable[[str], None]]): 价格提醒回调。
+            persist (bool): 是否写入持久化存储。
 
         Raises:
             RuntimeError: 当监控任务超过上限时抛出。
@@ -465,6 +504,8 @@ class MeruMonitorManager:
                 limit_per_cycle=limit_per_cycle,
                 price_threshold=price_threshold,
                 price_only=price_only,
+                group_id=group_id,
+                user_id=user_id,
                 fetcher=fetcher,
                 formatter=formatter,
                 notify=notify,
@@ -472,6 +513,8 @@ class MeruMonitorManager:
             )
             self._watch_tasks.append(task)
             task.start()
+            if persist:
+                self._persist_locked()
 
     def stop_watch(self) -> bool:
         """
@@ -487,7 +530,65 @@ class MeruMonitorManager:
             for task in self._watch_tasks:
                 task.stop()
             self._watch_tasks = []
+            self._persist_locked()
             return True
+
+    def restore_tasks(
+        self,
+        build_callbacks: Callable[
+            [Optional[int], Optional[int], dict[str, object]],
+            tuple[Callable[[str], None], Optional[Callable[[str], None]]],
+        ],
+    ) -> int:
+        """
+        从持久化文件恢复监控任务。
+
+        Args:
+            build_callbacks (Callable): 根据 group_id/user_id 构造通知回调的工厂。
+
+        Returns:
+            int: 成功恢复的任务数量。
+        """
+        records = self._load_records()
+        if not records:
+            return 0
+        restored = 0
+        for record in records:
+            try:
+                keyword = str(record.get("keyword") or "").strip()
+                interval = float(record.get("interval") or 0)
+                limit_per_cycle = int(record.get("limit_per_cycle") or DEFAULT_LIMIT)
+                price_threshold_raw = record.get("price_threshold")
+                price_threshold = (
+                    int(price_threshold_raw) if price_threshold_raw is not None else None
+                )
+                price_only = bool(record.get("price_only") or False)
+                group_id = record.get("group_id")
+                user_id = record.get("user_id")
+                if not keyword or interval <= 0 or limit_per_cycle <= 0:
+                    raise AssertionError("持久化记录缺少必要字段")
+                notify, notify_price = build_callbacks(
+                    group_id, user_id, record
+                )
+                self.start_watch(
+                    keyword=keyword,
+                    interval=interval,
+                    limit_per_cycle=limit_per_cycle,
+                    price_threshold=price_threshold,
+                    price_only=price_only,
+                    group_id=int(group_id) if group_id is not None else None,
+                    user_id=int(user_id) if user_id is not None else None,
+                    notify=notify,
+                    notify_price=notify_price,
+                    persist=False,
+                )
+                restored += 1
+            except Exception as err:
+                print(f"[MeruWatch] 恢复任务失败：{record} -> {err}", flush=True)
+                continue
+        with self._lock:
+            self._persist_locked()
+        return restored
 
     def _prune_dead_watch_tasks(self) -> None:
         """清理已停止的监控任务。"""
@@ -496,6 +597,35 @@ class MeruMonitorManager:
             if task.alive():
                 alive_tasks.append(task)
         self._watch_tasks = alive_tasks
+
+    def _load_records(self) -> list[dict[str, object]]:
+        """
+        读取持久化任务列表。
+
+        Returns:
+            list[dict[str, object]]: 任务配置集合。
+        """
+        if not self._store_path.exists():
+            return []
+        try:
+            with self._store_path.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                return [item for item in data if isinstance(item, dict)]
+        except Exception as err:
+            print(f"[MeruWatch] 读取持久化任务失败：{err}", flush=True)
+        return []
+
+    def _persist_locked(self) -> None:
+        """在持锁状态下写入当前任务列表。"""
+        try:
+            records = [task.to_state() for task in self._watch_tasks]
+            if not self._store_path.parent.exists():
+                os.makedirs(self._store_path.parent, exist_ok=True)
+            with self._store_path.open("w", encoding="utf-8") as f:
+                json.dump(records, f, ensure_ascii=False, indent=2)
+        except Exception as err:
+            print(f"[MeruWatch] 保存持久化任务失败：{err}", flush=True)
 
     def _fetch_results(self, keyword: str) -> list[MeruSearchResult]:
         """

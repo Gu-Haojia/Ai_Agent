@@ -46,7 +46,7 @@ from dataclasses import dataclass
 from hashlib import sha1
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Lock
-from typing import ClassVar, Optional, Sequence, Union
+from typing import Callable, ClassVar, Optional, Sequence, Union
 from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 
@@ -1638,6 +1638,8 @@ class QQBotHandler(BaseHTTPRequestHandler):
                     limit_per_cycle=DEFAULT_LIMIT,
                     price_threshold=price_threshold,
                     price_only=price_only,
+                    group_id=group_id,
+                    user_id=user_id,
                     notify=_send_to_group,
                     notify_price=_send_with_at if price_threshold is not None else None,
                 )
@@ -2008,7 +2010,9 @@ def main() -> None:
     QQBotHandler.bot_cfg = bot_cfg
     QQBotHandler.agent = agent
     QQBotHandler.image_storage = image_manager
-    QQBotHandler.meru_monitor = MeruMonitorManager()
+    meru_store = os.environ.get("MERU_WATCH_STORE", ".meru_watch.json")
+    meru_monitor = MeruMonitorManager(store_path=meru_store)
+    QQBotHandler.meru_monitor = meru_monitor
 
     def _send_daily_text(group_id: int, text: str) -> None:
         """
@@ -2059,6 +2063,47 @@ def main() -> None:
         agent_provider=_get_shared_agent,
     )
     ticket_task.start()
+
+    def _build_meru_callbacks(
+        group_id: int | None, user_id: int | None, _record: dict[str, object]
+    ) -> tuple[Callable[[str], None], Optional[Callable[[str], None]]]:
+        """
+        为持久化的 Meru 任务构造通知回调。
+
+        Args:
+            group_id (int | None): 目标群号。
+            user_id (int | None): 触发用户号。
+            _record (dict[str, object]): 持久化记录（未使用）。
+
+        Returns:
+            tuple[Callable[[str], None], Optional[Callable[[str], None]]]: 新品通知与价格提醒回调。
+        """
+        assert group_id is not None and int(group_id) > 0, "缺少 group_id，无法恢复监控任务"
+
+        def _notify(text: str) -> None:
+            _send_group_msg(bot_cfg.api_base, int(group_id), text, bot_cfg.access_token)
+
+        def _notify_price(text: str) -> None:
+            assert user_id is not None and int(user_id) > 0, "价格提醒缺少用户信息"
+            _send_group_at_message(
+                bot_cfg.api_base,
+                int(group_id),
+                int(user_id),
+                text,
+                bot_cfg.access_token,
+            )
+
+        price_cb: Optional[Callable[[str], None]] = (
+            _notify_price if user_id is not None else None
+        )
+        return _notify, price_cb
+
+    restored = meru_monitor.restore_tasks(_build_meru_callbacks)
+    if restored:
+        print(
+            f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [Meru] 已恢复 {restored} 个监控任务",
+            flush=True,
+        )
 
     server = ThreadingHTTPServer((bot_cfg.host, bot_cfg.port), QQBotHandler)
     print(
