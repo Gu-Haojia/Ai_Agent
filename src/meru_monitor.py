@@ -22,6 +22,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 API_URL = "https://api.mercari.jp/v2/entities:search"
 ITEM_URL = "https://jp.mercari.com/item/{id}"
 DEFAULT_LIMIT = 5
+MAX_WATCH_TASKS = 5
 
 # 静默掉 macOS LibreSSL 的兼容性告警
 warnings.filterwarnings(
@@ -370,7 +371,7 @@ class _MeruWatchTask:
 
 class MeruMonitorManager:
     """
-    Meru 搜索与监控管理器，提供一次查询与单任务监控能力。
+    Meru 搜索与监控管理器，提供一次查询与监控能力。
     """
 
     def __init__(self, client: Optional[MercariDPoPClient] = None) -> None:
@@ -382,7 +383,7 @@ class MeruMonitorManager:
         """
         self._client = client or MercariDPoPClient()
         self._lock = Lock()
-        self._watch_task: Optional[_MeruWatchTask] = None
+        self._watch_tasks: list[_MeruWatchTask] = []
 
     def search(self, keyword: str, limit: int = DEFAULT_LIMIT) -> list[MeruSearchResult]:
         """
@@ -409,7 +410,7 @@ class MeruMonitorManager:
         notify_price: Optional[Callable[[str], None]] = None,
     ) -> None:
         """
-        启动新品监控（全局仅允许一个监控任务）。
+        启动新品监控（全局最多 5 个监控任务）。
 
         Args:
             keyword (str): 监控关键词。
@@ -420,7 +421,7 @@ class MeruMonitorManager:
             notify_price (Optional[Callable[[str], None]]): 价格提醒回调。
 
         Raises:
-            RuntimeError: 当已有监控任务在运行时抛出。
+            RuntimeError: 当监控任务超过上限时抛出。
             AssertionError: 参数校验失败时抛出。
         """
         assert keyword and keyword.strip(), "keyword 不能为空"
@@ -428,8 +429,9 @@ class MeruMonitorManager:
         assert limit_per_cycle > 0, "limit_per_cycle 必须大于 0"
         assert notify is not None, "notify 回调不能为空"
         with self._lock:
-            if self._watch_task and self._watch_task.alive():
-                raise RuntimeError("已有监控任务在运行，请先关闭后再启动。")
+            self._prune_dead_watch_tasks()
+            if len(self._watch_tasks) >= MAX_WATCH_TASKS:
+                raise RuntimeError(f"最多支持 {MAX_WATCH_TASKS} 个监控任务，请先关闭后再启动。")
             fetcher = lambda: self._fetch_results(keyword)
             formatter = lambda items, tag: self.format_lines(items, tag)
             task = _MeruWatchTask(
@@ -442,23 +444,32 @@ class MeruMonitorManager:
                 notify=notify,
                 notify_price=notify_price,
             )
-            self._watch_task = task
+            self._watch_tasks.append(task)
             task.start()
 
     def stop_watch(self) -> bool:
         """
-        停止当前监控任务。
+        停止所有监控任务。
 
         Returns:
             bool: True 表示存在任务且已请求停止，False 表示无任务。
         """
         with self._lock:
-            task = self._watch_task
-            if not task:
+            self._prune_dead_watch_tasks()
+            if not self._watch_tasks:
                 return False
-            task.stop()
-            self._watch_task = None
+            for task in self._watch_tasks:
+                task.stop()
+            self._watch_tasks = []
             return True
+
+    def _prune_dead_watch_tasks(self) -> None:
+        """清理已停止的监控任务。"""
+        alive_tasks = []
+        for task in self._watch_tasks:
+            if task.alive():
+                alive_tasks.append(task)
+        self._watch_tasks = alive_tasks
 
     def _fetch_results(self, keyword: str) -> list[MeruSearchResult]:
         """

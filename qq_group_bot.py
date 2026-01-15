@@ -1591,7 +1591,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
             if len(argv) == 2 and argv[1].lower() == "off":
                 stopped = monitor.stop_watch()
                 msg = (
-                    "已停止 Meru 新品监控。"
+                    "已停止所有 Meru 新品监控任务。"
                     if stopped
                     else "当前没有运行中的 Meru 监控任务。"
                 )
