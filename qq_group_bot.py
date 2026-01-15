@@ -1615,13 +1615,21 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 _send_to_group("interval 必须为正数（秒）。")
                 return True
             price_threshold: Optional[int] = None
+            price_only = False
             if len(argv) >= 4:
+                raw_price = argv[3].strip()
+                if raw_price.endswith("!"):
+                    price_only = True
+                    raw_price = raw_price[:-1].strip()
                 try:
-                    price_candidate = int(argv[3])
+                    price_candidate = int(raw_price)
                     assert price_candidate > 0
                     price_threshold = price_candidate
                 except Exception:
                     _send_to_group("price 必须为正整数。")
+                    return True
+                if price_only and price_threshold is None:
+                    _send_to_group("价格提醒模式必须提供有效的价格阈值。")
                     return True
             try:
                 monitor.start_watch(
@@ -1629,6 +1637,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
                     interval=interval,
                     limit_per_cycle=DEFAULT_LIMIT,
                     price_threshold=price_threshold,
+                    price_only=price_only,
                     notify=_send_to_group,
                     notify_price=_send_with_at if price_threshold is not None else None,
                 )
@@ -1643,7 +1652,10 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 return True
             start_msg = f"开始监控「{keyword}」，轮询间隔 {interval:.0f} 秒。"
             if price_threshold is not None:
-                start_msg += f" 价格提醒阈值：≤ {price_threshold}。"
+                if price_only:
+                    start_msg += f" 仅提醒价格≤ {price_threshold} 的商品（不推送其他新品）。"
+                else:
+                    start_msg += f" 价格提醒阈值：≤ {price_threshold}。"
             _send_to_group(start_msg)
             print(
                 f"[Meru] 启动监控 keyword='{keyword}' interval={interval}s price<={price_threshold} "

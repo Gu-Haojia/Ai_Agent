@@ -259,6 +259,7 @@ class _MeruWatchTask:
         interval: float,
         limit_per_cycle: int,
         price_threshold: Optional[int],
+        price_only: bool,
         fetcher: Callable[[], Sequence[MeruSearchResult]],
         formatter: Callable[[Sequence[MeruSearchResult], str], str],
         notify: Callable[[str], None],
@@ -272,6 +273,7 @@ class _MeruWatchTask:
             interval (float): 轮询间隔秒数。
             limit_per_cycle (int): 单轮最多推送条目数。
             price_threshold (Optional[int]): 价格提醒阈值。
+            price_only (bool): True 时仅对满足价格阈值的商品发出价格提醒。
             fetcher (Callable[[], Sequence[MeruSearchResult]]): 数据获取函数。
             formatter (Callable[[Sequence[MeruSearchResult], str], str]): 结果格式化函数。
             notify (Callable[[str], None]): 新品通知回调。
@@ -279,6 +281,10 @@ class _MeruWatchTask:
         """
         assert interval > 0, "interval 必须大于 0"
         assert limit_per_cycle > 0, "limit_per_cycle 必须大于 0"
+        if price_only:
+            assert price_threshold is not None, "价格提醒模式必须提供阈值"
+            assert notify_price is not None, "价格提醒模式必须提供提醒回调"
+        self._price_only = price_only
         self._keyword = keyword
         self._interval = interval
         self._limit = limit_per_cycle
@@ -344,6 +350,23 @@ class _MeruWatchTask:
             items (Sequence[MeruSearchResult]): 新发现的商品列表。
         """
         subset = list(items)[: self._limit]
+        if self._price_only and self._price_threshold is not None:
+            affordable = [
+                item
+                for item in subset
+                if item.price is not None and item.price <= self._price_threshold
+            ]
+            if affordable and self._notify_price:
+                price_msg = self._formatter(
+                    affordable, f"PRICE<= {self._price_threshold}"
+                )
+                self._notify_price(price_msg)
+                print(
+                    f"[MeruWatch] 价格模式触发 {len(affordable)} 条，阈值={self._price_threshold}，关键词={self._keyword}",
+                    flush=True,
+                )
+            return
+
         message = self._formatter(subset, "NEW")
         self._notify(message)
         print(
@@ -406,6 +429,7 @@ class MeruMonitorManager:
         interval: float,
         limit_per_cycle: int = DEFAULT_LIMIT,
         price_threshold: Optional[int] = None,
+        price_only: bool = False,
         notify: Optional[Callable[[str], None]] = None,
         notify_price: Optional[Callable[[str], None]] = None,
     ) -> None:
@@ -417,6 +441,7 @@ class MeruMonitorManager:
             interval (float): 轮询间隔秒数。
             limit_per_cycle (int): 单轮推送上限。
             price_threshold (Optional[int]): 价格提醒阈值。
+            price_only (bool): True 时仅提醒满足价格阈值的商品。
             notify (Optional[Callable[[str], None]]): 新品通知回调。
             notify_price (Optional[Callable[[str], None]]): 价格提醒回调。
 
@@ -439,6 +464,7 @@ class MeruMonitorManager:
                 interval=interval,
                 limit_per_cycle=limit_per_cycle,
                 price_threshold=price_threshold,
+                price_only=price_only,
                 fetcher=fetcher,
                 formatter=formatter,
                 notify=notify,
