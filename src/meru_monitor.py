@@ -581,11 +581,12 @@ class MeruMonitorManager:
         keyword = items[0].keyword
         header = f"[{tag}]"
         if keyword:
-            header = f"{header} | [{keyword}] 检测到新商品！"
+            header = f"{header} | [{keyword}]"
         else:
-            header = f"{header} 检测到新商品！"
+            header = f"{header} "
         lines = [
             header,
+            "检测到新商品！",
             "=========================",
         ]
         for idx, item in enumerate(items, 1):
@@ -593,7 +594,8 @@ class MeruMonitorManager:
             created = item.created_label or "未知"
             lines.extend(
                 [
-                    f"#{idx} {item.name or '(无标题)'}",
+                    f"#{idx}",
+                    f"{item.name or '(无标题)'}",
                     f"价格：{price_part}",
                     f"时间：{created}",
                     f"链接：{item.url}",
@@ -623,7 +625,8 @@ class MeruMonitorManager:
             created = item.created_label or "未知"
             lines.extend(
                 [
-                    f"#{idx} {item.name or '(无标题)'}",
+                    f"#{idx}",
+                    f"{item.name or '(无标题)'}",
                     f"价格：{price_part}",
                     f"时间：{created}",
                     f"链接：{item.url}",
