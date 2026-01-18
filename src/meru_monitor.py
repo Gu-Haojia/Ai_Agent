@@ -377,29 +377,37 @@ class _MeruWatchTask:
                 )
             return
 
-        message = self._formatter(subset, "NEW")
-        self._notify(message)
-        print(
-            f"[MeruWatch] 发现新品 {len(subset)}/{len(items)} 条，关键词={self._keyword}",
-            flush=True,
-        )
-        if self._price_threshold is None or not self._notify_price:
-            return
-        affordable = [
-            item
-            for item in subset
-            if item.price is not None and item.price <= self._price_threshold
+        affordable: list[MeruSearchResult] = []
+        if self._price_threshold is not None and self._notify_price:
+            affordable = [
+                item
+                for item in subset
+                if item.price is not None and item.price <= self._price_threshold
+            ]
+        affordable_ids = {item.item_id for item in affordable}
+        remaining = [
+            item for item in subset if item.item_id not in affordable_ids
         ]
-        if not affordable:
-            return
-        price_msg = self._formatter(
-            affordable, f"PRICE<= {self._price_threshold}"
-        )
-        self._notify_price(price_msg)
-        print(
-            f"[MeruWatch] 触发价格提醒 {len(affordable)} 条，阈值={self._price_threshold}",
-            flush=True,
-        )
+
+        # 先发送价格提醒（仅包含符合阈值的新品），避免重复提醒
+        if affordable and self._notify_price:
+            price_msg = self._formatter(
+                affordable, f"PRICE<= {self._price_threshold}"
+            )
+            self._notify_price(price_msg)
+            print(
+                f"[MeruWatch] 触发价格提醒 {len(affordable)} 条，阈值={self._price_threshold}",
+                flush=True,
+            )
+
+        # 对剩余非价位命中的新品发送普通通知；若没有剩余则不重复发送
+        if remaining:
+            message = self._formatter(remaining, "NEW")
+            self._notify(message)
+            print(
+                f"[MeruWatch] 发现新品 {len(remaining)}/{len(items)} 条，关键词={self._keyword}",
+                flush=True,
+            )
 
     def to_state(self) -> dict[str, object]:
         """
