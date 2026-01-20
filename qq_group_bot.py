@@ -1689,7 +1689,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
             text (str): 纯文本
 
         Returns:
-            bool: 是否命中并处理了命令
+            bool: 是否命中并处理了命令（未命中但以 / 开头时会提示“无此命令”）
         """
 
         if not text.startswith("/"):
@@ -1938,6 +1938,12 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 msg = f"检测失败（内部错误）：{e}"
             _send_group_msg(
                 self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
+            )
+            return True
+
+        if text.startswith("/"):
+            _send_group_msg(
+                self.bot_cfg.api_base, group_id, "无此命令", self.bot_cfg.access_token
             )
             return True
 
