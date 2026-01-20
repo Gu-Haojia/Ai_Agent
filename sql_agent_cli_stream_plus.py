@@ -1246,13 +1246,13 @@ class SQLCheckpointAgentStreamingPlus:
 
                     @tool("google_lens_search")
                     def google_lens_search(
-                        image_url: str, hl: str | None = None
+                        image_addr: str, hl: str | None = None
                     ) -> str:
                         """
                         Google Lens 图像识别工具。用户没有明确指出“视觉搜索”时不可使用。
 
                         Args:
-                            image_url (str): 图片的在线 URL 或本地文件名。例如：
+                            image_addr (str): 图片的在线 URL 或本地文件名，尽可能使用本地文件。例如：
                                 - URL 示例: "https://example.com/image.jpg"
                                 - 本地文件名示例: "my_photo.png"
                             hl (str | None, optional): 语言参数；允许 ``None``、``ja`` 或 ``zh-cn``，未指明不要传。
@@ -1267,10 +1267,10 @@ class SQLCheckpointAgentStreamingPlus:
                         """
 
                         assert (
-                            isinstance(image_url, str) and image_url.strip()
-                        ), "image_url 不能为空"
+                            isinstance(image_addr, str) and image_addr.strip()
+                        ), "image_addr 不能为空"
                         assert hl in {None, "ja", "zh-cn"}, "hl 仅支持 None、ja、zh-cn"
-                        normalized_input = image_url.strip()
+                        normalized_input = image_addr.strip()
                         try:
                             if normalized_input.lower().startswith(
                                 ("http://", "https://")
