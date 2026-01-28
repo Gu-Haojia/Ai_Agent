@@ -1180,7 +1180,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 msg += "[With reply]"
             if not msg:
                 msg = "[No text]"
-            if self.bot_cfg.limitlist_groups and group_id in self.bot_cfg.limitlist_groups:
+            if self.bot_cfg.limitlist_groups and group_id not in self.bot_cfg.limitlist_groups:
                 self._log_ignore_request(group_id, user_id, author, msg)
             self._send_no_content()
             return
