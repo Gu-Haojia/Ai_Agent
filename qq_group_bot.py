@@ -1153,7 +1153,8 @@ class QQBotHandler(BaseHTTPRequestHandler):
             and not parsed.reply_message_ids
         ):
             author = _extract_sender_name(event)
-            self._log_ignore_request(group_id, user_id, author, "[No text]")
+            if self.bot_cfg.limitlist_groups and group_id not in self.bot_cfg.limitlist_groups:
+                self._log_ignore_request(group_id, user_id, author, "[No text]")
             self._send_no_content()
             return
 
