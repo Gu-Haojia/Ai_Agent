@@ -1144,6 +1144,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
         group_id = int(event.get("group_id", 0))
         user_id = int(event.get("user_id", 0))
         parsed = _parse_message_and_at(event)
+        allow_users = getattr(self.bot_cfg, "cmd_allowed_users", ()) or ()
 
         if (
             not parsed.text
@@ -1179,7 +1180,8 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 msg += "[With reply]"
             if not msg:
                 msg = "[No text]"
-            self._log_ignore_request(group_id, user_id, author, msg)
+            if self.bot_cfg.limitlist_groups and group_id in self.bot_cfg.limitlist_groups:
+                self._log_ignore_request(group_id, user_id, author, msg)
             self._send_no_content()
             return
 
@@ -1189,8 +1191,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
             self._send_no_content()
             return
         
-                #群限制名单
-        allow_users = getattr(self.bot_cfg, "cmd_allowed_users", ()) or ()
+        #群限制名单
         if self.bot_cfg.limitlist_groups and group_id in self.bot_cfg.limitlist_groups and user_id not in allow_users:
             _send_group_msg(
                 self.bot_cfg.api_base,
