@@ -1716,7 +1716,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
             if not tasks:
                 _send_to_group("当前没有运行中的 Meru 新品监控任务。")
                 return True
-            lines = ["当前运行中的监控任务："]
+            lines = ["【当前运行中的监控任务】"]
             for idx, rec in enumerate(tasks, 1):
                 keyword = rec.get("keyword") or "(未知)"
                 interval = rec.get("interval") or "?"
@@ -1725,9 +1725,11 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 price_part = (
                     f"≤{price_threshold}" if price_threshold is not None else "未设置"
                 )
-                mode = "仅价" if price_only else "新品"
+                mode = "低价推送" if price_only else "全量推送"
+                group = rec.get("group_id") or "未知"
+                user = rec.get("user_id") or "未知"
                 lines.append(
-                    f"{idx}. 关键词: {keyword} | 间隔: {interval}s | 价格阈值: {price_part} | 模式: {mode}"
+                    f"#{idx}\n关键词: {keyword}\n间隔: {interval}s\n价格阈值: {price_part}\n模式: {mode}\n目标群: {group}\n创建者: {user}"
                 )
             _send_to_group("\n".join(lines))
             return True
