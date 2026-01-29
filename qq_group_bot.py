@@ -1774,7 +1774,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
             )
             return True
 
-        if cmd in {"/merusearch", "/meruwatch"}:
+        if cmd in {"/merusearch", "/meruwatch", "/merulist"}:
             try:
                 argv = shlex.split(text)
             except ValueError as err:
