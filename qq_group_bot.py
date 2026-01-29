@@ -1729,9 +1729,9 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 group = rec.get("group_id") or "未知"
                 user = rec.get("user_id") or "未知"
                 lines.append(
-                    f"#{idx}\n关键词: {keyword}\n间隔: {interval}s\n价格阈值: {price_part}\n模式: {mode}\n目标群: {group}\n创建者: {user}"
+                    f"#{idx}\n·关键词: {keyword}\n·间隔: {interval}s\n·价格阈值: {price_part}\n·模式: {mode}\n·目标群: {group}\n·创建者: {user}"
                 )
-            _send_to_group("\n".join(lines))
+            _send_to_group("\n--------------------".join(lines))
             return True
 
         return False
