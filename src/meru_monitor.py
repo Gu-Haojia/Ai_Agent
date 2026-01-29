@@ -546,6 +546,17 @@ class MeruMonitorManager:
         results = self._fetch_results(keyword)
         return results[:limit_value]
 
+    def list_watch_tasks(self) -> list[dict[str, object]]:
+        """
+        返回当前所有监控任务的配置快照（按创建顺序）。
+
+        Returns:
+            list[dict[str, object]]: 每个任务的 to_state 结果。
+        """
+        with self._lock:
+            self._prune_dead_watch_tasks()
+            return [task.to_state() for task in self._watch_tasks]
+
     def start_watch(
         self,
         keyword: str,
@@ -632,6 +643,26 @@ class MeruMonitorManager:
             for task in self._watch_tasks:
                 task.stop()
             self._watch_tasks = []
+            self._persist_locked()
+            return True
+
+    def stop_watch_by_index(self, index: int) -> bool:
+        """
+        按序号停止单个监控任务（序号从 1 开始）。
+
+        Args:
+            index (int): 任务序号。
+
+        Returns:
+            bool: True 表示已删除该序号任务，False 表示序号无效。
+        """
+        assert index > 0, "index 必须大于 0"
+        with self._lock:
+            self._prune_dead_watch_tasks()
+            if index > len(self._watch_tasks):
+                return False
+            task = self._watch_tasks.pop(index - 1)
+            task.stop()
             self._persist_locked()
             return True
 

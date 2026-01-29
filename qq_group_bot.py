@@ -1615,13 +1615,27 @@ class QQBotHandler(BaseHTTPRequestHandler):
             return True
 
         if cmd == "/meruwatch":
-            if len(argv) == 2 and argv[1].lower() == "off":
-                stopped = monitor.stop_watch()
-                msg = (
-                    "已停止所有 Meru 新品监控任务。"
-                    if stopped
-                    else "当前没有运行中的 Meru 监控任务。"
-                )
+            if len(argv) >= 2 and argv[1].lower() == "off":
+                if len(argv) == 2:
+                    stopped = monitor.stop_watch()
+                    msg = (
+                        "已停止所有 Meru 新品监控任务。"
+                        if stopped
+                        else "当前没有运行中的 Meru 监控任务。"
+                    )
+                else:
+                    try:
+                        idx = int(argv[2])
+                        assert idx > 0
+                    except Exception:
+                        _send_to_group("序号必须为正整数，例如 /meruwatch off 1")
+                        return True
+                    stopped = monitor.stop_watch_by_index(idx)
+                    msg = (
+                        f"已删除第 {idx} 个监控任务。"
+                        if stopped
+                        else f"未找到序号 {idx} 的监控任务。"
+                    )
                 _send_to_group(msg)
                 print(
                     f"[Meru] 停止监控 group={group_id} user={user_id} result={stopped}",
@@ -1695,6 +1709,27 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 f"group={group_id} user={user_id}",
                 flush=True,
             )
+            return True
+
+        if cmd == "/merulist":
+            tasks = monitor.list_watch_tasks()
+            if not tasks:
+                _send_to_group("当前没有运行中的 Meru 新品监控任务。")
+                return True
+            lines = ["当前运行中的监控任务："]
+            for idx, rec in enumerate(tasks, 1):
+                keyword = rec.get("keyword") or "(未知)"
+                interval = rec.get("interval") or "?"
+                price_threshold = rec.get("price_threshold")
+                price_only = bool(rec.get("price_only") or False)
+                price_part = (
+                    f"≤{price_threshold}" if price_threshold is not None else "未设置"
+                )
+                mode = "仅价" if price_only else "新品"
+                lines.append(
+                    f"{idx}. 关键词: {keyword} | 间隔: {interval}s | 价格阈值: {price_part} | 模式: {mode}"
+                )
+            _send_to_group("\n".join(lines))
             return True
 
         return False
