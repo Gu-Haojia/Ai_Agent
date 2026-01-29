@@ -178,7 +178,8 @@ from sql_agent_cli_stream_plus import (
     SQLCheckpointAgentStreamingPlus,
 )
 from src.google_reverse_image_tool import ReverseImageUploader
-from src.meru_monitor import DEFAULT_LIMIT, MeruMonitorManager
+from src.meru_monitor import DEFAULT_LIMIT, MeruMonitorManager, MeruSearchResult
+from src.meru_watch_media import send_meru_message_with_images
 from image_storage import GeneratedImage, ImageStorageManager, StoredImage, StoredVideo
 from daily_task import (
     DailyTicketTask,
@@ -1553,6 +1554,30 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 self.bot_cfg.access_token,
             )
 
+        def _send_meru_images(
+            text: str, items: Sequence[MeruSearchResult], tag: str
+        ) -> None:
+            send_meru_message_with_images(
+                self.bot_cfg.api_base,
+                group_id,
+                self.bot_cfg.access_token,
+                text,
+                items,
+                at_qq=None,
+            )
+
+        def _send_meru_price_images(
+            text: str, items: Sequence[MeruSearchResult], tag: str
+        ) -> None:
+            send_meru_message_with_images(
+                self.bot_cfg.api_base,
+                group_id,
+                self.bot_cfg.access_token,
+                text,
+                items,
+                at_qq=user_id,
+            )
+
         if cmd == "/merusearch":
             if len(argv) < 2:
                 _send_to_group('用法: /merusearch "关键词" [limit]')
@@ -1644,6 +1669,10 @@ class QQBotHandler(BaseHTTPRequestHandler):
                     user_id=user_id,
                     notify=_send_to_group,
                     notify_price=_send_with_at if price_threshold is not None else None,
+                    notify_media=_send_meru_images,
+                    notify_price_media=(
+                        _send_meru_price_images if price_threshold is not None else None
+                    ),
                 )
             except RuntimeError as err:
                 _send_to_group(str(err))
@@ -2074,7 +2103,12 @@ def main() -> None:
 
     def _build_meru_callbacks(
         group_id: int | None, user_id: int | None, _record: dict[str, object]
-    ) -> tuple[Callable[[str], None], Optional[Callable[[str], None]]]:
+    ) -> tuple[
+        Callable[[str], None],
+        Optional[Callable[[str], None]],
+        Callable[[str, Sequence[MeruSearchResult], str], None],
+        Optional[Callable[[str, Sequence[MeruSearchResult], str], None]],
+    ]:
         """
         为持久化的 Meru 任务构造通知回调。
 
@@ -2084,7 +2118,7 @@ def main() -> None:
             _record (dict[str, object]): 持久化记录（未使用）。
 
         Returns:
-            tuple[Callable[[str], None], Optional[Callable[[str], None]]]: 新品通知与价格提醒回调。
+            tuple: 文本通知、价格通知及携图回调。
         """
         assert group_id is not None and int(group_id) > 0, "缺少 group_id，无法恢复监控任务"
 
@@ -2101,10 +2135,37 @@ def main() -> None:
                 bot_cfg.access_token,
             )
 
+        def _notify_media(
+            text: str, items: Sequence[MeruSearchResult], tag: str
+        ) -> None:
+            send_meru_message_with_images(
+                bot_cfg.api_base,
+                int(group_id),
+                bot_cfg.access_token,
+                text,
+                items,
+            )
+
+        def _notify_price_media(
+            text: str, items: Sequence[MeruSearchResult], tag: str
+        ) -> None:
+            assert user_id is not None and int(user_id) > 0, "价格提醒缺少用户信息"
+            send_meru_message_with_images(
+                bot_cfg.api_base,
+                int(group_id),
+                bot_cfg.access_token,
+                text,
+                items,
+                at_qq=int(user_id),
+            )
+
         price_cb: Optional[Callable[[str], None]] = (
             _notify_price if user_id is not None else None
         )
-        return _notify, price_cb
+        price_media_cb: Optional[
+            Callable[[str, Sequence[MeruSearchResult], str], None]
+        ] = _notify_price_media if user_id is not None else None
+        return _notify, price_cb, _notify_media, price_media_cb
 
     restored = meru_monitor.restore_tasks(_build_meru_callbacks)
     if restored:

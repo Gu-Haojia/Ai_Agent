@@ -85,6 +85,47 @@ def _format_ts(ts: object) -> str:
     return dt.strftime("%m-%d %H:%M")
 
 
+def _collect_image_urls(item: dict[str, object], limit: int = 3) -> tuple[str, ...]:
+    """
+    从接口返回的商品字段中提取图片 URL。
+
+    优先使用 thumbnails，若不足再补充 photos。
+
+    Args:
+        item (dict[str, object]): 单条商品记录。
+        limit (int): 返回的最大数量。
+
+    Returns:
+        tuple[str, ...]: 去重后的图片 URL。
+
+    Raises:
+        AssertionError: 当 limit 小于等于 0 时抛出。
+    """
+    assert limit > 0, "limit 必须大于 0"
+    picked: list[str] = []
+    thumbs = item.get("thumbnails") or []
+    if isinstance(thumbs, list):
+        for raw in thumbs:
+            url = str(raw or "").strip()
+            if url.startswith("http") and url not in picked:
+                picked.append(url)
+            if len(picked) >= limit:
+                return tuple(picked[:limit])
+    photos = item.get("photos") or []
+    if isinstance(photos, list):
+        for photo in photos:
+            candidate = ""
+            if isinstance(photo, dict):
+                candidate = str(photo.get("uri") or photo.get("url") or "").strip()
+            else:
+                candidate = str(photo or "").strip()
+            if candidate.startswith("http") and candidate not in picked:
+                picked.append(candidate)
+                if len(picked) >= limit:
+                    break
+    return tuple(picked[:limit])
+
+
 @dataclass(frozen=True)
 class MeruSearchResult:
     """
@@ -97,6 +138,7 @@ class MeruSearchResult:
         price (Optional[int]): 价格（单位日元），未知时为 None。
         created_label (str): 创建时间字符串。
         url (str): 商品链接。
+        image_urls (tuple[str, ...]): 关联图片 URL。
     """
 
     keyword: str
@@ -105,6 +147,7 @@ class MeruSearchResult:
     price: Optional[int]
     created_label: str
     url: str
+    image_urls: tuple[str, ...] = ()
 
     def to_line(self, prefix: str = "") -> str:
         """
@@ -270,6 +313,12 @@ class _MeruWatchTask:
         formatter: Callable[[Sequence[MeruSearchResult], str], str],
         notify: Callable[[str], None],
         notify_price: Optional[Callable[[str], None]],
+        notify_media: Optional[
+            Callable[[str, Sequence[MeruSearchResult], str], None]
+        ] = None,
+        notify_price_media: Optional[
+            Callable[[str, Sequence[MeruSearchResult], str], None]
+        ] = None,
     ) -> None:
         """
         初始化监控任务。
@@ -286,6 +335,10 @@ class _MeruWatchTask:
             formatter (Callable[[Sequence[MeruSearchResult], str], str]): 结果格式化函数。
             notify (Callable[[str], None]): 新品通知回调。
             notify_price (Optional[Callable[[str], None]]): 价格提醒回调。
+            notify_media (Optional[Callable[[str, Sequence[MeruSearchResult], str], None]]):
+                携带图片的新商品通知回调。
+            notify_price_media (Optional[Callable[[str, Sequence[MeruSearchResult], str], None]]):
+                携带图片的价格提醒回调。
         """
         assert interval > 0, "interval 必须大于 0"
         assert limit_per_cycle > 0, "limit_per_cycle 必须大于 0"
@@ -303,6 +356,8 @@ class _MeruWatchTask:
         self._formatter = formatter
         self._notify = notify
         self._notify_price = notify_price
+        self._notify_media = notify_media
+        self._notify_price_media = notify_price_media
         self._stop_event = Event()
         self._thread = Thread(target=self._run, name="meru-watch", daemon=True)
         self._seen: set[str] = set()
@@ -326,6 +381,35 @@ class _MeruWatchTask:
             bool: True 表示线程存活。
         """
         return self._thread.is_alive()
+
+    def _dispatch(
+        self,
+        message: str,
+        items: Sequence[MeruSearchResult],
+        tag: str,
+        price_channel: bool,
+    ) -> None:
+        """
+        分发通知，优先使用携图回调，其次退回文本回调。
+
+        Args:
+            message (str): 文本内容。
+            items (Sequence[MeruSearchResult]): 对应商品列表。
+            tag (str): 当前标签。
+            price_channel (bool): True 表示价格提醒通道。
+        """
+        assert message.strip(), "通知内容不能为空"
+        if price_channel:
+            if self._notify_price_media is not None:
+                self._notify_price_media(message, items, tag)
+                return
+            if self._notify_price is not None:
+                self._notify_price(message)
+                return
+        if self._notify_media is not None:
+            self._notify_media(message, items, tag)
+            return
+        self._notify(message)
 
     def _run(self) -> None:
         """轮询获取数据并推送新品通知。"""
@@ -366,11 +450,10 @@ class _MeruWatchTask:
                 for item in subset
                 if item.price is not None and item.price <= self._price_threshold
             ]
-            if affordable and self._notify_price:
-                price_msg = self._formatter(
-                    affordable, f"PRICE<= {self._price_threshold}"
-                )
-                self._notify_price(price_msg)
+            if affordable:
+                tag = f"PRICE<= {self._price_threshold}"
+                price_msg = self._formatter(affordable, tag)
+                self._dispatch(price_msg, affordable, tag, price_channel=True)
                 print(
                     f"[MeruWatch] 价格模式触发 {len(affordable)} 条，阈值={self._price_threshold}，关键词={self._keyword}",
                     flush=True,
@@ -378,7 +461,7 @@ class _MeruWatchTask:
             return
 
         affordable: list[MeruSearchResult] = []
-        if self._price_threshold is not None and self._notify_price:
+        if self._price_threshold is not None:
             affordable = [
                 item
                 for item in subset
@@ -390,11 +473,10 @@ class _MeruWatchTask:
         ]
 
         # 先发送价格提醒（仅包含符合阈值的新品），避免重复提醒
-        if affordable and self._notify_price:
-            price_msg = self._formatter(
-                affordable, f"PRICE<= {self._price_threshold}"
-            )
-            self._notify_price(price_msg)
+        if affordable:
+            tag = f"PRICE<= {self._price_threshold}"
+            price_msg = self._formatter(affordable, tag)
+            self._dispatch(price_msg, affordable, tag, price_channel=True)
             print(
                 f"[MeruWatch] 触发价格提醒 {len(affordable)} 条，阈值={self._price_threshold}",
                 flush=True,
@@ -403,7 +485,7 @@ class _MeruWatchTask:
         # 对剩余非价位命中的新品发送普通通知；若没有剩余则不重复发送
         if remaining:
             message = self._formatter(remaining, "NEW")
-            self._notify(message)
+            self._dispatch(message, remaining, "NEW", price_channel=False)
             print(
                 f"[MeruWatch] 发现新品 {len(remaining)}/{len(items)} 条，关键词={self._keyword}",
                 flush=True,
@@ -476,6 +558,12 @@ class MeruMonitorManager:
         notify: Optional[Callable[[str], None]] = None,
         notify_price: Optional[Callable[[str], None]] = None,
         persist: bool = True,
+        notify_media: Optional[
+            Callable[[str, Sequence[MeruSearchResult], str], None]
+        ] = None,
+        notify_price_media: Optional[
+            Callable[[str, Sequence[MeruSearchResult], str], None]
+        ] = None,
     ) -> None:
         """
         启动新品监控（全局最多 5 个监控任务）。
@@ -491,6 +579,10 @@ class MeruMonitorManager:
             notify (Optional[Callable[[str], None]]): 新品通知回调。
             notify_price (Optional[Callable[[str], None]]): 价格提醒回调。
             persist (bool): 是否写入持久化存储。
+            notify_media (Optional[Callable[[str, Sequence[MeruSearchResult], str], None]]):
+                携带图片的新商品通知回调。
+            notify_price_media (Optional[Callable[[str, Sequence[MeruSearchResult], str], None]]):
+                携带图片的价格提醒回调。
 
         Raises:
             RuntimeError: 当监控任务超过上限时抛出。
@@ -518,6 +610,8 @@ class MeruMonitorManager:
                 formatter=formatter,
                 notify=notify,
                 notify_price=notify_price,
+                notify_media=notify_media,
+                notify_price_media=notify_price_media,
             )
             self._watch_tasks.append(task)
             task.start()
@@ -545,7 +639,7 @@ class MeruMonitorManager:
         self,
         build_callbacks: Callable[
             [Optional[int], Optional[int], dict[str, object]],
-            tuple[Callable[[str], None], Optional[Callable[[str], None]]],
+            Sequence[Optional[Callable[..., object]]],
         ],
     ) -> int:
         """
@@ -575,9 +669,14 @@ class MeruMonitorManager:
                 user_id = record.get("user_id")
                 if not keyword or interval <= 0 or limit_per_cycle <= 0:
                     raise AssertionError("持久化记录缺少必要字段")
-                notify, notify_price = build_callbacks(
-                    group_id, user_id, record
-                )
+                callbacks = list(build_callbacks(group_id, user_id, record))
+                if not callbacks:
+                    raise AssertionError("缺少通知回调")
+                notify_cb = callbacks[0]
+                notify_price_cb = callbacks[1] if len(callbacks) >= 2 else None
+                notify_media_cb = callbacks[2] if len(callbacks) >= 3 else None
+                notify_price_media_cb = callbacks[3] if len(callbacks) >= 4 else None
+                assert callable(notify_cb), "notify 回调不可为空"
                 self.start_watch(
                     keyword=keyword,
                     interval=interval,
@@ -586,8 +685,10 @@ class MeruMonitorManager:
                     price_only=price_only,
                     group_id=int(group_id) if group_id is not None else None,
                     user_id=int(user_id) if user_id is not None else None,
-                    notify=notify,
-                    notify_price=notify_price,
+                    notify=notify_cb,  # type: ignore[arg-type]
+                    notify_price=notify_price_cb,  # type: ignore[arg-type]
+                    notify_media=notify_media_cb,  # type: ignore[arg-type]
+                    notify_price_media=notify_price_media_cb,  # type: ignore[arg-type]
                     persist=False,
                 )
                 restored += 1
@@ -656,6 +757,7 @@ class MeruMonitorManager:
             name = str(item.get("name") or "").strip()
             created_label = _format_ts(item.get("created"))
             url = ITEM_URL.format(id=item_id)
+            image_urls = _collect_image_urls(item, limit=3)
             results.append(
                 MeruSearchResult(
                     keyword=keyword,
@@ -664,6 +766,7 @@ class MeruMonitorManager:
                     price=price,
                     created_label=created_label,
                     url=url,
+                    image_urls=image_urls,
                 )
             )
         return results
