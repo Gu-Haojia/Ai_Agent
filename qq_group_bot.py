@@ -40,6 +40,7 @@ import re
 import shlex
 import sys
 import time
+import requests
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from pathlib import Path
 from dataclasses import dataclass
@@ -178,7 +179,7 @@ from sql_agent_cli_stream_plus import (
     SQLCheckpointAgentStreamingPlus,
 )
 from src.google_reverse_image_tool import ReverseImageUploader
-from src.meru_monitor import DEFAULT_LIMIT, MeruMonitorManager
+from src.meru_monitor import DEFAULT_LIMIT, MeruMonitorManager, MeruSearchResult
 from image_storage import GeneratedImage, ImageStorageManager, StoredImage, StoredVideo
 from daily_task import (
     DailyTicketTask,
@@ -360,6 +361,177 @@ def _send_group_at_message(
     # 复用发送群消息接口，使用 CQ 码进行 @
     msg = f"[CQ:at,qq={at_qq}] {text}"
     _send_group_msg(api_base, group_id, msg, access_token)
+
+
+def _guess_image_suffix(mime: str) -> str:
+    """
+    根据 MIME 类型推断图片文件后缀。
+
+    Args:
+        mime (str): 图片的 MIME 类型。
+
+    Returns:
+        str: 适合文件名的后缀，不包含点。
+
+    Raises:
+        None
+    """
+    normalized = (mime or "").lower().split(";")[0].strip()
+    mapping = {
+        "image/png": "png",
+        "image/jpeg": "jpg",
+        "image/jpg": "jpg",
+        "image/gif": "gif",
+        "image/webp": "webp",
+        "image/bmp": "bmp",
+    }
+    return mapping.get(normalized, "jpg")
+
+
+def _pick_meru_image_urls(
+    items: Sequence[MeruSearchResult],
+    max_count: int = 5,
+) -> list[str]:
+    """
+    从监控商品中挑选待发送的图片 URL，每个商品取一张。
+
+    Args:
+        items (Sequence[MeruSearchResult]): 新品列表。
+        max_count (int): 最多发送的图片数量。
+
+    Returns:
+        list[str]: 去重后的图片 URL（按商品顺序）。
+
+    Raises:
+        AssertionError: 当 max_count 小于等于 0 时抛出。
+    """
+    assert max_count > 0, "max_count 必须大于 0"
+    picked: list[str] = []
+    for item in items:
+        for url in item.image_urls:
+            if url and url.startswith("http") and url not in picked:
+                picked.append(url)
+                break
+        if len(picked) >= max_count:
+            break
+    return picked
+
+
+def _download_image_to_base64(
+    url: str, timeout: int = 12, max_bytes: int = 800_000
+) -> tuple[str, str]:
+    """
+    下载单张图片并返回 base64 数据。
+
+    Args:
+        url (str): 图片 URL。
+        timeout (int): 请求超时时间（秒）。
+        max_bytes (int): 允许的最大字节数。
+
+    Returns:
+        tuple[str, str]: (base64 字符串, MIME 类型)。
+
+    Raises:
+        AssertionError: 当 URL 非 http/https 或 max_bytes 非正数时抛出。
+        ValueError: 当内容类型非法或文件过大时抛出。
+        requests.RequestException: 请求异常时抛出。
+    """
+    assert url.startswith("http"), "图片 URL 必须以 http 开头"
+    assert max_bytes > 0, "max_bytes 必须为正数"
+    resp = requests.get(url, timeout=timeout)
+    resp.raise_for_status()
+    content_type = (resp.headers.get("Content-Type") or "").split(";")[0].strip()
+    if not content_type.startswith("image/"):
+        raise ValueError(f"非法图片类型: {content_type or 'unknown'}")
+    data = resp.content
+    if len(data) > max_bytes:
+        raise ValueError(f"图片体积过大({len(data)} bytes)，已拒绝发送")
+    b64 = base64.b64encode(data).decode("ascii")
+    return b64, content_type or "image/jpeg"
+
+
+def _compose_meru_watch_message(
+    text: str,
+    items: Sequence[MeruSearchResult],
+    at_qq: Optional[int] = None,
+    fetcher: Optional[Callable[[str], tuple[str, str]]] = None,
+    max_images: int = 5,
+) -> MessagePayload:
+    """
+    构造 Meru 新品通知的群消息，内联图片为 base64，发送后不落盘。
+
+    Args:
+        text (str): 待发送的文本。
+        items (Sequence[MeruSearchResult]): 新品列表。
+        at_qq (Optional[int]): 可选的 @ 目标 QQ 号。
+        fetcher (Optional[Callable[[str], tuple[str, str]]]): 可注入的图片抓取函数。
+        max_images (int): 最大附图数量。
+
+    Returns:
+        MessagePayload: 可直接传递给 OneBot 的消息体。
+
+    Raises:
+        AssertionError: 当文本或 max_images 参数非法时抛出。
+    """
+    assert text.strip(), "发送内容不可为空"
+    assert max_images > 0, "max_images 必须大于 0"
+    chosen_urls = _pick_meru_image_urls(items, max_images)
+    segments: list[dict[str, dict[str, str]]] = []
+    if at_qq is not None:
+        segments.append({"type": "at", "data": {"qq": str(int(at_qq))}})
+    segments.append({"type": "text", "data": {"text": text}})
+    if not chosen_urls:
+        return segments
+
+    fetch = fetcher or _download_image_to_base64
+    ts = int(time.time())
+    for idx, url in enumerate(chosen_urls, 1):
+        try:
+            b64, mime = fetch(url)
+        except Exception as err:  # 捕获单张图片错误并记录
+            sys.stderr.write(f"[MeruWatch] 图片下载失败 {url}: {err}\n")
+            continue
+        suffix = _guess_image_suffix(mime)
+        name = f"meru_{ts}_{idx}.{suffix}"
+        segments.append(
+            {
+                "type": "image",
+                "data": {
+                    "file": f"base64://{b64}",
+                    "name": name,
+                    "cache": "0",
+                },
+            }
+        )
+    return segments if segments else text
+
+
+def _send_meru_message_with_images(
+    api_base: str,
+    group_id: int,
+    access_token: str,
+    text: str,
+    items: Sequence[MeruSearchResult],
+    at_qq: Optional[int] = None,
+) -> None:
+    """
+    发送携带商品图片的 Meru 监控消息。
+
+    Args:
+        api_base (str): OneBot API 基地址。
+        group_id (int): 目标群号。
+        access_token (str): API Token。
+        text (str): 文本内容。
+        items (Sequence[MeruSearchResult]): 商品列表。
+        at_qq (Optional[int]): 需要 @ 的 QQ 号。
+
+    Raises:
+        AssertionError: 当群号或文本非法时抛出。
+    """
+    assert isinstance(group_id, int) and group_id > 0, "group_id 必须为正整数"
+    assert text.strip(), "发送内容不可为空"
+    payload = _compose_meru_watch_message(text, items, at_qq=at_qq)
+    _send_group_msg(api_base, group_id, payload, access_token)
 
 
 @dataclass(frozen=True)
@@ -1553,6 +1725,31 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 self.bot_cfg.access_token,
             )
 
+        def _send_meru_with_images(
+            text: str, items: Sequence[MeruSearchResult], tag: str
+        ) -> None:
+            _send_meru_message_with_images(
+                self.bot_cfg.api_base,
+                group_id,
+                self.bot_cfg.access_token,
+                text,
+                items,
+                at_qq=None,
+            )
+
+        def _send_meru_price_with_images(
+            text: str, items: Sequence[MeruSearchResult], tag: str
+        ) -> None:
+            assert user_id > 0, "价格提醒缺少用户信息"
+            _send_meru_message_with_images(
+                self.bot_cfg.api_base,
+                group_id,
+                self.bot_cfg.access_token,
+                text,
+                items,
+                at_qq=user_id,
+            )
+
         if cmd == "/merusearch":
             if len(argv) < 2:
                 _send_to_group('用法: /merusearch "关键词" [limit]')
@@ -1644,6 +1841,12 @@ class QQBotHandler(BaseHTTPRequestHandler):
                     user_id=user_id,
                     notify=_send_to_group,
                     notify_price=_send_with_at if price_threshold is not None else None,
+                    notify_media=_send_meru_with_images,
+                    notify_price_media=(
+                        _send_meru_price_with_images
+                        if price_threshold is not None
+                        else None
+                    ),
                 )
             except RuntimeError as err:
                 _send_to_group(str(err))
@@ -2074,7 +2277,12 @@ def main() -> None:
 
     def _build_meru_callbacks(
         group_id: int | None, user_id: int | None, _record: dict[str, object]
-    ) -> tuple[Callable[[str], None], Optional[Callable[[str], None]]]:
+    ) -> tuple[
+        Callable[[str], None],
+        Optional[Callable[[str], None]],
+        Callable[[str, Sequence[MeruSearchResult], str], None],
+        Optional[Callable[[str, Sequence[MeruSearchResult], str], None]],
+    ]:
         """
         为持久化的 Meru 任务构造通知回调。
 
@@ -2084,7 +2292,8 @@ def main() -> None:
             _record (dict[str, object]): 持久化记录（未使用）。
 
         Returns:
-            tuple[Callable[[str], None], Optional[Callable[[str], None]]]: 新品通知与价格提醒回调。
+            tuple[Callable[[str], None], Optional[Callable[[str], None]], Callable[[str, Sequence[MeruSearchResult], str], None], Optional[Callable[[str, Sequence[MeruSearchResult], str], None]]]:
+                新品通知、价格提醒及其携图回调。
         """
         assert group_id is not None and int(group_id) > 0, "缺少 group_id，无法恢复监控任务"
 
@@ -2101,10 +2310,38 @@ def main() -> None:
                 bot_cfg.access_token,
             )
 
+        def _notify_media(
+            text: str, items: Sequence[MeruSearchResult], tag: str
+        ) -> None:
+            _send_meru_message_with_images(
+                bot_cfg.api_base,
+                int(group_id),
+                bot_cfg.access_token,
+                text,
+                items,
+                at_qq=None,
+            )
+
+        def _notify_price_media(
+            text: str, items: Sequence[MeruSearchResult], tag: str
+        ) -> None:
+            assert user_id is not None and int(user_id) > 0, "价格提醒缺少用户信息"
+            _send_meru_message_with_images(
+                bot_cfg.api_base,
+                int(group_id),
+                bot_cfg.access_token,
+                text,
+                items,
+                at_qq=int(user_id),
+            )
+
         price_cb: Optional[Callable[[str], None]] = (
             _notify_price if user_id is not None else None
         )
-        return _notify, price_cb
+        price_media_cb: Optional[
+            Callable[[str, Sequence[MeruSearchResult], str], None]
+        ] = _notify_price_media if user_id is not None else None
+        return _notify, price_cb, _notify_media, price_media_cb
 
     restored = meru_monitor.restore_tasks(_build_meru_callbacks)
     if restored:
