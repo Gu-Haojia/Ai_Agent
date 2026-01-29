@@ -1731,7 +1731,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 lines.append(
                     f"#{idx}\n·关键词: {keyword}\n·间隔: {interval}s\n·价格阈值: {price_part}\n·模式: {mode}\n·目标群: {group}\n·创建者: {user}"
                 )
-            _send_to_group("\n--------------------".join(lines))
+            _send_to_group("\n-------------------------\n".join(lines))
             return True
 
         return False
