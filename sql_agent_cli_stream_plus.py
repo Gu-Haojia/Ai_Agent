@@ -72,19 +72,27 @@ _ENV_GEMINI_CHECKED: bool = False
 
 def _ensure_common_env_once() -> None:
     """
-    进程级通用环境校验，仅首次调用时执行，确保激活 `.venv` 虚拟环境。
+    进程级通用环境校验，仅首次调用时执行，确保运行环境可控。
+
+    在容器场景下会放宽校验：检测到 `/.dockerenv` 或环境变量
+    `SKIP_VENV_CHECK=1` 时，视为已满足隔离要求。
 
     Returns:
         None: 函数无返回值。
 
     Raises:
-        AssertionError: 当未激活 `.venv` 虚拟环境时抛出。
+        AssertionError: 当未激活 `.venv` 且不在容器内时抛出。
     """
     global _ENV_COMMON_CHECKED
     if _ENV_COMMON_CHECKED:
         return
-    assert os.environ.get("VIRTUAL_ENV") or sys.prefix.endswith(
-        ".venv"
+    in_docker = os.path.exists("/.dockerenv")
+    skip_check = os.environ.get("SKIP_VENV_CHECK") == "1"
+    assert (
+        os.environ.get("VIRTUAL_ENV")
+        or sys.prefix.endswith(".venv")
+        or in_docker
+        or skip_check
     ), "必须先激活虚拟环境 (.venv)。"
     _ENV_COMMON_CHECKED = True
 
