@@ -1,0 +1,41 @@
+version: "3.9"
+
+services:
+  app:
+    image: langgraph-bot:local
+    build: .
+    env_file: .env
+    environment:
+      LANGGRAPH_PG: postgresql://languser:langpass@postgres:5432/langgraph
+      BOT_HOST: 0.0.0.0
+      BOT_PORT: 8080
+      ONEBOT_API_BASE: http://host.docker.internal:3001
+      TZ: Asia/Tokyo
+    volumes:
+      - .:/app
+      - /etc/localtime:/etc/localtime:ro
+    ports:
+      - "${EXPOSED_PORT:-8080}:8080"   # 对外暴露非 3001 端口
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: pgvector/pgvector:pg14
+    environment:
+      POSTGRES_USER: languser
+      POSTGRES_PASSWORD: langpass
+      POSTGRES_DB: langgraph
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./docker/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
