@@ -2055,9 +2055,11 @@ def _get_shared_agent() -> SQLCheckpointAgentStreamingPlus:
 def main() -> None:
     """启动 HTTP 服务器，接收 OneBot 回调并处理群消息。"""
     # 必须使用虚拟环境
+    in_docker = os.path.exists("/.dockerenv")
+    skip_check = os.environ.get("SKIP_VENV_CHECK") == "1"
     assert os.environ.get("VIRTUAL_ENV") or sys.prefix.endswith(
         ".venv"
-    ), "必须先激活虚拟环境 (.venv)。"
+    )or in_docker or skip_check, "必须先激活虚拟环境 (.venv)。"
 
     print(
         "------------------------------------------------------------------------------------------------------------------"
