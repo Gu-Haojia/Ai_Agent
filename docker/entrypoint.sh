@@ -15,16 +15,13 @@ load_env_file() {
   fi
 }
 
-CORE_ENV_VARS=("LANGGRAPH_PG" "BOT_HOST" "BOT_PORT" "ONEBOT_API_BASE" "TZ")
-
-# 将关键变量强制刷新为 .env 中的值（若已设置）
-override_core_env() {
-  for key in "${CORE_ENV_VARS[@]}"; do
-    val="${!key-}"
-    if [ -n "$val" ]; then
-      export "$key"="$val"
-    fi
-  done
+# 固定核心运行参数，确保每次启动使用指定值
+set_core_env_fixed() {
+  export LANGGRAPH_PG="postgresql://languser:langpass@postgres:5432/langgraph"
+  export BOT_HOST="0.0.0.0"
+  export BOT_PORT="8080"
+  export ONEBOT_API_BASE="http://host.docker.internal:3001"
+  export TZ="Asia/Tokyo"
 }
 
 # 需要存在的目录与文件，确保宿主机可读写
@@ -89,7 +86,7 @@ PY
 
 main() {
   load_env_file
-  override_core_env
+  set_core_env_fixed
   create_dirs
   create_files
   wait_for_postgres
