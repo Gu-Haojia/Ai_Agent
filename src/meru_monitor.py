@@ -749,7 +749,10 @@ class MeruMonitorManager:
             return []
         try:
             with self._store_path.open("r", encoding="utf-8") as f:
-                data = json.load(f)
+                raw = f.read().strip()
+                if not raw:
+                    return []
+                data = json.loads(raw)
             if isinstance(data, list):
                 return [item for item in data if isinstance(item, dict)]
         except Exception as err:
