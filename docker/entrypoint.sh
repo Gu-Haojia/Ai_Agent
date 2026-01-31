@@ -15,6 +15,18 @@ load_env_file() {
   fi
 }
 
+CORE_ENV_VARS=("LANGGRAPH_PG" "BOT_HOST" "BOT_PORT" "ONEBOT_API_BASE" "TZ")
+
+# 将关键变量强制刷新为 .env 中的值（若已设置）
+override_core_env() {
+  for key in "${CORE_ENV_VARS[@]}"; do
+    val="${!key-}"
+    if [ -n "$val" ]; then
+      export "$key"="$val"
+    fi
+  done
+}
+
 # 需要存在的目录与文件，确保宿主机可读写
 REQUIRED_DIRS=("logs" "prompts" "ticket_data" "images")
 REQUIRED_FILES=(".qq_group_threads.json" ".qq_reminder_threads.json" ".qq_group_memnames.json" ".meru_watch.json")
@@ -77,6 +89,7 @@ PY
 
 main() {
   load_env_file
+  override_core_env
   create_dirs
   create_files
   wait_for_postgres
