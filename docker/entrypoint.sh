@@ -5,6 +5,16 @@ set -euo pipefail
 APP_DIR="/app"
 cd "${APP_DIR}"
 
+# 每次启动自动加载最新 .env（若存在）
+load_env_file() {
+  if [ -f ".env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    . ".env"
+    set +a
+  fi
+}
+
 # 需要存在的目录与文件，确保宿主机可读写
 REQUIRED_DIRS=("logs" "prompts" "ticket_data" "images")
 REQUIRED_FILES=(".qq_group_threads.json" ".qq_reminder_threads.json" ".qq_group_memnames.json" ".meru_watch.json")
@@ -66,6 +76,7 @@ PY
 }
 
 main() {
+  load_env_file
   create_dirs
   create_files
   wait_for_postgres
