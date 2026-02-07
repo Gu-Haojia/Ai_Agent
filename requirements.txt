@@ -97,6 +97,7 @@ pydantic-settings==2.10.1
 pydantic_core==2.33.2
 Pygments==2.19.2
 PyJWT==2.10.1
+pylatexenc==2.10
 pyowm==3.5.0
 pyparsing==3.2.5
 PySocks==1.7.1

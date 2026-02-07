@@ -23,6 +23,7 @@ from typing import Annotated, Callable, Iterable, Match, Optional, Sequence, Uni
 from zoneinfo import ZoneInfo
 import threading
 import requests
+from pylatexenc.latex2text import LatexNodes2Text
 
 from typing_extensions import TypedDict
 from langchain_core.tools import tool
@@ -140,6 +141,50 @@ def _ensure_gemini_env_once() -> None:
 _BASE64_DATA_URL_PATTERN = re.compile(
     r"(data:[^;]+;base64,)[0-9A-Za-z+/=_-]+", re.IGNORECASE
 )
+_LATEX_MATH_PATTERN: re.Pattern[str] = re.compile(
+    r"(?<!\\)\$\$(?P<block>.+?)(?<!\\)\$\$|(?<!\\)\$(?P<inline>.+?)(?<!\\)\$",
+    re.DOTALL,
+)
+_LATEX_TO_UNICODE_CONVERTER = LatexNodes2Text()
+
+
+def _convert_latex_to_unicode(text: str) -> str:
+    """
+    将文本中的 `$...$` 与 `$$...$$` 公式替换为 Unicode 文本。
+
+    Args:
+        text (str): 待处理字符串。
+
+    Returns:
+        str: 已完成公式替换的字符串。
+
+    Raises:
+        AssertionError: 当 ``text`` 不是字符串时抛出。
+    """
+    assert isinstance(text, str), "text 必须是字符串"
+
+    def _replace(match: Match[str]) -> str:
+        """
+        将单个 LaTeX 数学片段转换为 Unicode 文本。
+
+        Args:
+            match (Match[str]): 公式匹配结果。
+
+        Returns:
+            str: 转换后的 Unicode 文本。
+
+        Raises:
+            AssertionError: 当匹配结果缺少公式内容时抛出。
+        """
+        latex_expr = match.group("block")
+        if latex_expr is None:
+            latex_expr = match.group("inline")
+        assert latex_expr is not None, "匹配结果必须包含公式内容"
+        # 使用数学模式解析，尽量保留公式中的语义与空格。
+        converted = _LATEX_TO_UNICODE_CONVERTER.latex_to_text(f"${latex_expr}$")
+        return converted.strip()
+
+    return _LATEX_MATH_PATTERN.sub(_replace, text)
 
 
 def _sanitize_for_logging(payload: object) -> str:
@@ -195,19 +240,19 @@ def _sanitize_for_logging(payload: object) -> str:
 
 def _apply_format(text: str) -> str:
     """
-    根据环境变量 FORMAT 统一移除 Markdown 加粗符号。
+    根据环境变量 FORMAT 对文本执行统一格式化。
 
     Args:
         text (str): 原始字符串。
 
     Returns:
-        str: 已去除 ``**`` 的字符串。
+        str: FORMAT=1 时返回已去除 ``**`` 且公式已转 Unicode 的字符串；
+        否则原样返回。
     """
-
-    # 强制开启格式化：默认写入 FORMAT=1，再执行去除加粗符号。
     if os.environ.get("FORMAT") != "1":
-        os.environ["FORMAT"] = "1"
-    return text.replace("**", "")
+        return text
+    stripped = text.replace("**", "")
+    return _convert_latex_to_unicode(stripped)
 
 
 def _extract_text_content(message: Any) -> Optional[str]:
