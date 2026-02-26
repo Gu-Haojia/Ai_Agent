@@ -433,7 +433,6 @@ class _MeruWatchTask:
                         self._seen = set(item.item_id for item in results)
             except Exception as err:
                 print(f"[MeruWatch] 监控轮询异常: {err}", flush=True)
-                self._notify(f"[MeruWatch] 监控失败：{err}")
             self._stop_event.wait(self._interval)
 
     def _handle_new_items(self, items: Sequence[MeruSearchResult]) -> None:
