@@ -1858,7 +1858,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
         if cmd == "/image" and len(parts) == 1:
             candidates = (
                 "gemini-3-pro-image-preview",
-                "gemini-2.5-flash-image",
+                "gemini-3.1-flash-image-preview",
             )
             current_model = os.environ.get("GEMINI_IMAGE_MODEL") or candidates[1]
             try:
