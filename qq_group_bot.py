@@ -1754,7 +1754,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
         - /clear              → 为当前群新建线程
         - /whoami             → 先回当前系统提示词，再基于“你是谁”生成一条消息
         - /token              → 统计当前群对应线程的消息 token 数
-        - /forget             → 清除当前线程的上下文记忆
+        - /forget             → 清空当前线程的全部历史消息
         - /apicheck           → 使用当前模型自检 API 调用耗时
 
         Args:
@@ -1807,7 +1807,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 "4) /clear — 清除当前群聊全部记忆\n"
                 "5) /whoami — 你是？\n"
                 "6) /token — 输出当前 token 数\n"
-                "7) /forget - 清除上下文记忆\n"
+                "7) /forget - 清空当前线程历史\n"
                 "8) /rmdata - 清除长期记忆\n"
                 "9) /boost - 切换后端可用模型\n"
                 "10) /image - 切换生图模型\n"
@@ -1939,8 +1939,8 @@ class QQBotHandler(BaseHTTPRequestHandler):
         if cmd == "/forget" and len(parts) == 1:
             tid = self._thread_id_for(group_id)
             try:
-                self.agent.del_latest_messages(thread_id=tid)
-                msg = "已清除当前线程的上下文记忆。"
+                self.agent.clear_thread_history_fast(thread_id=tid)
+                msg = "已清空当前线程的全部历史消息。"
             except Exception as e:
                 msg = f"清除失败（内部错误）：{e}"
             _send_group_msg(

@@ -2009,6 +2009,33 @@ class SQLCheckpointAgentStreamingPlus:
         except Exception as e:  # pragma: no cover
             raise AssertionError(f"清空最新消息失败：{e}") from e
 
+    def clear_thread_history_fast(self, thread_id: Optional[str] = None) -> None:
+        """
+        通过 checkpointer 直接删除线程的全部检查点历史。
+
+        与 `del_latest_messages` 不同，本方法不会遍历历史状态，
+        可避免在线程历史较大时触发高内存占用。
+
+        Args:
+            thread_id (Optional[str]): 线程 ID，默认使用当前配置中的线程。
+
+        Raises:
+            AssertionError: 当线程 ID 非法、检查点存储器未初始化，
+                或底层删除操作失败时抛出。
+        """
+        tid = (thread_id or self._config.thread_id).strip()
+        assert tid, "thread_id 不能为空。"
+
+        saver = getattr(self, "_saver", None)
+        assert saver is not None, "检查点存储器未初始化。"
+        delete_thread = getattr(saver, "delete_thread", None)
+        assert callable(delete_thread), "当前检查点存储器不支持 delete_thread。"
+
+        try:
+            delete_thread(tid)
+        except Exception as e:  # pragma: no cover
+            raise AssertionError(f"清空线程历史失败：{e}") from e
+
     def get_latest_messages(self, thread_id: Optional[str] = None) -> list:
         """
         获取指定线程的最新检查点消息列表。
