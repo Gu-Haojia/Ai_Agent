@@ -706,7 +706,7 @@ class ImageStorageManager:
             or os.environ.get("GEMINI_API_KEY")
             or os.environ.get("GOOGLE_GENERATIVE_AI_API_KEY")
         )
-        assert api_key, "缺少 Gemini API Key，请设置 GOOGLE_API_KEY 或 GEMINI_API_KEY"
+        #assert api_key, "缺少 Gemini API Key，请设置 GOOGLE_API_KEY 或 GEMINI_API_KEY"
 
         model_name = model or os.environ.get(
             "GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image"
