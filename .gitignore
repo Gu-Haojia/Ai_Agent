@@ -53,6 +53,7 @@ run_qq_bot.bat
 # Data
 images/
 ticket_data/
+secret/
 
 # Old files
 old/
