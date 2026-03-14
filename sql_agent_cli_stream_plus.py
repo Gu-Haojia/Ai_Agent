@@ -118,23 +118,62 @@ def _ensure_openai_env_once() -> None:
 # 说明：严禁在代码中硬编码密钥；请通过环境变量注入：
 
 
+def _is_truthy_env(value: Optional[str]) -> bool:
+    """
+    判断环境变量字符串是否表示真值。
+
+    Args:
+        value (Optional[str]): 原始环境变量值。
+
+    Returns:
+        bool: 当值表示开启状态时返回 ``True``，否则返回 ``False``。
+
+    Raises:
+        AssertionError: 当 ``value`` 类型非法时抛出。
+    """
+    assert value is None or isinstance(value, str), "环境变量值必须为字符串或 None"
+    if value is None:
+        return False
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _ensure_gemini_env_once() -> None:
     """
-    Gemini 相关环境校验，仅首次需要 Gemini 时执行，兼容多种环境变量命名。
+    Gemini 相关环境校验，仅首次需要 Gemini 时执行。
+
+    允许以下任一环境变量组合通过：
+    1. AI Studio / Gemini Developer API Key。
+    2. Vertex AI 所需的基础环境变量。
 
     Returns:
         None: 函数无返回值。
 
     Raises:
-        AssertionError: 当缺少可用的 Gemini API Key 时抛出。
+        AssertionError: 当 AI Studio 与 Vertex AI 的环境变量都未配置时抛出。
     """
     global _ENV_GEMINI_CHECKED
     if _ENV_GEMINI_CHECKED:
         return
-    key = os.environ.get("GEMINI_API_KEY")
-    assert key, "缺少 GOOGLE_API_KEY / GEMINI_API_KEY 环境变量。"
-    #    if not os.environ.get("GOOGLE_API_KEY"):
-    #        os.environ["GOOGLE_API_KEY"] = key
+    ai_studio_ready = any(
+        isinstance(os.environ.get(name), str) and os.environ.get(name, "").strip()
+        for name in (
+            "GOOGLE_API_KEY",
+            "GEMINI_API_KEY",
+            "GOOGLE_GENERATIVE_AI_API_KEY",
+        )
+    )
+    vertex_ready = (
+        _is_truthy_env(os.environ.get("GOOGLE_GENAI_USE_VERTEXAI"))
+        and bool((os.environ.get("GOOGLE_CLOUD_PROJECT") or "").strip())
+        and bool((os.environ.get("GOOGLE_CLOUD_LOCATION") or "").strip())
+        and bool((os.environ.get("GOOGLE_APPLICATION_CREDENTIALS") or "").strip())
+    )
+    assert ai_studio_ready or vertex_ready, (
+        "缺少 Gemini 可用环境变量。请设置 GOOGLE_API_KEY / GEMINI_API_KEY / "
+        "GOOGLE_GENERATIVE_AI_API_KEY，或配置 GOOGLE_GENAI_USE_VERTEXAI=true、"
+        "GOOGLE_CLOUD_PROJECT、GOOGLE_CLOUD_LOCATION、"
+        "GOOGLE_APPLICATION_CREDENTIALS。"
+    )
     _ENV_GEMINI_CHECKED = True
 
 
