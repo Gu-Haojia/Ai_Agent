@@ -118,118 +118,23 @@ def _ensure_openai_env_once() -> None:
 # 说明：严禁在代码中硬编码密钥；请通过环境变量注入：
 
 
-def _is_truthy_env(value: Optional[str]) -> bool:
-    """
-    判断环境变量字符串是否表示真值。
-
-    Args:
-        value (Optional[str]): 原始环境变量值。
-
-    Returns:
-        bool: 当值表示开启状态时返回 ``True``，否则返回 ``False``。
-
-    Raises:
-        AssertionError: 当 ``value`` 类型非法时抛出。
-    """
-    assert value is None or isinstance(value, str), "环境变量值必须为字符串或 None"
-    if value is None:
-        return False
-    return value.strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _has_gemini_api_key() -> bool:
-    """
-    检查 AI Studio 所需的 Gemini API Key 是否已配置。
-
-    Returns:
-        bool: 当任一兼容的 API Key 环境变量存在且非空时返回 ``True``。
-
-    Raises:
-        None: 本函数不主动抛出异常。
-    """
-    key_names = (
-        "GOOGLE_API_KEY",
-        "GEMINI_API_KEY",
-        "GOOGLE_GENERATIVE_AI_API_KEY",
-    )
-    for key_name in key_names:
-        value = os.environ.get(key_name)
-        if isinstance(value, str) and value.strip():
-            return True
-    return False
-
-
-def _get_default_adc_paths() -> tuple[Path, ...]:
-    """
-    返回本机常见的 ADC 默认凭证路径。
-
-    Returns:
-        tuple[Path, ...]: 按优先顺序返回可探测的 ADC 文件路径列表。
-
-    Raises:
-        None: 本函数不主动抛出异常。
-    """
-    paths: list[Path] = [
-        Path.home() / ".config" / "gcloud" / "application_default_credentials.json"
-    ]
-    appdata = (os.environ.get("APPDATA") or "").strip()
-    if appdata:
-        paths.append(
-            Path(appdata) / "gcloud" / "application_default_credentials.json"
-        )
-    return tuple(paths)
-
-
-def _has_vertex_gemini_config() -> bool:
-    """
-    检查 Vertex AI 所需的 Gemini 认证配置是否完整。
-
-    Returns:
-        bool: 当 Vertex 环境变量齐全且存在可用凭证时返回 ``True``。
-
-    Raises:
-        None: 本函数不主动抛出异常。
-    """
-    if not _is_truthy_env(os.environ.get("GOOGLE_GENAI_USE_VERTEXAI")):
-        return False
-    project = (os.environ.get("GOOGLE_CLOUD_PROJECT") or "").strip()
-    location = (os.environ.get("GOOGLE_CLOUD_LOCATION") or "").strip()
-    if not project or not location:
-        return False
-
-    credentials_path = (os.environ.get("GOOGLE_APPLICATION_CREDENTIALS") or "").strip()
-    if credentials_path:
-        return Path(credentials_path).expanduser().is_file()
-
-    for adc_path in _get_default_adc_paths():
-        if adc_path.is_file():
-            return True
-    return False
-
-
 def _ensure_gemini_env_once() -> None:
     """
-    Gemini 相关环境校验，仅首次需要 Gemini 时执行。
-
-    允许以下任一认证方式通过校验：
-    1. AI Studio / Gemini Developer API Key。
-    2. Vertex AI 配置与 ADC / 服务账号 JSON。
+    Gemini 相关环境校验，仅首次需要 Gemini 时执行，兼容多种环境变量命名。
 
     Returns:
         None: 函数无返回值。
 
     Raises:
-        AssertionError: 当 AI Studio 与 Vertex AI 认证都不可用时抛出。
+        AssertionError: 当缺少可用的 Gemini API Key 时抛出。
     """
     global _ENV_GEMINI_CHECKED
     if _ENV_GEMINI_CHECKED:
         return
-    assert _has_gemini_api_key() or _has_vertex_gemini_config(), (
-        "缺少 Gemini 可用凭证。请设置 GOOGLE_API_KEY / GEMINI_API_KEY / "
-        "GOOGLE_GENERATIVE_AI_API_KEY，或启用 GOOGLE_GENAI_USE_VERTEXAI=true "
-        "并配置 GOOGLE_CLOUD_PROJECT、GOOGLE_CLOUD_LOCATION 以及有效的 "
-        "GOOGLE_APPLICATION_CREDENTIALS 或本机 ADC。"
-    )
+    key = os.environ.get("GEMINI_API_KEY")
+    assert key, "缺少 GOOGLE_API_KEY / GEMINI_API_KEY 环境变量。"
+    #    if not os.environ.get("GOOGLE_API_KEY"):
+    #        os.environ["GOOGLE_API_KEY"] = key
     _ENV_GEMINI_CHECKED = True
 
 
