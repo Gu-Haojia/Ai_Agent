@@ -334,7 +334,7 @@ def _send_group_msg(
     if access_token:
         headers["Authorization"] = f"Bearer {access_token}"
     req = Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers)
-    with urlopen(req, timeout=15) as resp:
+    with urlopen(req, timeout=60) as resp:
         if resp.status != 200:
             raise RuntimeError(f"send_group_msg HTTP {resp.status}")
 
