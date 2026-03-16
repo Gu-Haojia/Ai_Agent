@@ -35,7 +35,7 @@ from langgraph.store.memory import InMemoryStore
 from langgraph.graph import START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
-from langchain_core.messages import ToolMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, ToolMessage, HumanMessage, SystemMessage
 from image_storage import GeneratedImage, ImageStorageManager
 from src.visual_crossing_weather import (
     VisualCrossingWeatherClient,
@@ -338,6 +338,40 @@ def _extract_text_content(message: Any) -> Optional[str]:
             return _apply_format(text)
 
     return None
+
+
+def _normalize_blocked_ai_message(message: AIMessage) -> AIMessage:
+    """
+    将被安全策略阻断且无文本内容的 AIMessage 归一化为可展示文本块。
+
+    Args:
+        message (AIMessage): 模型返回的 AI 消息对象。
+
+    Returns:
+        AIMessage: 若命中受限内容空回复场景，则返回带文本块的新消息；
+            否则返回原消息对象。
+
+    Raises:
+        AssertionError: 当传入对象不是 ``AIMessage`` 实例时抛出。
+    """
+
+    assert isinstance(message, AIMessage), "message 必须为 AIMessage 实例"
+    finish_reason = str(message.response_metadata.get("finish_reason") or "").upper()
+    if finish_reason != "PROHIBITED_CONTENT":
+        return message
+    content = message.content
+    if not isinstance(content, list) or content:
+        return message
+    return message.model_copy(
+        update={
+            "content": [
+                {
+                    "type": "text",
+                    "text": "（该请求触发安全策略，未返回内容）",
+                }
+            ]
+        }
+    )
 
 
 def _extract_text_for_token_count(message: Any) -> str:
@@ -1850,6 +1884,8 @@ class SQLCheckpointAgentStreamingPlus:
 
             # 退化路径：不支持流式则一次性返回
             msg = runner.invoke(messages)  # type: ignore[attr-defined]
+            if isinstance(msg, AIMessage):
+                msg = _normalize_blocked_ai_message(msg)
             txt = _extract_text_content(msg)
             if txt:
                 on_token(txt)
