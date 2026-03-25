@@ -2,7 +2,10 @@ import base64
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
+import image_storage
 from image_storage import ImageStorageManager, StoredImage
 
 try:
@@ -137,6 +140,49 @@ class MultimodalUnitTest(unittest.TestCase):
             other_path = Path(tmp_dir) / "outer.png"
             other_path.write_bytes(base64.b64decode(png_base64))
             self.assertFalse(manager.is_generated_path(str(other_path)))
+
+    def test_generate_image_via_gemini_retries_429_with_backoff(self) -> None:
+        class FakeClientError(Exception):
+            def __init__(self, status_code: int) -> None:
+                super().__init__(f"HTTP {status_code}")
+                self.status_code = status_code
+
+        class FakeModels:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def generate_content(self, model: str, contents: object, config: object) -> object:
+                del model, contents, config
+                self.calls += 1
+                if self.calls <= 3:
+                    raise FakeClientError(429)
+                inline_data = SimpleNamespace(data=b"fake-image", mime_type="image/png")
+                part = SimpleNamespace(text=None, inline_data=inline_data)
+                content = SimpleNamespace(parts=[part])
+                candidate = SimpleNamespace(
+                    content=content,
+                    finish_reason=None,
+                    finish_message=None,
+                )
+                return SimpleNamespace(candidates=[candidate], prompt_feedback=None)
+
+        fake_models = FakeModels()
+        fake_client = SimpleNamespace(models=fake_models)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            manager = ImageStorageManager(tmp_dir)
+            with (
+                mock.patch.object(image_storage.genai, "Client", return_value=fake_client),
+                mock.patch.object(image_storage.errors, "ClientError", FakeClientError),
+                mock.patch.object(image_storage.time, "sleep") as sleep_mock,
+            ):
+                result = manager.generate_image_via_gemini("draw a cat")
+            self.assertTrue(result.path.exists())
+
+        self.assertEqual([call.args[0] for call in sleep_mock.call_args_list], [5, 10, 30])
+        self.assertEqual(fake_models.calls, 4)
+        self.assertEqual(result.mime_type, "image/png")
+        self.assertEqual(result.prompt, "draw a cat")
 
 
 if __name__ == "__main__":

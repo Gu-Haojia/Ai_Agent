@@ -770,9 +770,10 @@ class ImageStorageManager:
         parts.append(types.Part(text=prompt_clean))
         contents = [types.Content(role="user", parts=parts)]
 
-        max_attempts = 3
+        max_server_attempts = 3
+        rate_limit_backoffs = (5, 10, 30)
         response = None
-        for attempt in range(max_attempts):
+        for attempt in range(max(max_server_attempts, len(rate_limit_backoffs) + 1)):
             try:
                 response = client.models.generate_content(
                     model=model_name, contents=contents, config=config
@@ -782,7 +783,22 @@ class ImageStorageManager:
                 status = getattr(exc, "status_code", None)
                 if status is None and hasattr(exc, "code"):
                     status = getattr(exc, "code")
-                if status and int(status) >= 500 and attempt + 1 < max_attempts and int(status) != 503:
+                if status is not None:
+                    status = int(status)
+                if status == 429 and attempt < len(rate_limit_backoffs):
+                    backoff_seconds = rate_limit_backoffs[attempt]
+                    print(
+                        f"警告：图像生成 HTTP 429，{backoff_seconds} 秒后重试…",
+                        flush=True,
+                    )
+                    time.sleep(backoff_seconds)
+                    continue
+                if (
+                    status
+                    and status >= 500
+                    and attempt + 1 < max_server_attempts
+                    and status != 503
+                ):
                     print(
                         f"警告：图像生成 HTTP {status}，准备重试…",
                         flush=True,
