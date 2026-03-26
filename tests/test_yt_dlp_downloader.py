@@ -138,7 +138,10 @@ class YtDlpDownloaderTest(unittest.TestCase):
         send_mock.assert_called_once()
         payload = send_mock.call_args.args[2]
         self.assertEqual(payload[0]["type"], "video")
-        self.assertEqual(payload[0]["data"]["file"], video_path.resolve().as_uri())
+        self.assertEqual(
+            payload[0]["data"]["file"],
+            "base64://dmlkZW8=",
+        )
 
 
 if __name__ == "__main__":

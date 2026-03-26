@@ -379,7 +379,8 @@ def _build_group_video_message(video_path: Path) -> list[dict[str, dict[str, str
     """
     resolved = video_path.expanduser().resolve()
     assert resolved.is_file(), "视频文件不存在"
-    return [{"type": "video", "data": {"file": resolved.as_uri()}}]
+    encoded = base64.b64encode(resolved.read_bytes()).decode("ascii")
+    return [{"type": "video", "data": {"file": f"base64://{encoded}"}}]
 
 
 @dataclass(frozen=True)
