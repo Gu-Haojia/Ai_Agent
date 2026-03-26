@@ -1,7 +1,7 @@
 """
 yt-dlp 视频下载模块。
 
-负责根据 URL 自动匹配常用站点 extractor，
+负责调用 yt-dlp 自动识别站点，
 并将下载后的视频保存到 QQ Bot 既有的视频缓存目录。
 """
 
@@ -10,8 +10,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import time
-from typing import Optional
-from urllib.parse import urlparse
 
 from image_storage import ImageStorageManager
 from yt_dlp import YoutubeDL
@@ -50,18 +48,6 @@ class YtDlpVideoDownloader:
         ),
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
     }
-    _COMMON_EXTRACTORS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
-        (("x.com", "twitter.com", "t.co"), ("twitter.*",)),
-        (("youtube.com", "youtu.be"), ("youtube.*",)),
-        (("bilibili.com", "b23.tv"), ("bili.*",)),
-        (("instagram.com",), ("instagram.*",)),
-        (("tiktok.com", "vm.tiktok.com"), ("tiktok.*",)),
-        (("douyin.com", "iesdouyin.com"), ("douyin.*",)),
-        (("xiaohongshu.com", "xhslink.com"), ("xiaohongshu.*",)),
-        (("facebook.com", "fb.watch"), ("facebook.*",)),
-        (("reddit.com", "redd.it"), ("reddit.*",)),
-    )
-
     def __init__(self, video_dir: Path | str) -> None:
         """
         初始化下载器。
@@ -131,16 +117,10 @@ class YtDlpVideoDownloader:
         assert isinstance(url, str) and url.strip(), "下载链接不能为空"
         target_url = url.strip()
         assert target_url.startswith(("http://", "https://")), "下载链接必须为 HTTP(S) 地址"
-        matched_extractors = self._match_extractors(target_url)
-        if matched_extractors:
-            self._log(
-                f"命中特定 extractor: url={target_url} extractors={','.join(matched_extractors)}"
-            )
-        else:
-            self._log(f"未命中特定 extractor，使用默认自动匹配: url={target_url}")
+        self._log(f"使用 yt-dlp 自动识别 extractor: url={target_url}")
         self._log(f"开始下载到目录: {self._video_dir}")
         try:
-            with YoutubeDL(self._build_options(target_url, matched_extractors)) as ydl:
+            with YoutubeDL(self._build_options()) as ydl:
                 info = ydl.extract_info(target_url, download=True)
             path = self._extract_downloaded_path(info)
             title = str(info.get("title") or path.stem)
@@ -158,15 +138,9 @@ class YtDlpVideoDownloader:
             title=title,
         )
 
-    def _build_options(
-        self, url: str, matched_extractors: Optional[tuple[str, ...]] = None
-    ) -> dict[str, object]:
+    def _build_options(self) -> dict[str, object]:
         """
         构造 yt-dlp 下载参数。
-
-        Args:
-            url (str): 原始下载链接。
-            matched_extractors (Optional[tuple[str, ...]]): 已匹配到的 extractor 列表。
 
         Returns:
             dict[str, object]: yt-dlp 参数字典。
@@ -192,30 +166,7 @@ class YtDlpVideoDownloader:
                 "default": str(self._video_dir / "%(extractor)s_%(id)s.%(ext)s")
             },
         }
-        if matched_extractors:
-            options["allowed_extractors"] = list(matched_extractors)
         return options
-
-    def _match_extractors(self, url: str) -> Optional[tuple[str, ...]]:
-        """
-        为常用站点匹配专用 extractor。
-
-        Args:
-            url (str): 视频页面链接。
-
-        Returns:
-            Optional[tuple[str, ...]]: 命中的 extractor 正则列表；未命中时返回 ``None``。
-
-        Raises:
-            None: 本方法不会主动抛出异常。
-        """
-        hostname = (urlparse(url).hostname or "").lower()
-        if not hostname:
-            return None
-        for domains, extractors in self._COMMON_EXTRACTORS:
-            if any(hostname == domain or hostname.endswith(f".{domain}") for domain in domains):
-                return extractors
-        return None
 
     def _extract_downloaded_path(self, info: dict[str, object]) -> Path:
         """

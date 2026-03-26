@@ -76,7 +76,7 @@ class YtDlpDownloaderTest(unittest.TestCase):
                 (Path(tmp_dir) / "incoming" / "video").resolve(),
             )
 
-    def test_download_matches_twitter_extractor_for_x_url(self) -> None:
+    def test_download_uses_auto_extractor_for_x_url(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             downloader = YtDlpVideoDownloader(Path(tmp_dir) / "incoming" / "video")
             with mock.patch("yt_dlp_downloader.YoutubeDL", FakeYoutubeDL):
@@ -86,10 +86,7 @@ class YtDlpDownloaderTest(unittest.TestCase):
             self.assertTrue(result.path.is_file())
         self.assertEqual(result.extractor, "twitter")
         self.assertEqual(result.title, "测试视频")
-        self.assertEqual(
-            FakeYoutubeDL.last_options.get("allowed_extractors"),
-            ["twitter.*"],
-        )
+        self.assertNotIn("allowed_extractors", FakeYoutubeDL.last_options)
         self.assertEqual(
             FakeYoutubeDL.last_options.get("format"),
             YtDlpVideoDownloader._DEFAULT_FORMAT,
