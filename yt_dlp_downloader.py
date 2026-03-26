@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import time
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -79,6 +80,23 @@ class YtDlpVideoDownloader:
         self._video_dir = Path(video_dir).expanduser().resolve()
         self._video_dir.mkdir(parents=True, exist_ok=True)
 
+    @staticmethod
+    def _log(message: str) -> None:
+        """
+        输出下载工具的控制台日志。
+
+        Args:
+            message (str): 日志内容。
+
+        Returns:
+            None: 本方法不返回值。
+
+        Raises:
+            None: 本方法不会主动抛出异常。
+        """
+        timestamp = time.strftime("[%m-%d %H:%M:%S]", time.localtime())
+        print(f"\033[94m{timestamp}\033[0m [yt-dlp] {message}", flush=True)
+
     @classmethod
     def from_image_storage(cls, manager: ImageStorageManager) -> "YtDlpVideoDownloader":
         """
@@ -114,11 +132,26 @@ class YtDlpVideoDownloader:
         assert isinstance(url, str) and url.strip(), "下载链接不能为空"
         target_url = url.strip()
         assert target_url.startswith(("http://", "https://")), "下载链接必须为 HTTP(S) 地址"
-        with YoutubeDL(self._build_options(target_url)) as ydl:
-            info = ydl.extract_info(target_url, download=True)
-        path = self._extract_downloaded_path(info)
-        title = str(info.get("title") or path.stem)
-        extractor = str(info.get("extractor") or "generic")
+        matched_extractors = self._match_extractors(target_url)
+        if matched_extractors:
+            self._log(
+                f"命中特定 extractor: url={target_url} extractors={','.join(matched_extractors)}"
+            )
+        else:
+            self._log(f"未命中特定 extractor，使用默认自动匹配: url={target_url}")
+        self._log(f"开始下载到目录: {self._video_dir}")
+        try:
+            with YoutubeDL(self._build_options(target_url, matched_extractors)) as ydl:
+                info = ydl.extract_info(target_url, download=True)
+            path = self._extract_downloaded_path(info)
+            title = str(info.get("title") or path.stem)
+            extractor = str(info.get("extractor") or "generic")
+        except Exception as exc:
+            self._log(f"下载失败: {type(exc).__name__}: {exc}")
+            raise
+        self._log(
+            f"下载完成: extractor={extractor} title={title} path={path} size={path.stat().st_size}"
+        )
         return DownloadedVideo(
             path=path,
             source_url=target_url,
@@ -126,12 +159,15 @@ class YtDlpVideoDownloader:
             title=title,
         )
 
-    def _build_options(self, url: str) -> dict[str, object]:
+    def _build_options(
+        self, url: str, matched_extractors: Optional[tuple[str, ...]] = None
+    ) -> dict[str, object]:
         """
         构造 yt-dlp 下载参数。
 
         Args:
             url (str): 原始下载链接。
+            matched_extractors (Optional[tuple[str, ...]]): 已匹配到的 extractor 列表。
 
         Returns:
             dict[str, object]: yt-dlp 参数字典。
@@ -156,9 +192,8 @@ class YtDlpVideoDownloader:
                 "default": str(self._video_dir / "%(extractor)s_%(id)s.%(ext)s")
             },
         }
-        matched = self._match_extractors(url)
-        if matched:
-            options["allowed_extractors"] = list(matched)
+        if matched_extractors:
+            options["allowed_extractors"] = list(matched_extractors)
         return options
 
     def _match_extractors(self, url: str) -> Optional[tuple[str, ...]]:
