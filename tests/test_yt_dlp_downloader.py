@@ -124,6 +124,9 @@ class YtDlpDownloaderTest(unittest.TestCase):
                     "qq_group_bot.YtDlpVideoDownloader.from_image_storage"
                 ) as factory_mock,
                 mock.patch("qq_group_bot._send_group_msg") as send_mock,
+                mock.patch(
+                    "qq_group_bot._delete_local_video_after_delay"
+                ) as cleanup_mock,
             ):
                 factory_mock.return_value.download.return_value = downloaded
                 handled = handler._handle_commands(
@@ -134,6 +137,7 @@ class YtDlpDownloaderTest(unittest.TestCase):
             "https://x.com/example/status/1"
         )
         send_mock.assert_called_once()
+        cleanup_mock.assert_called_once_with(video_path)
         payload = send_mock.call_args.args[2]
         self.assertEqual(payload[0]["type"], "video")
         self.assertEqual(

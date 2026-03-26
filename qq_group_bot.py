@@ -383,6 +383,28 @@ def _build_group_video_message(video_path: Path) -> list[dict[str, dict[str, str
     return [{"type": "video", "data": {"file": f"base64://{encoded}"}}]
 
 
+def _delete_local_video_after_delay(video_path: Path, delay_seconds: int = 5) -> None:
+    """
+    延迟删除本地视频缓存文件。
+
+    Args:
+        video_path (Path): 需要删除的视频文件路径。
+        delay_seconds (int): 删除前等待的秒数。
+
+    Returns:
+        None: 本方法不返回值。
+
+    Raises:
+        AssertionError: 当视频文件不存在或等待秒数非法时抛出。
+        OSError: 当删除文件失败时抛出。
+    """
+    resolved = video_path.expanduser().resolve()
+    assert resolved.is_file(), "视频缓存文件不存在"
+    assert delay_seconds >= 0, "delay_seconds 不能为负数"
+    time.sleep(delay_seconds)
+    resolved.unlink()
+
+
 @dataclass(frozen=True)
 class ImageSegmentInfo:
     """消息段中的图片信息。"""
@@ -1862,6 +1884,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
                     payload,
                     self.bot_cfg.access_token,
                 )
+                _delete_local_video_after_delay(downloaded.path)
             except AssertionError as e:
                 _send_group_msg(
                     self.bot_cfg.api_base,
