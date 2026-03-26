@@ -21,6 +21,7 @@ class FakeYoutubeDL:
 
     last_options: dict[str, object] = {}
     last_url: str = ""
+    file_bytes: bytes = b"fake-video"
 
     def __init__(self, options: dict[str, object]) -> None:
         self._options = options
@@ -57,7 +58,7 @@ class FakeYoutubeDL:
         )
         target = Path(file_path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(b"fake-video")
+        target.write_bytes(FakeYoutubeDL.file_bytes)
         return {
             "id": "123456",
             "title": "测试视频",
@@ -67,6 +68,9 @@ class FakeYoutubeDL:
 
 
 class YtDlpDownloaderTest(unittest.TestCase):
+    def setUp(self) -> None:
+        FakeYoutubeDL.file_bytes = b"fake-video"
+
     def test_from_image_storage_uses_same_video_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             manager = ImageStorageManager(tmp_dir)
@@ -96,6 +100,72 @@ class YtDlpDownloaderTest(unittest.TestCase):
             "mp4",
         )
         self.assertTrue(YtDlpVideoDownloader._DEFAULT_FORMAT.endswith("/best"))
+
+    def test_download_compresses_video_when_size_exceeds_threshold(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            FakeYoutubeDL.file_bytes = b"x" * 10
+            downloader = YtDlpVideoDownloader(Path(tmp_dir) / "incoming" / "video")
+
+            def _write_compressed(
+                _input_path: Path,
+                output_path: Path,
+                _video_bitrate_kbps: int,
+                _audio_bitrate_kbps: int,
+            ) -> None:
+                output_path.write_bytes(b"compressed")
+
+            with (
+                mock.patch("src.yt_dlp_downloader.YoutubeDL", FakeYoutubeDL),
+                mock.patch.object(downloader, "_probe_duration_seconds", return_value=10.0),
+                mock.patch.object(
+                    downloader,
+                    "_calculate_target_bitrates",
+                    return_value=(1000, 64),
+                ),
+                mock.patch.object(
+                    downloader,
+                    "_run_ffmpeg_compression",
+                    side_effect=_write_compressed,
+                ),
+                mock.patch.object(downloader, "_COMPRESS_TRIGGER_BYTES", 1),
+                mock.patch.object(downloader, "_MAX_SENDABLE_BYTES", 1024),
+            ):
+                result = downloader.download("https://x.com/example/status/1234567890?s=20")
+                self.assertTrue(result.path.is_file())
+                self.assertEqual(result.path.name, "twitter_123456_compressed.mp4")
+                self.assertEqual(result.path.read_bytes(), b"compressed")
+
+    def test_download_raises_when_compressed_video_still_exceeds_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            FakeYoutubeDL.file_bytes = b"x" * 10
+            downloader = YtDlpVideoDownloader(Path(tmp_dir) / "incoming" / "video")
+
+            def _write_oversized(
+                _input_path: Path,
+                output_path: Path,
+                _video_bitrate_kbps: int,
+                _audio_bitrate_kbps: int,
+            ) -> None:
+                output_path.write_bytes(b"y" * 40)
+
+            with (
+                mock.patch("src.yt_dlp_downloader.YoutubeDL", FakeYoutubeDL),
+                mock.patch.object(downloader, "_probe_duration_seconds", return_value=10.0),
+                mock.patch.object(
+                    downloader,
+                    "_calculate_target_bitrates",
+                    return_value=(1000, 64),
+                ),
+                mock.patch.object(
+                    downloader,
+                    "_run_ffmpeg_compression",
+                    side_effect=_write_oversized,
+                ),
+                mock.patch.object(downloader, "_COMPRESS_TRIGGER_BYTES", 1),
+                mock.patch.object(downloader, "_MAX_SENDABLE_BYTES", 20),
+            ):
+                with self.assertRaisesRegex(AssertionError, "压制后视频仍超过 70MB"):
+                    downloader.download("https://x.com/example/status/1234567890?s=20")
 
     @unittest.skipUnless(_QQ_MODULE_AVAILABLE, "缺少 langgraph 依赖，跳过 QQ 命令测试")
     def test_handle_commands_dl_sends_video_payload(self) -> None:

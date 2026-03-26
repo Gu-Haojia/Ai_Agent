@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import subprocess
 import time
 
 from image_storage import ImageStorageManager
@@ -41,7 +42,12 @@ class YtDlpVideoDownloader:
         "/bestvideo+bestaudio"
         "/best"
     )
-    _MAX_FILESIZE_BYTES = 95 * 1024 * 1024
+    _MAX_FILESIZE_BYTES = 512 * 1024 * 1024
+    _COMPRESS_TRIGGER_BYTES = 50 * 1024 * 1024
+    _MAX_SENDABLE_BYTES = 70 * 1024 * 1024
+    _TARGET_SIZE_RATIO = 0.92
+    _DEFAULT_AUDIO_BITRATE_KBPS = 128
+    _MIN_VIDEO_BITRATE_KBPS = 180
     _DEFAULT_HEADERS: dict[str, str] = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -127,6 +133,7 @@ class YtDlpVideoDownloader:
             path = self._extract_downloaded_path(info)
             title = str(info.get("title") or path.stem)
             extractor = str(info.get("extractor") or "generic")
+            path = self._compress_if_needed(path)
         except Exception as exc:
             self._log(f"下载失败: {type(exc).__name__}: {exc}")
             raise
@@ -169,6 +176,162 @@ class YtDlpVideoDownloader:
             },
         }
         return options
+
+    def _compress_if_needed(self, video_path: Path) -> Path:
+        """
+        在文件超过阈值时压制视频到可发送大小。
+
+        Args:
+            video_path (Path): 已下载完成的视频文件路径。
+
+        Returns:
+            Path: 可直接用于发送的视频文件路径。
+
+        Raises:
+            AssertionError: 当压制后文件仍超过上限或参数非法时抛出。
+            OSError: 当删除旧文件失败时抛出。
+        """
+        resolved = video_path.expanduser().resolve()
+        assert resolved.is_file(), "待压制视频文件不存在"
+        current_size = resolved.stat().st_size
+        if current_size <= self._COMPRESS_TRIGGER_BYTES:
+            return resolved
+        self._log(f"文件超过压制阈值，开始压制: path={resolved} size={current_size}")
+        duration_seconds = self._probe_duration_seconds(resolved)
+        video_bitrate_kbps, audio_bitrate_kbps = self._calculate_target_bitrates(
+            duration_seconds
+        )
+        compressed_path = resolved.with_name(f"{resolved.stem}_compressed.mp4")
+        if compressed_path.exists():
+            compressed_path.unlink()
+        self._run_ffmpeg_compression(
+            resolved,
+            compressed_path,
+            video_bitrate_kbps,
+            audio_bitrate_kbps,
+        )
+        compressed_size = compressed_path.stat().st_size
+        self._log(
+            "压制完成: "
+            f"path={compressed_path} size={compressed_size} "
+            f"video_bitrate={video_bitrate_kbps}k audio_bitrate={audio_bitrate_kbps}k"
+        )
+        assert compressed_size <= self._MAX_SENDABLE_BYTES, "压制后视频仍超过 70MB"
+        resolved.unlink()
+        return compressed_path
+
+    def _probe_duration_seconds(self, video_path: Path) -> float:
+        """
+        使用 ffprobe 读取视频时长。
+
+        Args:
+            video_path (Path): 视频文件路径。
+
+        Returns:
+            float: 视频时长，单位为秒。
+
+        Raises:
+            AssertionError: 当 ffprobe 执行失败或时长非法时抛出。
+        """
+        command = [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            str(video_path),
+        ]
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        stderr = completed.stderr.strip()
+        assert completed.returncode == 0, f"ffprobe 读取时长失败: {stderr or completed.stdout.strip()}"
+        duration_text = completed.stdout.strip()
+        assert duration_text, "ffprobe 未返回视频时长"
+        duration_seconds = float(duration_text)
+        assert duration_seconds > 0, "视频时长必须大于 0"
+        return duration_seconds
+
+    def _calculate_target_bitrates(self, duration_seconds: float) -> tuple[int, int]:
+        """
+        根据目标大小计算压制码率。
+
+        Args:
+            duration_seconds (float): 视频时长，单位为秒。
+
+        Returns:
+            tuple[int, int]: 视频码率与音频码率，单位为 kbps。
+
+        Raises:
+            AssertionError: 当目标码率不足以完成压制时抛出。
+        """
+        assert duration_seconds > 0, "duration_seconds 必须大于 0"
+        target_total_bits = int(self._MAX_SENDABLE_BYTES * 8 * self._TARGET_SIZE_RATIO)
+        total_bitrate_kbps = max(1, int(target_total_bits / duration_seconds / 1000))
+        audio_bitrate_kbps = min(self._DEFAULT_AUDIO_BITRATE_KBPS, max(64, total_bitrate_kbps // 5))
+        video_bitrate_kbps = total_bitrate_kbps - audio_bitrate_kbps
+        assert video_bitrate_kbps >= self._MIN_VIDEO_BITRATE_KBPS, "视频过长，无法压制到 70MB 内"
+        return video_bitrate_kbps, audio_bitrate_kbps
+
+    def _run_ffmpeg_compression(
+        self,
+        input_path: Path,
+        output_path: Path,
+        video_bitrate_kbps: int,
+        audio_bitrate_kbps: int,
+    ) -> None:
+        """
+        调用 ffmpeg 执行视频压制。
+
+        Args:
+            input_path (Path): 原始视频路径。
+            output_path (Path): 压制后视频路径。
+            video_bitrate_kbps (int): 视频码率，单位为 kbps。
+            audio_bitrate_kbps (int): 音频码率，单位为 kbps。
+
+        Returns:
+            None: 本方法不返回值。
+
+        Raises:
+            AssertionError: 当 ffmpeg 执行失败或未产出文件时抛出。
+        """
+        command = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(input_path),
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-b:v",
+            f"{video_bitrate_kbps}k",
+            "-maxrate",
+            f"{video_bitrate_kbps}k",
+            "-bufsize",
+            f"{video_bitrate_kbps * 2}k",
+            "-c:a",
+            "aac",
+            "-b:a",
+            f"{audio_bitrate_kbps}k",
+            "-movflags",
+            "+faststart",
+            str(output_path),
+        ]
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        stderr = completed.stderr.strip()
+        assert completed.returncode == 0, f"ffmpeg 压制失败: {stderr or completed.stdout.strip()}"
+        assert output_path.is_file(), "ffmpeg 未生成压制文件"
 
     def _extract_downloaded_path(self, info: dict[str, object]) -> Path:
         """
