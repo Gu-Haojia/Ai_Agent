@@ -95,6 +95,7 @@ class YtDlpDownloaderTest(unittest.TestCase):
             FakeYoutubeDL.last_options.get("merge_output_format"),
             "mp4",
         )
+        self.assertTrue(YtDlpVideoDownloader._DEFAULT_FORMAT.endswith("/best"))
 
     @unittest.skipUnless(_QQ_MODULE_AVAILABLE, "缺少 langgraph 依赖，跳过 QQ 命令测试")
     def test_handle_commands_dl_sends_video_payload(self) -> None:

@@ -39,6 +39,7 @@ class YtDlpVideoDownloader:
         "/best[acodec!=none][vcodec!=none]"
         "/bestvideo[ext=mp4]+bestaudio[ext=m4a]"
         "/bestvideo+bestaudio"
+        "/best"
     )
     _MAX_FILESIZE_BYTES = 95 * 1024 * 1024
     _DEFAULT_HEADERS: dict[str, str] = {
