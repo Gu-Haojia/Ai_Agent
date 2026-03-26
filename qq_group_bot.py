@@ -181,6 +181,7 @@ from src.google_reverse_image_tool import ReverseImageUploader
 from src.meru_monitor import DEFAULT_LIMIT, MeruMonitorManager, MeruSearchResult
 from src.meru_watch_media import send_meru_message_with_images
 from image_storage import GeneratedImage, ImageStorageManager, StoredImage, StoredVideo
+from yt_dlp_downloader import YtDlpVideoDownloader
 from daily_task import (
     DailyTicketTask,
     DailyWeatherTask,
@@ -361,6 +362,24 @@ def _send_group_at_message(
     # 复用发送群消息接口，使用 CQ 码进行 @
     msg = f"[CQ:at,qq={at_qq}] {text}"
     _send_group_msg(api_base, group_id, msg, access_token)
+
+
+def _build_group_video_message(video_path: Path) -> list[dict[str, dict[str, str]]]:
+    """
+    构造发送到群聊的视频消息段。
+
+    Args:
+        video_path (Path): 已下载完成的视频文件路径。
+
+    Returns:
+        list[dict[str, dict[str, str]]]: OneBot 可直接发送的视频消息段。
+
+    Raises:
+        AssertionError: 当视频文件不存在时抛出。
+    """
+    resolved = video_path.expanduser().resolve()
+    assert resolved.is_file(), "视频文件不存在"
+    return [{"type": "video", "data": {"file": resolved.as_uri()}}]
 
 
 @dataclass(frozen=True)
@@ -1813,11 +1832,49 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 "10) /image - 切换生图模型\n"
                 "11) /apicheck - 检测当前模型 API 是否可用\n"
                 "12) /merusearch \"关键词\" [limit] - 查询 Meru 最新在售\n"
-                "13) /meruwatch \"关键词\" <间隔秒> [价格阈值] - 新品监控 (/meruwatch off 停止)"
+                "13) /meruwatch \"关键词\" <间隔秒> [价格阈值] - 新品监控 (/meruwatch off 停止)\n"
+                "14) /dl <链接> - 下载视频并直接发送到群聊"
             )
             _send_group_msg(
                 self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
             )
+            return True
+
+        if cmd == "/dl":
+            target_url = text[len(cmd) :].strip()
+            if not target_url:
+                _send_group_msg(
+                    self.bot_cfg.api_base,
+                    group_id,
+                    "用法：/dl <链接>",
+                    self.bot_cfg.access_token,
+                )
+                return True
+            try:
+                storage = self._require_image_storage()
+                downloader = YtDlpVideoDownloader.from_image_storage(storage)
+                downloaded = downloader.download(target_url)
+                payload = _build_group_video_message(downloaded.path)
+                _send_group_msg(
+                    self.bot_cfg.api_base,
+                    group_id,
+                    payload,
+                    self.bot_cfg.access_token,
+                )
+            except AssertionError as e:
+                _send_group_msg(
+                    self.bot_cfg.api_base,
+                    group_id,
+                    f"下载失败：{e}",
+                    self.bot_cfg.access_token,
+                )
+            except Exception as e:
+                _send_group_msg(
+                    self.bot_cfg.api_base,
+                    group_id,
+                    f"下载失败（内部错误）：{e}",
+                    self.bot_cfg.access_token,
+                )
             return True
 
         if cmd == "/switch" and len(parts) == 1:
