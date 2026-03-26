@@ -39,9 +39,8 @@ class YtDlpVideoDownloader:
     _DEFAULT_FORMAT = (
         "best[ext=mp4][acodec!=none][vcodec!=none]"
         "/best[acodec!=none][vcodec!=none]"
-        "/best[ext=mp4][vcodec!=none]"
-        "/best[vcodec!=none]"
-        "/best"
+        "/bestvideo[ext=mp4]+bestaudio[ext=m4a]"
+        "/bestvideo+bestaudio"
     )
     _MAX_FILESIZE_BYTES = 95 * 1024 * 1024
     _DEFAULT_HEADERS: dict[str, str] = {
@@ -186,6 +185,7 @@ class YtDlpVideoDownloader:
             "file_access_retries": 3,
             "extractor_retries": 3,
             "format": self._DEFAULT_FORMAT,
+            "merge_output_format": "mp4",
             "max_filesize": self._MAX_FILESIZE_BYTES,
             "http_headers": dict(self._DEFAULT_HEADERS),
             "outtmpl": {
