@@ -181,7 +181,7 @@ from src.google_reverse_image_tool import ReverseImageUploader
 from src.meru_monitor import DEFAULT_LIMIT, MeruMonitorManager, MeruSearchResult
 from src.meru_watch_media import send_meru_message_with_images
 from image_storage import GeneratedImage, ImageStorageManager, StoredImage, StoredVideo
-from yt_dlp_downloader import YtDlpVideoDownloader
+from src.yt_dlp_downloader import YtDlpVideoDownloader
 from daily_task import (
     DailyTicketTask,
     DailyWeatherTask,

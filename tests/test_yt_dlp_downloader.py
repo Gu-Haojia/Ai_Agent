@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from image_storage import ImageStorageManager
-from yt_dlp_downloader import DownloadedVideo, YtDlpVideoDownloader
+from src.yt_dlp_downloader import DownloadedVideo, YtDlpVideoDownloader
 
 try:
     from qq_group_bot import QQBotHandler
@@ -79,7 +79,7 @@ class YtDlpDownloaderTest(unittest.TestCase):
     def test_download_uses_auto_extractor_for_x_url(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             downloader = YtDlpVideoDownloader(Path(tmp_dir) / "incoming" / "video")
-            with mock.patch("yt_dlp_downloader.YoutubeDL", FakeYoutubeDL):
+            with mock.patch("src.yt_dlp_downloader.YoutubeDL", FakeYoutubeDL):
                 result = downloader.download(
                     "https://x.com/example/status/1234567890?s=20"
                 )

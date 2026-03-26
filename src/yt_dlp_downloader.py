@@ -48,6 +48,7 @@ class YtDlpVideoDownloader:
         ),
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
     }
+
     def __init__(self, video_dir: Path | str) -> None:
         """
         初始化下载器。
