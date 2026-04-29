@@ -1793,6 +1793,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
         - /switch <name>      → 切换到 prompts/<name>.txt（设置 SYS_MSG_FILE）并重建 Agent
         - /boost              → 在 Gemini 文本模型之间切换并重建 Agent
         - /image              → 在 Gemini 生图模型之间切换
+        - /imageprovider      → 在 Gemini/OpenAI 生图服务商之间切换
         - /clear              → 为当前群新建线程
         - /whoami             → 先回当前系统提示词，再基于“你是谁”生成一条消息
         - /token              → 统计当前群对应线程的消息 token 数
@@ -1853,10 +1854,11 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 "8) /rmdata - 清除长期记忆\n"
                 "9) /boost - 切换后端可用模型\n"
                 "10) /image - 切换生图模型\n"
-                "11) /apicheck - 检测当前模型 API 是否可用\n"
-                "12) /merusearch \"关键词\" [limit] - 查询 Meru 最新在售\n"
-                "13) /meruwatch \"关键词\" <间隔秒> [价格阈值] - 新品监控 (/meruwatch off 停止)\n"
-                "14) /dl <链接> - 下载视频并直接发送到群聊"
+                "11) /imageprovider - 切换生图服务商\n"
+                "12) /apicheck - 检测当前模型 API 是否可用\n"
+                "13) /merusearch \"关键词\" [limit] - 查询 Meru 最新在售\n"
+                "14) /meruwatch \"关键词\" <间隔秒> [价格阈值] - 新品监控 (/meruwatch off 停止)\n"
+                "15) /dl <链接> - 下载视频并直接发送到群聊"
             )
             _send_group_msg(
                 self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
@@ -1955,6 +1957,18 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 msg = f"切换失败：{e}"
             except Exception as e:
                 msg = f"切换失败（内部错误）：{e}"
+            _send_group_msg(
+                self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
+            )
+            return True
+
+        if cmd == "/imageprovider" and len(parts) == 1:
+            current_provider = (
+                os.environ.get("IMAGE_PROVIDER") or "gemini"
+            ).strip().lower()
+            next_provider = "openai" if current_provider == "gemini" else "gemini"
+            os.environ["IMAGE_PROVIDER"] = next_provider
+            msg = f"生图服务商已切换：{current_provider} -> {next_provider}。"
             _send_group_msg(
                 self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
             )
