@@ -93,6 +93,51 @@ class MultimodalUnitTest(unittest.TestCase):
             self.assertEqual(result.path.suffix, ".png")
             self.assertEqual(result.mime_type, "image/png")
 
+    def test_generate_image_via_openai_uses_generate_without_reference(self) -> None:
+        """确认未传参考图时调用 OpenAI 图像生成接口。"""
+        fake_response = SimpleNamespace(data=[SimpleNamespace(b64_json="ZmFrZQ==")])
+        fake_images = SimpleNamespace(
+            generate=mock.Mock(return_value=fake_response),
+            edit=mock.Mock(),
+        )
+        fake_client = SimpleNamespace(images=fake_images)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            manager = ImageStorageManager(tmp_dir)
+            with mock.patch("openai.OpenAI", return_value=fake_client):
+                result = manager.generate_image_via_openai(" draw a cat ")
+
+        self.assertIs(result, fake_response)
+        fake_images.generate.assert_called_once_with(
+            model="gpt-image-2",
+            prompt="draw a cat",
+        )
+        fake_images.edit.assert_not_called()
+
+    def test_generate_image_via_openai_uses_edit_with_reference(self) -> None:
+        """确认传入参考图时调用 OpenAI 图像编辑接口。"""
+        fake_response = SimpleNamespace(data=[SimpleNamespace(b64_json="ZmFrZQ==")])
+        fake_images = SimpleNamespace(
+            generate=mock.Mock(),
+            edit=mock.Mock(return_value=fake_response),
+        )
+        fake_client = SimpleNamespace(images=fake_images)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            manager = ImageStorageManager(tmp_dir)
+            reference_path = Path(tmp_dir) / "reference.png"
+            reference_path.write_bytes(b"fake-reference")
+            with mock.patch("openai.OpenAI", return_value=fake_client):
+                result = manager.generate_image_via_openai(" edit this ", reference_path)
+
+        self.assertIs(result, fake_response)
+        fake_images.generate.assert_not_called()
+        fake_images.edit.assert_called_once_with(
+            model="gpt-image-2",
+            image=reference_path.resolve(),
+            prompt="edit this",
+        )
+
     def test_save_base64_image(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             manager = ImageStorageManager(tmp_dir)

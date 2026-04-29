@@ -16,13 +16,16 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Optional, Sequence, TYPE_CHECKING
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import requests
 from google import genai
 from google.genai import types
 from google.genai import errors
+
+if TYPE_CHECKING:
+    from openai.types.images_response import ImagesResponse
 
 __all__ = [
     "StoredImage",
@@ -33,6 +36,7 @@ __all__ = [
 
 # Gemini 接口需要的参考图像结构：(mime_type, base64 数据)
 GeminiReferenceImage = tuple[str, str]
+OpenAIReferenceImage = str | Path | Sequence[str | Path]
 
 
 @dataclass(frozen=True)
@@ -93,7 +97,7 @@ class ImageStorageManager:
 
     - 所有图像将保存在 base_dir 下的 incoming/generated 子目录；
     - 入站图像与短视频保存后提供 Base64 编码，便于向多模态模型提供数据；
-    - 生成图像调用 OpenAI Images API，落盘后返回路径供 Bot 发送 CQ 图片。
+    - OpenAI Images API 返回官方响应对象；必要时可通过保存方法落盘。
     """
 
     def __init__(self, base_dir: str, image_model: Optional[str] = None) -> None:
@@ -105,7 +109,7 @@ class ImageStorageManager:
         self._incoming_dir.mkdir(parents=True, exist_ok=True)
         self._incoming_video_dir.mkdir(parents=True, exist_ok=True)
         self._generated_dir.mkdir(parents=True, exist_ok=True)
-        self._image_model = image_model or os.environ.get("IMAGE_MODEL_NAME", "gpt-image-1")
+        self._image_model = image_model or os.environ.get("IMAGE_MODEL_NAME", "gpt-image-2")
         self._lock = threading.Lock()
         self._max_video_bytes = 32 * 1024 * 1024  # 32MB 上限，避免超大视频内联
         self._http_headers = {
@@ -235,6 +239,38 @@ class ImageStorageManager:
             return block_value.strip()
         block_str = str(block_reason).strip()
         return block_str or None
+
+    @staticmethod
+    def _normalize_openai_reference_image(
+        reference_image: OpenAIReferenceImage,
+    ) -> Path | list[Path]:
+        """
+        规范化 OpenAI 图像编辑接口使用的参考图路径。
+
+        Args:
+            reference_image (OpenAIReferenceImage): 单个参考图路径，或多个参考图路径。
+
+        Returns:
+            Path | list[Path]: 单图返回 ``Path``，多图返回 ``list[Path]``。
+
+        Raises:
+            AssertionError: 当参考图参数为空、类型非法或文件不存在时抛出。
+        """
+        if isinstance(reference_image, (str, Path)):
+            raw_paths: list[str | Path] = [reference_image]
+            single_image = True
+        else:
+            raw_paths = list(reference_image)
+            single_image = False
+
+        assert raw_paths, "reference_image 不能为空"
+        paths: list[Path] = []
+        for raw_path in raw_paths:
+            assert isinstance(raw_path, (str, Path)), "reference_image 必须是文件路径"
+            path = Path(raw_path).expanduser().resolve()
+            assert path.is_file(), f"参考图不存在: {path}"
+            paths.append(path)
+        return paths[0] if single_image else paths
 
     def _generate_url_candidates(self, url: str) -> list[str]:
         """根据已知规则生成优先尝试的下载地址列表。"""
@@ -634,39 +670,45 @@ class ImageStorageManager:
             return target.resolve()
         raise FileNotFoundError(f"找不到视频文件: {normalized}")
 
-    def generate_image_via_openai(self, prompt: str, size: str = "1024x1024") -> GeneratedImage:
+    def generate_image_via_openai(
+        self,
+        prompt: str,
+        reference_image: Optional[OpenAIReferenceImage] = None,
+    ) -> "ImagesResponse":
         """
-        使用 OpenAI Images API 生成图像并保存。
+        使用 OpenAI Images API 生成或参考图编辑图像。
 
         Args:
             prompt (str): 图像描述。
-            size (str): 输出尺寸，默认 1024x1024。
+            reference_image (Optional[OpenAIReferenceImage]):
+                可选参考图路径；未传入时调用 ``images.generate``，
+                传入时调用 ``images.edit``。可传单个路径或路径列表。
 
         Returns:
-            GeneratedImage: 生成后的图像信息。
+            ImagesResponse: OpenAI SDK 返回的图像响应对象。
+                生成图像的 Base64 数据位于 ``response.data[0].b64_json``。
 
         Raises:
             AssertionError: 当提示为空时抛出。
-            RuntimeError: 当 OpenAI 接口未返回图像或缺少必要字段时抛出。
+            AssertionError: 当参考图路径非法或不存在时抛出。
         """
         from openai import OpenAI
 
-        assert prompt.strip(), "prompt 不能为空"
+        assert isinstance(prompt, str) and prompt.strip(), "prompt 不能为空"
+        prompt_text = prompt.strip()
         client = OpenAI()
-        response = client.images.generate(
+        if reference_image is None:
+            return client.images.generate(
+                model=self._image_model,
+                prompt=prompt_text,
+            )
+
+        image = self._normalize_openai_reference_image(reference_image)
+        return client.images.edit(
             model=self._image_model,
-            prompt=prompt.strip(),
-            size=size,
-            response_format="b64_json",
+            image=image,
+            prompt=prompt_text,
         )
-        if not response.data:
-            raise RuntimeError("未收到图像生成结果")
-        item = response.data[0]
-        b64_data = getattr(item, "b64_json", None)
-        mime_type = getattr(item, "mime_type", None) or "image/png"
-        if not b64_data:
-            raise RuntimeError("生成结果缺少 Base64 数据")
-        return self.save_generated_image(b64_data, prompt.strip(), mime_type)
 
     def generate_image_via_gemini(
         self,
