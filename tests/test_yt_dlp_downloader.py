@@ -1,3 +1,4 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -214,6 +215,31 @@ class YtDlpDownloaderTest(unittest.TestCase):
             payload[0]["data"]["file"],
             "base64://dmlkZW8=",
         )
+
+    @unittest.skipUnless(_QQ_MODULE_AVAILABLE, "缺少 langgraph 依赖，跳过 QQ 命令测试")
+    def test_handle_commands_imageprovider_toggles_env(self) -> None:
+        """确认 /imageprovider 会切换 IMAGE_PROVIDER 环境变量。"""
+        old_provider = os.environ.pop("IMAGE_PROVIDER", None)
+        try:
+            handler = object.__new__(QQBotHandler)
+            handler.bot_cfg = SimpleNamespace(
+                api_base="http://127.0.0.1:3000",
+                access_token="",
+                cmd_allowed_users=(),
+            )
+
+            with mock.patch("qq_group_bot._send_group_msg") as send_mock:
+                handled = handler._handle_commands(10001, 20002, "/imageprovider")
+
+            self.assertTrue(handled)
+            self.assertEqual(os.environ.get("IMAGE_PROVIDER"), "openai")
+            send_mock.assert_called_once()
+            self.assertIn("gemini -> openai", send_mock.call_args.args[2])
+        finally:
+            if old_provider is None:
+                os.environ.pop("IMAGE_PROVIDER", None)
+            else:
+                os.environ["IMAGE_PROVIDER"] = old_provider
 
 
 if __name__ == "__main__":

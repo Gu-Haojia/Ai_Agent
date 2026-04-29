@@ -824,6 +824,7 @@ class SQLCheckpointAgentStreamingPlus:
             assert self._config.pg_conn, "必须通过 LANGGRAPH_PG 提供 Postgres 连接串。"
         if self._config.model_name != "fake:echo":
             _ensure_model_env_once(self._config.model_name)
+        os.environ["IMAGE_PROVIDER"] = "gemini"
 
         env_tools = os.environ.get("ENABLE_TOOLS")
         if env_tools is None:
@@ -1740,7 +1741,7 @@ class SQLCheckpointAgentStreamingPlus:
             reference_images: Optional[list[str]] = None,
         ) -> str:
             """
-            调用 Gemini 接口生成或编辑图像，并返回本地文件路径信息。必须强调“生成或编辑图像”才能使用这个工具
+            调用当前图像服务商生成或编辑图像，并返回本地文件路径信息。必须强调“生成或编辑图像”才能使用这个工具
 
             Args:
                 prompt (str): 图像描述或编辑指令，使用用户发送信息的原始语言。如果用户信息含有“prompt”，则直接复制用户的“prompt”内容。其他情况根据用户意图生成描述性文本，尽可能详细。
@@ -1761,7 +1762,14 @@ class SQLCheckpointAgentStreamingPlus:
             """
 
             _ensure_common_env_once()
-            _ensure_gemini_env_once()
+            image_provider = (
+                os.environ.get("IMAGE_PROVIDER") or "gemini"
+            ).strip().lower()
+            if image_provider == "openai":
+                _ensure_openai_env_once()
+            else:
+                image_provider = "gemini"
+                _ensure_gemini_env_once()
             prompt_text = prompt.strip()
             assert prompt_text, "prompt 不能为空"
 
@@ -1772,6 +1780,7 @@ class SQLCheckpointAgentStreamingPlus:
             resolution = size.strip().upper() if isinstance(size, str) else None
 
             references: list[tuple[str, str]] = []
+            reference_paths: list[Path] = []
             if reference_images:
                 assert isinstance(
                     reference_images, list
@@ -1792,23 +1801,55 @@ class SQLCheckpointAgentStreamingPlus:
                         references.append(
                             (stored_remote.mime_type, stored_remote.base64_data)
                         )
+                        reference_paths.append(stored_remote.path)
                     else:
                         stored_image = manager.load_stored_image(name_or_url)
                         references.append(
                             (stored_image.mime_type, stored_image.base64_data)
                         )
+                        reference_paths.append(stored_image.path)
 
             REPORT_ERROR = True  # 是否返回错误信息给LLM
             if REPORT_ERROR:
                 try:
-                    image = manager.generate_image_via_gemini(
-                        prompt=prompt_text,
-                        aspect_ratio=aspect_ratio_norm,
-                        size=resolution,
-                        reference_images=references or None,
-                    )
+                    if image_provider == "openai":
+                        response = manager.generate_image_via_openai(
+                            prompt=prompt_text,
+                            reference_image=reference_paths or None,
+                        )
+                        if not response.data:
+                            raise RuntimeError("OpenAI 未返回图像数据")
+                        item = response.data[0]
+                        b64_data = getattr(item, "b64_json", None)
+                        if not b64_data:
+                            raise RuntimeError("OpenAI 返回结果缺少 b64_json")
+                        output_format = (
+                            getattr(response, "output_format", None) or "png"
+                        )
+                        mime_type = {
+                            "png": "image/png",
+                            "jpeg": "image/jpeg",
+                            "webp": "image/webp",
+                        }.get(output_format)
+                        if not mime_type:
+                            raise RuntimeError(
+                                f"OpenAI 返回不支持的图像格式: {output_format}"
+                            )
+                        image = manager.save_generated_image(
+                            b64_data, prompt_text, mime_type
+                        )
+                    else:
+                        image = manager.generate_image_via_gemini(
+                            prompt=prompt_text,
+                            aspect_ratio=aspect_ratio_norm,
+                            size=resolution,
+                            reference_images=references or None,
+                        )
                 except Exception as exc:
-                    print(f"ERROR: generate_image_via_gemini 失败：{exc}", flush=True)
+                    print(
+                        f"ERROR: generate_image_via_{image_provider} 失败：{exc}",
+                        flush=True,
+                    )
                     return f"本次生图失败，如果你决定给出最终回复，请必须在回复中完整输出下面的错误信息：{exc}"
             else:
                 image = manager.generate_image_via_gemini(
