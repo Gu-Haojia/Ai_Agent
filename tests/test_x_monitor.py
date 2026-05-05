@@ -183,6 +183,60 @@ class XMonitorMediaComposeTests(unittest.TestCase):
         self.assertEqual(payload[1]["type"], "image")
         self.assertTrue(payload[1]["data"]["file"].startswith("base64://Zg=="))
 
+    def test_compose_sends_all_images_from_same_post(self) -> None:
+        """
+        同一条推文包含多张图时，应全部生成 image 段。
+        """
+        items = [
+            XPostResult(
+                username="kana_hanaiwa",
+                post_id="1",
+                text="multi",
+                created_label="05-05 10:02",
+                url="https://x.com/kana_hanaiwa/status/1",
+                image_urls=(
+                    "https://example.com/1.jpg",
+                    "https://example.com/2.jpg",
+                    "https://example.com/3.jpg",
+                    "https://example.com/4.jpg",
+                ),
+            )
+        ]
+        fetched: list[str] = []
+
+        def fake_fetch(url: str) -> tuple[str, str]:
+            """
+            记录被下载的图片 URL。
+
+            Args:
+                url (str): 图片 URL。
+
+            Returns:
+                tuple[str, str]: base64 与 MIME。
+
+            Raises:
+                None: 本函数不抛出异常。
+            """
+            fetched.append(url)
+            return "Zg==", "image/jpeg"
+
+        payload = compose_x_media_message("hello", items, fetcher=fake_fetch)
+        self.assertIsInstance(payload, list)
+        self.assertEqual(len(payload), 5)
+        self.assertEqual(
+            [segment["type"] for segment in payload],
+            ["text", "image", "image", "image", "image"],
+        )
+        self.assertEqual(
+            fetched,
+            [
+                "https://example.com/1.jpg",
+                "https://example.com/2.jpg",
+                "https://example.com/3.jpg",
+                "https://example.com/4.jpg",
+            ],
+        )
+
     def test_compose_without_images_returns_text_segment(self) -> None:
         """
         无图片时应只生成文本消息段。

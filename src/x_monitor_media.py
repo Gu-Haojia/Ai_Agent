@@ -79,13 +79,15 @@ def _send_group_msg(
             raise RuntimeError(f"send_group_msg HTTP {resp.status}")
 
 
-def _pick_image_urls(items: Sequence[XPostResult], max_count: int = 5) -> list[str]:
+def _pick_image_urls(
+    items: Sequence[XPostResult], max_count: Optional[int] = None
+) -> list[str]:
     """
-    每条推文挑一张图，按顺序去重后返回。
+    收集全部推文图片，按顺序去重后返回。
 
     Args:
         items (Sequence[XPostResult]): 推文列表。
-        max_count (int): 最多返回数量。
+        max_count (Optional[int]): 最多返回数量，None 表示不限制。
 
     Returns:
         list[str]: 需下载的图片 URL。
@@ -93,15 +95,15 @@ def _pick_image_urls(items: Sequence[XPostResult], max_count: int = 5) -> list[s
     Raises:
         AssertionError: 当 max_count 非正数时抛出。
     """
-    assert max_count > 0, "max_count 必须大于 0"
+    if max_count is not None:
+        assert max_count > 0, "max_count 必须大于 0"
     urls: list[str] = []
     for item in items:
         for url in item.image_urls:
             if url.startswith("http") and url not in urls:
                 urls.append(url)
-                break
-        if len(urls) >= max_count:
-            break
+            if max_count is not None and len(urls) >= max_count:
+                return urls
     return urls
 
 
@@ -139,7 +141,7 @@ def compose_x_media_message(
     text: str,
     items: Sequence[XPostResult],
     fetcher: Optional[Callable[[str], tuple[str, str]]] = None,
-    max_images: int = 5,
+    max_images: Optional[int] = None,
 ) -> MessagePayload:
     """
     生成包含图片的 OneBot 消息段列表。
@@ -148,7 +150,7 @@ def compose_x_media_message(
         text (str): 文本内容。
         items (Sequence[XPostResult]): 推文列表。
         fetcher (Optional[Callable[[str], tuple[str, str]]]): 可注入图片下载器。
-        max_images (int): 最多附图数量。
+        max_images (Optional[int]): 最多附图数量，None 表示发送全部图片。
 
     Returns:
         MessagePayload: 可直接发送的消息体。
@@ -192,7 +194,7 @@ def send_x_message_with_images(
     text: str,
     items: Sequence[XPostResult],
     fetcher: Optional[Callable[[str], tuple[str, str]]] = None,
-    max_images: int = 5,
+    max_images: Optional[int] = None,
 ) -> None:
     """
     发送携带图片的 X 推文监控消息。
@@ -204,7 +206,7 @@ def send_x_message_with_images(
         text (str): 文本内容。
         items (Sequence[XPostResult]): 推文列表。
         fetcher (Optional[Callable[[str], tuple[str, str]]]): 自定义下载器。
-        max_images (int): 附图上限。
+        max_images (Optional[int]): 附图上限，None 表示发送全部图片。
 
     Returns:
         None: 无返回值。
