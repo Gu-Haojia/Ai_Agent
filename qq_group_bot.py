@@ -1890,6 +1890,33 @@ class QQBotHandler(BaseHTTPRequestHandler):
             _send_to_group("\n-------------------------\n".join(lines))
             return True
 
+        if len(argv) >= 3 and argv[2].lower() == "test":
+            username = argv[1].strip()
+            if not username:
+                _send_to_group("用户名不能为空。")
+                return True
+            try:
+                items = monitor.latest(username, limit=1)
+            except RuntimeError as err:
+                _send_to_group(str(err))
+                return True
+            except AssertionError as err:
+                _send_to_group(f"测试拉取失败：{err}")
+                return True
+            except Exception as err:
+                _send_to_group(f"测试拉取失败（接口异常）：{err}")
+                return True
+            if not items:
+                _send_to_group(f"未获取到 @{username.lstrip('@')} 的最新推文。")
+                return True
+            message = monitor.format_lines(items, "NEW")
+            _send_x_images(message, items, "NEW")
+            print(
+                f"[XMonitor] 测试拉取 username='{username}' group={group_id} user={user_id}",
+                flush=True,
+            )
+            return True
+
         if len(argv) >= 3 and argv[2].lower() == "off":
             username = argv[1].strip()
             if not username:

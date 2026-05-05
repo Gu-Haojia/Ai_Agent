@@ -5,6 +5,8 @@ X 推文监控解析与图文消息拼装单元测试。
 from __future__ import annotations
 
 import unittest
+from types import SimpleNamespace
+from unittest import mock
 
 from src.x_monitor import (
     XMonitorManager,
@@ -13,6 +15,55 @@ from src.x_monitor import (
     _normalize_username,
 )
 from src.x_monitor_media import compose_x_media_message
+import qq_group_bot
+from qq_group_bot import QQBotHandler
+
+
+class FakeXMonitorManager(XMonitorManager):
+    """
+    用于命令测试的 X 监控管理器替身。
+    """
+
+    def __init__(self) -> None:
+        """
+        初始化调用记录。
+
+        Args:
+            None
+
+        Returns:
+            None
+
+        Raises:
+            None
+        """
+        self.latest_calls: list[tuple[str, int]] = []
+
+    def latest(self, username: str, limit: int = 5) -> list[XPostResult]:
+        """
+        返回固定的最新推文。
+
+        Args:
+            username (str): X 用户名。
+            limit (int): 返回数量上限。
+
+        Returns:
+            list[XPostResult]: 固定推文列表。
+
+        Raises:
+            None
+        """
+        self.latest_calls.append((username, limit))
+        return [
+            XPostResult(
+                username="kana_hanaiwa",
+                post_id="1",
+                text="latest post",
+                created_label="05-05 10:02",
+                url="https://x.com/kana_hanaiwa/status/1",
+                image_urls=("https://example.com/1.jpg",),
+            )
+        ]
 
 
 class XMonitorParseTests(unittest.TestCase):
@@ -167,6 +218,82 @@ class XMonitorMediaComposeTests(unittest.TestCase):
         self.assertEqual(len(payload), 1)
         self.assertEqual(payload[0]["type"], "text")
         self.assertEqual(payload[0]["data"]["text"], "plain")
+
+
+class QQBotXMonitorCommandTests(unittest.TestCase):
+    """
+    验证 QQBot 中隐藏的 X 推文监控测试命令。
+    """
+
+    def test_hidden_test_command_sends_latest_tweet_with_media(self) -> None:
+        """
+        /xmonitor 用户 test 应拉取最新一条推文并走图文发送路径。
+        """
+        handler = QQBotHandler.__new__(QQBotHandler)
+        old_cfg = getattr(QQBotHandler, "bot_cfg", None)
+        old_monitor = getattr(QQBotHandler, "x_monitor", None)
+        monitor = FakeXMonitorManager()
+        sent: list[dict[str, object]] = []
+
+        def fake_send_x_message_with_images(
+            api_base: str,
+            group_id: int,
+            access_token: str,
+            text: str,
+            items: list[XPostResult],
+        ) -> None:
+            """
+            记录 X 图文发送参数。
+
+            Args:
+                api_base (str): OneBot API 基地址。
+                group_id (int): 群号。
+                access_token (str): API Token。
+                text (str): 文本内容。
+                items (list[XPostResult]): 推文列表。
+
+            Returns:
+                None
+
+            Raises:
+                None
+            """
+            sent.append(
+                {
+                    "api_base": api_base,
+                    "group_id": group_id,
+                    "access_token": access_token,
+                    "text": text,
+                    "items": items,
+                }
+            )
+
+        try:
+            QQBotHandler.bot_cfg = SimpleNamespace(
+                api_base="http://onebot", access_token="token"
+            )
+            QQBotHandler.x_monitor = monitor
+            with mock.patch.object(
+                qq_group_bot,
+                "send_x_message_with_images",
+                side_effect=fake_send_x_message_with_images,
+            ), mock.patch.object(qq_group_bot, "_send_group_msg") as send_text:
+                handled = handler._handle_x_monitor_commands(
+                    123, 456, ["/xmonitor", "@kana_hanaiwa", "test"]
+                )
+            self.assertTrue(handled)
+            self.assertEqual(monitor.latest_calls, [("@kana_hanaiwa", 1)])
+            send_text.assert_not_called()
+            self.assertEqual(len(sent), 1)
+            self.assertEqual(sent[0]["api_base"], "http://onebot")
+            self.assertEqual(sent[0]["group_id"], 123)
+            self.assertIn("[X NEW] | @kana_hanaiwa", str(sent[0]["text"]))
+            self.assertIn("latest post", str(sent[0]["text"]))
+            self.assertEqual(len(sent[0]["items"]), 1)
+        finally:
+            QQBotHandler.x_monitor = old_monitor
+            if old_cfg is not None:
+                QQBotHandler.bot_cfg = old_cfg
 
 
 if __name__ == "__main__":
