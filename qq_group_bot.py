@@ -180,6 +180,12 @@ from sql_agent_cli_stream_plus import (
 from src.google_reverse_image_tool import ReverseImageUploader
 from src.meru_monitor import DEFAULT_LIMIT, MeruMonitorManager, MeruSearchResult
 from src.meru_watch_media import send_meru_message_with_images
+from src.x_monitor import (
+    DEFAULT_LIMIT as X_DEFAULT_LIMIT,
+    XMonitorManager,
+    XPostResult,
+)
+from src.x_monitor_media import send_x_message_with_images
 from image_storage import GeneratedImage, ImageStorageManager, StoredImage, StoredVideo
 from src.yt_dlp_downloader import YtDlpVideoDownloader
 from daily_task import (
@@ -689,6 +695,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
     agent: SQLCheckpointAgentStreamingPlus
     image_storage: Optional[ImageStorageManager] = None
     meru_monitor: Optional[MeruMonitorManager] = None
+    x_monitor: Optional[XMonitorManager] = None
     _post_lock: ClassVar[Lock] = Lock()  # 串行化处理 POST 请求
     # 群 -> 线程ID 映射，用于 /clear 后为群对话分配新线程
     _group_threads: dict[int, str] = {}
@@ -728,6 +735,22 @@ class QQBotHandler(BaseHTTPRequestHandler):
         monitor = cls.meru_monitor
         if not isinstance(monitor, MeruMonitorManager):
             raise AssertionError("Meru 监控器尚未初始化")
+        return monitor
+
+    @classmethod
+    def _require_x_monitor(cls) -> XMonitorManager:
+        """
+        获取 X 推文监控管理器。
+
+        Returns:
+            XMonitorManager: 已注入的监控管理器实例。
+
+        Raises:
+            AssertionError: 当监控管理器未初始化时抛出。
+        """
+        monitor = cls.x_monitor
+        if not isinstance(monitor, XMonitorManager):
+            raise AssertionError("X 推文监控器尚未初始化")
         return monitor
 
     @classmethod
@@ -1784,6 +1807,152 @@ class QQBotHandler(BaseHTTPRequestHandler):
 
         return False
 
+    def _handle_x_monitor_commands(
+        self, group_id: int, user_id: int, argv: list[str]
+    ) -> bool:
+        """
+        处理 X 固定账号推文监控命令。
+
+        Args:
+            group_id (int): 群号。
+            user_id (int): 用户号。
+            argv (list[str]): 解析后的命令参数。
+
+        Returns:
+            bool: True 表示已处理该命令。
+
+        Raises:
+            AssertionError: 当 group_id 或 user_id 非法时抛出。
+        """
+        assert group_id > 0, "group_id 必须为正整数"
+        assert user_id > 0, "user_id 必须为正整数"
+        if not argv or argv[0] != "/xmonitor":
+            return False
+        monitor = self._require_x_monitor()
+
+        def _send_to_group(text: str) -> None:
+            """
+            向当前群发送文本消息。
+
+            Args:
+                text (str): 要发送的文本。
+
+            Returns:
+                None: 无返回值。
+
+            Raises:
+                RuntimeError: 当 OneBot 发送失败时抛出。
+            """
+            assert text is not None
+            _send_group_msg(
+                self.bot_cfg.api_base, group_id, text, self.bot_cfg.access_token
+            )
+
+        def _send_x_images(
+            text: str, items: Sequence[XPostResult], tag: str
+        ) -> None:
+            """
+            向当前群发送 X 推文图文消息。
+
+            Args:
+                text (str): 文本内容。
+                items (Sequence[XPostResult]): 推文列表。
+                tag (str): 通知标签。
+
+            Returns:
+                None: 无返回值。
+
+            Raises:
+                RuntimeError: 当 OneBot 发送失败时抛出。
+            """
+            send_x_message_with_images(
+                self.bot_cfg.api_base,
+                group_id,
+                self.bot_cfg.access_token,
+                text,
+                items,
+            )
+
+        if len(argv) >= 2 and argv[1].lower() == "list":
+            tasks = monitor.list_watch_tasks()
+            if not tasks:
+                _send_to_group("当前没有运行中的 X 推文监控任务。")
+                return True
+            lines = ["【当前运行中的 X 推文监控任务】"]
+            for idx, rec in enumerate(tasks, 1):
+                username = rec.get("username") or "(未知)"
+                interval = rec.get("interval") or "?"
+                group = rec.get("group_id") or "未知"
+                creator = rec.get("user_id") or "未知"
+                lines.append(
+                    f"#{idx}\n·账号: @{username}\n·间隔: {interval}s\n·目标群: {group}\n·创建者: {creator}"
+                )
+            _send_to_group("\n-------------------------\n".join(lines))
+            return True
+
+        if len(argv) >= 3 and argv[2].lower() == "off":
+            username = argv[1].strip()
+            if not username:
+                _send_to_group("用户名不能为空。")
+                return True
+            try:
+                stopped = monitor.stop_watch(username, group_id=group_id)
+            except AssertionError as err:
+                _send_to_group(f"停止监控失败：{err}")
+                return True
+            msg = (
+                f"已停止当前群 @{username.lstrip('@')} 的 X 推文监控任务，共 {stopped} 个。"
+                if stopped
+                else f"当前群没有运行中的 @{username.lstrip('@')} X 推文监控任务。"
+            )
+            _send_to_group(msg)
+            print(
+                f"[XMonitor] 停止监控 username='{username}' group={group_id} user={user_id} count={stopped}",
+                flush=True,
+            )
+            return True
+
+        if len(argv) < 3:
+            _send_to_group("用法: /xmonitor 用户 间隔秒；停止：/xmonitor 用户 off；列表：/xmonitor list")
+            return True
+        username = argv[1].strip()
+        if not username:
+            _send_to_group("用户名不能为空。")
+            return True
+        try:
+            interval = float(argv[2])
+            assert interval > 0
+        except Exception:
+            _send_to_group("interval 必须为正数（秒）。")
+            return True
+        try:
+            monitor.start_watch(
+                username=username,
+                interval=interval,
+                limit_per_cycle=X_DEFAULT_LIMIT,
+                group_id=group_id,
+                user_id=user_id,
+                notify=_send_to_group,
+                notify_media=_send_x_images,
+            )
+        except RuntimeError as err:
+            _send_to_group(str(err))
+            return True
+        except AssertionError as err:
+            _send_to_group(f"启动监控失败：{err}")
+            return True
+        except Exception as err:
+            _send_to_group(f"启动监控失败（接口异常）：{err}")
+            return True
+        _send_to_group(
+            f"开始监控 @{username.lstrip('@')} 的新推文，轮询间隔 {interval:.0f} 秒。首次轮询只记录现有推文。"
+        )
+        print(
+            f"[XMonitor] 启动监控 username='{username}' interval={interval}s group={group_id} user={user_id}",
+            flush=True,
+        )
+        return True
+
     def _handle_commands(self, group_id: int, user_id: int, text: str) -> bool:
         """处理内部命令。
 
@@ -1825,7 +1994,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
             )
             return True
 
-        if cmd in {"/merusearch", "/meruwatch", "/merulist"}:
+        if cmd in {"/merusearch", "/meruwatch", "/merulist", "/xmonitor"}:
             try:
                 argv = shlex.split(text)
             except ValueError as err:
@@ -1836,7 +2005,10 @@ class QQBotHandler(BaseHTTPRequestHandler):
                     self.bot_cfg.access_token,
                 )
                 return True
-            handled = self._handle_meru_commands(group_id, user_id, argv)
+            if cmd == "/xmonitor":
+                handled = self._handle_x_monitor_commands(group_id, user_id, argv)
+            else:
+                handled = self._handle_meru_commands(group_id, user_id, argv)
             if handled:
                 return True
 
@@ -1858,7 +2030,9 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 "12) /apicheck - 检测当前模型 API 是否可用\n"
                 "13) /merusearch \"关键词\" [limit] - 查询 Meru 最新在售\n"
                 "14) /meruwatch \"关键词\" <间隔秒> [价格阈值] - 新品监控 (/meruwatch off 停止)\n"
-                "15) /dl <链接> - 下载视频并直接发送到群聊"
+                "15) /xmonitor 用户 间隔秒 - 监控 X 账号新推文 (/xmonitor 用户 off 停止)\n"
+                "16) /xmonitor list - 查看 X 推文监控任务\n"
+                "17) /dl <链接> - 下载视频并直接发送到群聊"
             )
             _send_group_msg(
                 self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
@@ -2190,6 +2364,9 @@ def main() -> None:
     meru_store = os.environ.get("MERU_WATCH_STORE", ".meru_watch.json")
     meru_monitor = MeruMonitorManager(store_path=meru_store)
     QQBotHandler.meru_monitor = meru_monitor
+    x_store = os.environ.get("X_MONITOR_STORE", ".x_monitor.json")
+    x_monitor = XMonitorManager(store_path=x_store)
+    QQBotHandler.x_monitor = x_monitor
 
     def _send_daily_text(group_id: int, text: str) -> None:
         """
@@ -2311,6 +2488,77 @@ def main() -> None:
     if restored:
         print(
             f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [Meru] 已恢复 {restored} 个监控任务",
+            flush=True,
+        )
+
+    def _build_x_callbacks(
+        group_id: int | None, _user_id: int | None, _record: dict[str, object]
+    ) -> tuple[
+        Callable[[str], None],
+        Callable[[str, Sequence[XPostResult], str], None],
+    ]:
+        """
+        为持久化的 X 推文监控任务构造通知回调。
+
+        Args:
+            group_id (int | None): 目标群号。
+            _user_id (int | None): 触发用户号（未使用）。
+            _record (dict[str, object]): 持久化记录（未使用）。
+
+        Returns:
+            tuple: 文本通知与携图通知回调。
+
+        Raises:
+            AssertionError: 当 group_id 缺失时抛出。
+        """
+        assert group_id is not None and int(group_id) > 0, "缺少 group_id，无法恢复监控任务"
+
+        def _notify(text: str) -> None:
+            """
+            向持久化目标群发送文本消息。
+
+            Args:
+                text (str): 要发送的文本。
+
+            Returns:
+                None: 无返回值。
+
+            Raises:
+                RuntimeError: 当 OneBot 发送失败时抛出。
+            """
+            _send_group_msg(bot_cfg.api_base, int(group_id), text, bot_cfg.access_token)
+
+        def _notify_media(
+            text: str, items: Sequence[XPostResult], tag: str
+        ) -> None:
+            """
+            向持久化目标群发送 X 推文图文消息。
+
+            Args:
+                text (str): 文本内容。
+                items (Sequence[XPostResult]): 推文列表。
+                tag (str): 通知标签。
+
+            Returns:
+                None: 无返回值。
+
+            Raises:
+                RuntimeError: 当 OneBot 发送失败时抛出。
+            """
+            send_x_message_with_images(
+                bot_cfg.api_base,
+                int(group_id),
+                bot_cfg.access_token,
+                text,
+                items,
+            )
+
+        return _notify, _notify_media
+
+    x_restored = x_monitor.restore_tasks(_build_x_callbacks)
+    if x_restored:
+        print(
+            f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [XMonitor] 已恢复 {x_restored} 个监控任务",
             flush=True,
         )
 
