@@ -23,7 +23,7 @@ USER_POSTS_URL = "https://api.x.com/2/users/{user_id}/tweets"
 POST_URL = "https://x.com/{username}/status/{post_id}"
 DEFAULT_LIMIT = 5
 DEFAULT_API_PAGE_SIZE = 10
-MAX_WATCH_TASKS = 5
+MAX_WATCH_TASKS = 20
 DEFAULT_STORE_PATH = ".x_monitor.json"
 USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9_]{1,15}$")
 
