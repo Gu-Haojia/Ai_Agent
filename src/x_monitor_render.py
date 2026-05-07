@@ -476,6 +476,7 @@ def clean_tweet_text(raw_tweet: Mapping[str, Any]) -> str:
         text = str(note_tweet["text"])
     else:
         text = str(raw_tweet.get("text") or "")
+    text = html.unescape(text)
     quoted_ids = _referenced_tweet_ids(raw_tweet, "quoted")
     entities = raw_tweet.get("entities") or {}
     assert isinstance(entities, Mapping), "X API entities 必须为对象"

@@ -228,6 +228,18 @@ class XMonitorRenderTests(unittest.TestCase):
         self.assertIn('<span class="mention">@valid_user</span>', html)
         self.assertNotIn('<span class="mention">@example</span>', html)
 
+    def test_parse_payload_unescapes_html_entities_before_rendering(self) -> None:
+        """
+        X API 正文中的 HTML entity 应还原为原始字符。
+        """
+        payload = build_render_payload(text="&lt;#いずみんち &amp; next")
+        tweets = XTweetPayloadParser().parse(payload)
+        self.assertEqual(tweets[0].text, "<#いずみんち & next")
+
+        html = render_tweet_html(tweets[0], BrowserRenderConfig(width=720))
+        self.assertIn("&lt;<span class=\"hashtag\">#いずみんち</span> &amp; next", html)
+        self.assertNotIn("&amp;lt;#いずみんち", html)
+
 
 class XMonitorMediaComposeTests(unittest.TestCase):
     """
