@@ -199,11 +199,11 @@ class XMonitorRenderTests(unittest.TestCase):
     验证 XMonitor 风格的 payload 解析与 HTML 渲染。
     """
 
-    def test_parse_payload_reads_author_media_and_hashtag(self) -> None:
+    def test_parse_payload_reads_author_media_and_text_entities(self) -> None:
         """
-        应解析作者、认证、媒体，并在 HTML 中标记 hashtag。
+        应解析作者、认证、媒体，并在 HTML 中标记正文 entity。
         """
-        payload = build_render_payload()
+        payload = build_render_payload(text="hello @official #XMonitor")
         tweets = XTweetPayloadParser().parse(payload)
         self.assertEqual(len(tweets), 1)
         self.assertEqual(tweets[0].author.name, "Kana Hanaiwa")
@@ -213,8 +213,20 @@ class XMonitorRenderTests(unittest.TestCase):
         html = render_tweet_html(tweets[0], BrowserRenderConfig(width=720))
         self.assertIn("Kana Hanaiwa", html)
         self.assertIn("@kana_hanaiwa", html)
+        self.assertIn('<span class="mention">@official</span>', html)
         self.assertIn('<span class="hashtag">#XMonitor</span>', html)
         self.assertIn("https://example.com/1.jpg", html)
+
+    def test_render_text_entities_does_not_mark_email_at(self) -> None:
+        """
+        邮箱中间的 @ 不应被识别为 X mention。
+        """
+        payload = build_render_payload(text="mail user@example.com @valid_user")
+        tweets = XTweetPayloadParser().parse(payload)
+        html = render_tweet_html(tweets[0], BrowserRenderConfig(width=720))
+        self.assertIn("user@example.com", html)
+        self.assertIn('<span class="mention">@valid_user</span>', html)
+        self.assertNotIn('<span class="mention">@example</span>', html)
 
 
 class XMonitorMediaComposeTests(unittest.TestCase):

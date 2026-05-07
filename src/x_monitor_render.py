@@ -11,7 +11,7 @@ import copy
 import html
 import re
 import unicodedata
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Optional
@@ -638,7 +638,8 @@ def render_tweet_html(
       white-space: pre-wrap;
       overflow-wrap: anywhere;
     }}
-    .hashtag {{
+    .hashtag,
+    .mention {{
       color: var(--blue);
     }}
     .compact .text {{
@@ -1140,7 +1141,7 @@ def _format_created_at(created_at: Optional[str], timezone_name: str) -> Optiona
 
 def _render_text_entities(text: str) -> str:
     """
-    渲染正文中的 hashtag。
+    渲染正文中的 hashtag 与 mention。
 
     Args:
         text (str): 推文正文。
@@ -1155,21 +1156,114 @@ def _render_text_entities(text: str) -> str:
     index = 0
     length = len(text)
     while index < length:
-        if text[index] != "#" or (index > 0 and _is_hashtag_char(text[index - 1])):
-            parts.append(_escape(text[index]))
-            index += 1
-            continue
-        end = index + 1
-        while end < length and _is_hashtag_char(text[end]):
-            end += 1
-        if end == index + 1:
-            parts.append("#")
-            index += 1
-            continue
-        tag = _escape(text[index:end])
-        parts.append(f'<span class="hashtag">{tag}</span>')
-        index = end
+        if text[index] == "#" and _is_entity_start(text, index, _is_hashtag_char):
+            end = _find_entity_end(text, index, _is_hashtag_char)
+            if end > index + 1:
+                tag = _escape(text[index:end])
+                parts.append(f'<span class="hashtag">{tag}</span>')
+                index = end
+                continue
+        if text[index] == "@" and _is_entity_start(text, index, _is_mention_char):
+            end = _find_mention_end(text, index)
+            if end > index + 1:
+                mention = _escape(text[index:end])
+                parts.append(f'<span class="mention">{mention}</span>')
+                index = end
+                continue
+        parts.append(_escape(text[index]))
+        index += 1
     return "".join(parts)
+
+
+def _is_entity_start(
+    text: str, index: int, char_checker: Callable[[str], bool]
+) -> bool:
+    """
+    判断当前位置是否可以开始一个文本 entity。
+
+    Args:
+        text (str): 推文正文。
+        index (int): 候选起始位置。
+        char_checker (Callable[[str], bool]): entity 字符判断函数。
+
+    Returns:
+        bool: 可以作为 entity 起点时为 True。
+
+    Raises:
+        AssertionError: 当 index 越界时抛出。
+    """
+    assert 0 <= index < len(text), "index 必须位于文本范围内"
+    if index == 0:
+        return True
+    return not char_checker(text[index - 1])
+
+
+def _find_entity_end(
+    text: str, index: int, char_checker: Callable[[str], bool]
+) -> int:
+    """
+    查找文本 entity 的结束位置。
+
+    Args:
+        text (str): 推文正文。
+        index (int): entity 起始符位置。
+        char_checker (Callable[[str], bool]): entity 字符判断函数。
+
+    Returns:
+        int: entity 结束位置。
+
+    Raises:
+        AssertionError: 当 index 越界时抛出。
+    """
+    assert 0 <= index < len(text), "index 必须位于文本范围内"
+    end = index + 1
+    while end < len(text) and char_checker(text[end]):
+        end += 1
+    return end
+
+
+def _find_mention_end(text: str, index: int) -> int:
+    """
+    查找 X mention 的结束位置。
+
+    Args:
+        text (str): 推文正文。
+        index (int): @ 符号位置。
+
+    Returns:
+        int: mention 结束位置。
+
+    Raises:
+        AssertionError: 当 index 越界时抛出。
+    """
+    end = _find_entity_end(text, index, _is_mention_char)
+    if end - index > 16:
+        return index + 16
+    return end
+
+
+def _is_mention_char(char: str) -> bool:
+    """
+    判断字符是否属于 X 用户名。
+
+    Args:
+        char (str): 单个字符。
+
+    Returns:
+        bool: 属于用户名时为 True。
+
+    Raises:
+        None: 本函数不主动抛出异常。
+    """
+    if char == "_":
+        return True
+    if "0" <= char <= "9":
+        return True
+    if "A" <= char <= "Z":
+        return True
+    if "a" <= char <= "z":
+        return True
+    return False
 
 
 def _is_hashtag_char(char: str) -> bool:
