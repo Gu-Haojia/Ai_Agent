@@ -28,16 +28,12 @@ class XRenderedUser:
         name (str): 用户显示名。
         username (str): 用户名。
         profile_image_url (Optional[str]): 头像 URL。
-        verified (bool): 是否为认证用户。
-        verified_type (Optional[str]): 认证类型。
     """
 
     user_id: str
     name: str
     username: str
     profile_image_url: Optional[str] = None
-    verified: bool = False
-    verified_type: Optional[str] = None
 
     @property
     def handle(self) -> str:
@@ -323,8 +319,6 @@ class XTweetPayloadParser:
             name=str(raw.get("name") or raw.get("username") or "Unknown"),
             username=str(raw.get("username") or "unknown"),
             profile_image_url=_optional_str(raw.get("profile_image_url")),
-            verified=bool(raw.get("verified") or False),
-            verified_type=_optional_str(raw.get("verified_type")),
         )
 
     def _parse_media(self, raw: Mapping[str, Any]) -> XRenderedMedia:
@@ -616,19 +610,6 @@ def render_tweet_html(
     .compact .handle,
     .compact .timestamp {{
       font-size: 16px;
-    }}
-    .verified {{
-      flex: none;
-      width: 16px;
-      height: 16px;
-      border-radius: 999px;
-      background: var(--blue);
-      color: #fff;
-      display: inline-grid;
-      place-items: center;
-      font-size: 11px;
-      font-weight: 800;
-      transform: translateY(2px);
     }}
     .text {{
       margin-top: 6px;
@@ -999,13 +980,11 @@ def _render_header(tweet: XRenderedTweet, config: BrowserRenderConfig) -> str:
         ValueError: 当推文时间或时区非法时抛出。
     """
     user = tweet.author
-    verified = '<span class="verified">✓</span>' if user.verified else ""
     timestamp = _format_created_at(tweet.created_at, config.timezone)
     time_html = f'<span class="timestamp">· {_escape(timestamp)}</span>' if timestamp else ""
     return (
         '<div class="header">'
         f'<span class="name">{_escape(user.name)}</span>'
-        f"{verified}"
         f'<span class="handle">{_escape(user.handle)}</span>'
         f"{time_html}"
         "</div>"

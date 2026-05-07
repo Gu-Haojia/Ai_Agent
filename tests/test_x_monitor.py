@@ -56,7 +56,6 @@ def build_render_payload(
                     "name": "Kana Hanaiwa",
                     "username": "kana_hanaiwa",
                     "profile_image_url": "https://example.com/avatar_normal.jpg",
-                    "verified": True,
                 }
             ],
             "media": [
@@ -201,13 +200,12 @@ class XMonitorRenderTests(unittest.TestCase):
 
     def test_parse_payload_reads_author_media_and_text_entities(self) -> None:
         """
-        应解析作者、认证、媒体，并在 HTML 中标记正文 entity。
+        应解析作者、媒体，并在 HTML 中标记正文 entity。
         """
         payload = build_render_payload(text="hello @official #XMonitor")
         tweets = XTweetPayloadParser().parse(payload)
         self.assertEqual(len(tweets), 1)
         self.assertEqual(tweets[0].author.name, "Kana Hanaiwa")
-        self.assertTrue(tweets[0].author.verified)
         self.assertEqual(tweets[0].media[0].best_url, "https://example.com/1.jpg")
 
         html = render_tweet_html(tweets[0], BrowserRenderConfig(width=720))

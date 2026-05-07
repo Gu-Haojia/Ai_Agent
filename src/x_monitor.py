@@ -311,7 +311,7 @@ class XAPIClient:
                 "referenced_tweets.id.author_id,"
                 "referenced_tweets.id.attachments.media_keys"
             ),
-            "user.fields": "id,name,username,profile_image_url,verified,verified_type",
+            "user.fields": "id,name,username,profile_image_url",
             "media.fields": "media_key,type,url,preview_image_url,width,height,alt_text",
             "exclude": "retweets",
         }
