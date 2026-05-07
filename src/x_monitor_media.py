@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import sys
 import time
 from typing import Callable, Optional, Sequence
@@ -17,8 +18,12 @@ from urllib.request import Request, urlopen
 import requests
 
 from src.x_monitor import XPostResult
+from src.x_monitor_render import BrowserTweetRenderer, XRenderedTweet, XTweetPayloadParser
 
 MessagePayload = Sequence[dict[str, dict[str, str]]] | str
+RenderedImageFetcher = Callable[[XPostResult], tuple[str, str]]
+LEGACY_MEDIA_ENV = "X_MONITOR_LEGACY_MEDIA"
+INCLUDE_TEXT_ENV = "X_MONITOR_INCLUDE_TEXT"
 
 
 def _guess_suffix(mime: str) -> str:
@@ -43,6 +48,24 @@ def _guess_suffix(mime: str) -> str:
         "image/gif": "gif",
     }
     return mapping.get(normalized, "jpg")
+
+
+def _env_flag(name: str) -> bool:
+    """
+    判断环境变量是否开启。
+
+    Args:
+        name (str): 环境变量名。
+
+    Returns:
+        bool: 变量值为 1/true/yes/on 时返回 True。
+
+    Raises:
+        AssertionError: 当环境变量名为空时抛出。
+    """
+    assert name.strip(), "环境变量名不能为空"
+    value = os.environ.get(name, "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
 
 
 def _send_group_msg(
@@ -137,14 +160,136 @@ def _download_as_base64(
     return b64, mime or "image/jpeg"
 
 
-def compose_x_media_message(
+class XPostImagePayloadBuilder:
+    """
+    将 XPostResult 渲染为 OneBot 可发送的 base64 图片。
+    """
+
+    def __init__(
+        self,
+        parser: Optional[XTweetPayloadParser] = None,
+        renderer: Optional[BrowserTweetRenderer] = None,
+    ) -> None:
+        """
+        初始化推文图片构建器。
+
+        Args:
+            parser (Optional[XTweetPayloadParser]): X API payload 解析器。
+            renderer (Optional[BrowserTweetRenderer]): 推文截图渲染器。
+
+        Returns:
+            None: 构造函数无返回值。
+
+        Raises:
+            None: 本方法不主动抛出异常。
+        """
+        self._parser = parser or XTweetPayloadParser()
+        self._renderer = renderer or BrowserTweetRenderer()
+
+    def render(self, item: XPostResult) -> tuple[str, str]:
+        """
+        将单条推文渲染为 base64 PNG。
+
+        Args:
+            item (XPostResult): 推文结果。
+
+        Returns:
+            tuple[str, str]: base64 图片内容与 MIME。
+
+        Raises:
+            AssertionError: 当推文缺少原始 payload 或无法匹配推文 ID 时抛出。
+            RuntimeError: 当浏览器截图失败时抛出。
+        """
+        payload = item.source_payload
+        assert payload is not None, "生成推文图片需要 source_payload"
+        tweets = self._parser.parse(payload)
+        tweet = self._find_tweet(tweets, item.post_id)
+        png = self._renderer.render_to_png_bytes(tweet)
+        assert png, "生成的推文图片不能为空"
+        return base64.b64encode(png).decode("ascii"), "image/png"
+
+    def _find_tweet(
+        self, tweets: Sequence[XRenderedTweet], post_id: str
+    ) -> XRenderedTweet:
+        """
+        从解析结果中查找指定推文。
+
+        Args:
+            tweets (Sequence[XRenderedTweet]): 解析后的推文集合。
+            post_id (str): 目标推文 ID。
+
+        Returns:
+            XRenderedTweet: 匹配的推文。
+
+        Raises:
+            AssertionError: 当推文 ID 为空或没有匹配结果时抛出。
+        """
+        normalized = post_id.strip()
+        assert normalized, "post_id 不能为空"
+        for tweet in tweets:
+            if tweet.tweet_id == normalized:
+                return tweet
+        raise AssertionError(f"source_payload 中缺少推文 {normalized}")
+
+
+def _compose_rendered_tweet_message(
+    text: str,
+    items: Sequence[XPostResult],
+    renderer: Optional[RenderedImageFetcher] = None,
+    include_text: Optional[bool] = None,
+) -> MessagePayload:
+    """
+    生成解析后推文截图消息段。
+
+    Args:
+        text (str): 原文本通知内容。
+        items (Sequence[XPostResult]): 推文列表。
+        renderer (Optional[RenderedImageFetcher]): 可注入图片渲染器。
+        include_text (Optional[bool]): 是否附带原文本，None 时读取环境变量。
+
+    Returns:
+        MessagePayload: OneBot 消息体。
+
+    Raises:
+        AssertionError: 当推文列表或渲染结果为空时抛出。
+    """
+    assert items, "推文列表不能为空"
+    should_include_text = (
+        _env_flag(INCLUDE_TEXT_ENV) if include_text is None else include_text
+    )
+    segments: list[dict[str, dict[str, str]]] = []
+    if should_include_text:
+        assert text.strip(), "文本不可为空"
+        segments.append({"type": "text", "data": {"text": text}})
+    render = renderer or XPostImagePayloadBuilder().render
+    ts = int(time.time())
+    for idx, item in enumerate(items, 1):
+        b64, mime = render(item)
+        assert b64.strip(), "推文图片 base64 不能为空"
+        assert mime.startswith("image/"), "推文图片 MIME 必须为 image/*"
+        suffix = _guess_suffix(mime)
+        segments.append(
+            {
+                "type": "image",
+                "data": {
+                    "file": f"base64://{b64}",
+                    "name": f"x_rendered_{ts}_{idx}.{suffix}",
+                    "cache": "0",
+                },
+            }
+        )
+    assert segments, "消息段不能为空"
+    return segments
+
+
+def _compose_legacy_media_message(
     text: str,
     items: Sequence[XPostResult],
     fetcher: Optional[Callable[[str], tuple[str, str]]] = None,
     max_images: Optional[int] = None,
 ) -> MessagePayload:
     """
-    生成包含图片的 OneBot 消息段列表。
+    生成旧版文本与原推文图片消息段。
 
     Args:
         text (str): 文本内容。
@@ -153,7 +298,7 @@ def compose_x_media_message(
         max_images (Optional[int]): 最多附图数量，None 表示发送全部图片。
 
     Returns:
-        MessagePayload: 可直接发送的消息体。
+        MessagePayload: OneBot 消息体。
 
     Raises:
         AssertionError: 当文本为空时抛出。
@@ -170,7 +315,7 @@ def compose_x_media_message(
     for idx, url in enumerate(urls, 1):
         try:
             b64, mime = fetch(url)
-        except Exception as err:
+        except (requests.RequestException, ValueError, RuntimeError) as err:
             sys.stderr.write(f"[XMonitor] 图片下载失败 {url}: {err}\n")
             continue
         suffix = _guess_suffix(mime)
@@ -187,6 +332,40 @@ def compose_x_media_message(
     return segments
 
 
+def compose_x_media_message(
+    text: str,
+    items: Sequence[XPostResult],
+    fetcher: Optional[Callable[[str], tuple[str, str]]] = None,
+    max_images: Optional[int] = None,
+    renderer: Optional[RenderedImageFetcher] = None,
+    include_text: Optional[bool] = None,
+) -> MessagePayload:
+    """
+    生成 X 推文监控 OneBot 消息段列表。
+
+    Args:
+        text (str): 文本内容。
+        items (Sequence[XPostResult]): 推文列表。
+        fetcher (Optional[Callable[[str], tuple[str, str]]]): 旧版原图下载器。
+        max_images (Optional[int]): 旧版原图附图数量上限。
+        renderer (Optional[RenderedImageFetcher]): 解析后截图渲染器。
+        include_text (Optional[bool]): 是否附带文本，None 时读取环境变量。
+
+    Returns:
+        MessagePayload: 可直接发送的消息体。
+
+    Raises:
+        AssertionError: 当推文列表或消息内容为空时抛出。
+    """
+    if _env_flag(LEGACY_MEDIA_ENV):
+        return _compose_legacy_media_message(
+            text, items, fetcher=fetcher, max_images=max_images
+        )
+    return _compose_rendered_tweet_message(
+        text, items, renderer=renderer, include_text=include_text
+    )
+
+
 def send_x_message_with_images(
     api_base: str,
     group_id: int,
@@ -195,6 +374,8 @@ def send_x_message_with_images(
     items: Sequence[XPostResult],
     fetcher: Optional[Callable[[str], tuple[str, str]]] = None,
     max_images: Optional[int] = None,
+    renderer: Optional[RenderedImageFetcher] = None,
+    include_text: Optional[bool] = None,
 ) -> None:
     """
     发送携带图片的 X 推文监控消息。
@@ -207,6 +388,8 @@ def send_x_message_with_images(
         items (Sequence[XPostResult]): 推文列表。
         fetcher (Optional[Callable[[str], tuple[str, str]]]): 自定义下载器。
         max_images (Optional[int]): 附图上限，None 表示发送全部图片。
+        renderer (Optional[RenderedImageFetcher]): 解析后截图渲染器。
+        include_text (Optional[bool]): 是否附带文本，None 时读取环境变量。
 
     Returns:
         None: 无返回值。
@@ -215,6 +398,11 @@ def send_x_message_with_images(
         RuntimeError: 当 OneBot 发送失败时抛出。
     """
     payload = compose_x_media_message(
-        text, items, fetcher=fetcher, max_images=max_images
+        text,
+        items,
+        fetcher=fetcher,
+        max_images=max_images,
+        renderer=renderer,
+        include_text=include_text,
     )
     _send_group_msg(api_base, group_id, payload, access_token)

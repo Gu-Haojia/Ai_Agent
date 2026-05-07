@@ -15,8 +15,61 @@ from src.x_monitor import (
     _normalize_username,
 )
 from src.x_monitor_media import compose_x_media_message
+from src.x_monitor_render import BrowserRenderConfig, XTweetPayloadParser, render_tweet_html
 import qq_group_bot
 from qq_group_bot import QQBotHandler
+
+
+def build_render_payload(
+    post_id: str = "1",
+    text: str = "hello #XMonitor",
+    image_url: str = "https://example.com/1.jpg",
+) -> dict[str, object]:
+    """
+    构造用于推文图片渲染测试的 X API payload。
+
+    Args:
+        post_id (str): 推文 ID。
+        text (str): 推文正文。
+        image_url (str): 推文图片 URL。
+
+    Returns:
+        dict[str, object]: X API 风格响应。
+
+    Raises:
+        None: 本函数不主动抛出异常。
+    """
+    return {
+        "data": [
+            {
+                "id": post_id,
+                "text": text,
+                "author_id": "10",
+                "created_at": "2026-05-05T01:02:03.000Z",
+                "attachments": {"media_keys": ["3_1"]},
+            }
+        ],
+        "includes": {
+            "users": [
+                {
+                    "id": "10",
+                    "name": "Kana Hanaiwa",
+                    "username": "kana_hanaiwa",
+                    "profile_image_url": "https://example.com/avatar_normal.jpg",
+                    "verified": True,
+                }
+            ],
+            "media": [
+                {
+                    "media_key": "3_1",
+                    "type": "photo",
+                    "url": image_url,
+                    "width": 1200,
+                    "height": 900,
+                }
+            ],
+        },
+    }
 
 
 class FakeXMonitorManager(XMonitorManager):
@@ -62,6 +115,7 @@ class FakeXMonitorManager(XMonitorManager):
                 created_label="05-05 10:02",
                 url="https://x.com/kana_hanaiwa/status/1",
                 image_urls=("https://example.com/1.jpg",),
+                source_payload=build_render_payload(text="latest post"),
             )
         ]
 
@@ -136,7 +190,31 @@ class XMonitorParseTests(unittest.TestCase):
             results[0].url,
             "https://x.com/kana_hanaiwa/status/1919610000000000001",
         )
+        self.assertIs(results[0].source_payload, payload)
         self.assertRegex(results[0].created_label, r"\d{2}-\d{2} \d{2}:\d{2}")
+
+
+class XMonitorRenderTests(unittest.TestCase):
+    """
+    验证 XMonitor 风格的 payload 解析与 HTML 渲染。
+    """
+
+    def test_parse_payload_reads_author_media_and_hashtag(self) -> None:
+        """
+        应解析作者、认证、媒体，并在 HTML 中标记 hashtag。
+        """
+        payload = build_render_payload()
+        tweets = XTweetPayloadParser().parse(payload)
+        self.assertEqual(len(tweets), 1)
+        self.assertEqual(tweets[0].author.name, "Kana Hanaiwa")
+        self.assertTrue(tweets[0].author.verified)
+        self.assertEqual(tweets[0].media[0].best_url, "https://example.com/1.jpg")
+
+        html = render_tweet_html(tweets[0], BrowserRenderConfig(width=720))
+        self.assertIn("Kana Hanaiwa", html)
+        self.assertIn("@kana_hanaiwa", html)
+        self.assertIn('<span class="hashtag">#XMonitor</span>', html)
+        self.assertIn("https://example.com/1.jpg", html)
 
 
 class XMonitorMediaComposeTests(unittest.TestCase):
@@ -144,9 +222,9 @@ class XMonitorMediaComposeTests(unittest.TestCase):
     验证 X 推文 OneBot 图文消息拼装。
     """
 
-    def test_compose_with_images(self) -> None:
+    def test_compose_renders_tweet_image_by_default(self) -> None:
         """
-        有图片时应生成 text + image 消息段。
+        默认应发送解析后的推文截图，不直接附带文本。
         """
         items = [
             XPostResult(
@@ -156,15 +234,16 @@ class XMonitorMediaComposeTests(unittest.TestCase):
                 created_label="05-05 10:02",
                 url="https://x.com/kana_hanaiwa/status/1",
                 image_urls=("https://example.com/1.jpg",),
+                source_payload=build_render_payload(),
             )
         ]
 
-        def fake_fetch(url: str) -> tuple[str, str]:
+        def fake_render(item: XPostResult) -> tuple[str, str]:
             """
-            返回固定图片内容。
+            返回固定渲染图。
 
             Args:
-                url (str): 图片 URL。
+                item (XPostResult): 推文结果。
 
             Returns:
                 tuple[str, str]: base64 与 MIME。
@@ -172,20 +251,62 @@ class XMonitorMediaComposeTests(unittest.TestCase):
             Raises:
                 None: 本函数不抛出异常。
             """
-            return "Zg==", "image/webp"
+            self.assertEqual(item.post_id, "1")
+            return "Zg==", "image/png"
+
+        payload = compose_x_media_message("hello", items, renderer=fake_render)
+        self.assertIsInstance(payload, list)
+        self.assertEqual(len(payload), 1)
+        self.assertEqual(payload[0]["type"], "image")
+        self.assertTrue(payload[0]["data"]["file"].startswith("base64://Zg=="))
+        self.assertEqual(payload[0]["data"]["cache"], "0")
+
+    def test_compose_can_include_text_when_enabled(self) -> None:
+        """
+        开启文本选项时，应生成 text + rendered image 消息段。
+        """
+        items = [
+            XPostResult(
+                username="kana_hanaiwa",
+                post_id="1",
+                text="post",
+                created_label="05-05 10:02",
+                url="https://x.com/kana_hanaiwa/status/1",
+                image_urls=("https://example.com/1.jpg",),
+                source_payload=build_render_payload(),
+            )
+        ]
+
+        def fake_render(item: XPostResult) -> tuple[str, str]:
+            """
+            返回固定渲染图。
+
+            Args:
+                item (XPostResult): 推文结果。
+
+            Returns:
+                tuple[str, str]: base64 与 MIME。
+
+            Raises:
+                None: 本函数不抛出异常。
+            """
+            self.assertEqual(item.username, "kana_hanaiwa")
+            return "Zg==", "image/png"
 
         payload = compose_x_media_message(
-            "hello", items, fetcher=fake_fetch, max_images=1
+            "hello", items, renderer=fake_render, include_text=True
         )
         self.assertIsInstance(payload, list)
         self.assertEqual(len(payload), 2)
-        self.assertEqual(payload[0]["type"], "text")
-        self.assertEqual(payload[1]["type"], "image")
-        self.assertTrue(payload[1]["data"]["file"].startswith("base64://Zg=="))
+        self.assertEqual(
+            [segment["type"] for segment in payload],
+            ["text", "image"],
+        )
+        self.assertEqual(payload[0]["data"]["text"], "hello")
 
-    def test_compose_sends_all_images_from_same_post(self) -> None:
+    def test_legacy_env_uses_original_text_and_media(self) -> None:
         """
-        同一条推文包含多张图时，应全部生成 image 段。
+        旧版环境变量开启时，应沿用文本 + 原图发送模式。
         """
         items = [
             XPostResult(
@@ -197,9 +318,8 @@ class XMonitorMediaComposeTests(unittest.TestCase):
                 image_urls=(
                     "https://example.com/1.jpg",
                     "https://example.com/2.jpg",
-                    "https://example.com/3.jpg",
-                    "https://example.com/4.jpg",
                 ),
+                source_payload=build_render_payload(),
             )
         ]
         fetched: list[str] = []
@@ -220,58 +340,19 @@ class XMonitorMediaComposeTests(unittest.TestCase):
             fetched.append(url)
             return "Zg==", "image/jpeg"
 
-        payload = compose_x_media_message("hello", items, fetcher=fake_fetch)
+        with mock.patch.dict("os.environ", {"X_MONITOR_LEGACY_MEDIA": "1"}):
+            payload = compose_x_media_message("hello", items, fetcher=fake_fetch)
         self.assertIsInstance(payload, list)
-        self.assertEqual(len(payload), 5)
-        self.assertEqual(
-            [segment["type"] for segment in payload],
-            ["text", "image", "image", "image", "image"],
-        )
+        self.assertEqual(len(payload), 3)
+        self.assertEqual(payload[0]["type"], "text")
+        self.assertEqual(payload[1]["type"], "image")
         self.assertEqual(
             fetched,
             [
                 "https://example.com/1.jpg",
                 "https://example.com/2.jpg",
-                "https://example.com/3.jpg",
-                "https://example.com/4.jpg",
             ],
         )
-
-    def test_compose_without_images_returns_text_segment(self) -> None:
-        """
-        无图片时应只生成文本消息段。
-        """
-        items = [
-            XPostResult(
-                username="kana_hanaiwa",
-                post_id="2",
-                text="plain",
-                created_label="05-05 10:03",
-                url="https://x.com/kana_hanaiwa/status/2",
-                image_urls=(),
-            )
-        ]
-
-        def fail_fetch(url: str) -> tuple[str, str]:
-            """
-            禁止在无图片场景触发下载。
-
-            Args:
-                url (str): 图片 URL。
-
-            Returns:
-                tuple[str, str]: 永远不会返回。
-
-            Raises:
-                AssertionError: 一旦被调用即抛出。
-            """
-            raise AssertionError("不应触发下载")
-
-        payload = compose_x_media_message("plain", items, fetcher=fail_fetch)
-        self.assertIsInstance(payload, list)
-        self.assertEqual(len(payload), 1)
-        self.assertEqual(payload[0]["type"], "text")
-        self.assertEqual(payload[0]["data"]["text"], "plain")
 
 
 class QQBotXMonitorCommandTests(unittest.TestCase):

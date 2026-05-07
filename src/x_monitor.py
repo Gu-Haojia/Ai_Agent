@@ -193,6 +193,7 @@ class XPostResult:
         created_label (str): 本地时间字符串。
         url (str): 推文链接。
         image_urls (tuple[str, ...]): 推文关联图片 URL。
+        source_payload (Optional[dict[str, object]]): 生成图片所需的原始 X API 响应。
     """
 
     username: str
@@ -201,6 +202,7 @@ class XPostResult:
     created_label: str
     url: str
     image_urls: tuple[str, ...] = ()
+    source_payload: Optional[dict[str, object]] = None
 
     def to_line(self, prefix: str = "") -> str:
         """
@@ -300,8 +302,16 @@ class XAPIClient:
         assert 5 <= max_results <= 100, "max_results 必须在 5 到 100 之间"
         params: dict[str, str] = {
             "max_results": str(max_results),
-            "tweet.fields": "attachments,author_id,created_at,public_metrics,referenced_tweets",
-            "expansions": "attachments.media_keys",
+            "tweet.fields": (
+                "attachments,author_id,created_at,entities,public_metrics,"
+                "referenced_tweets"
+            ),
+            "expansions": (
+                "author_id,attachments.media_keys,referenced_tweets.id,"
+                "referenced_tweets.id.author_id,"
+                "referenced_tweets.id.attachments.media_keys"
+            ),
+            "user.fields": "id,name,username,profile_image_url,verified,verified_type",
             "media.fields": "media_key,type,url,preview_image_url,width,height,alt_text",
             "exclude": "retweets",
         }
@@ -875,6 +885,7 @@ class XMonitorManager:
                     created_label=created_label,
                     url=POST_URL.format(username=username, post_id=post_id),
                     image_urls=image_urls,
+                    source_payload=payload,
                 )
             )
         return results
