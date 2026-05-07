@@ -214,6 +214,8 @@ class XMonitorRenderTests(unittest.TestCase):
         self.assertIn('<span class="mention">@official</span>', html)
         self.assertIn('<span class="hashtag">#XMonitor</span>', html)
         self.assertIn("https://example.com/1.jpg", html)
+        self.assertIn('"Noto Sans CJK JP"', html)
+        self.assertIn('"Noto Color Emoji"', html)
 
     def test_render_text_entities_does_not_mark_email_at(self) -> None:
         """

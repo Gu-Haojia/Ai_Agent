@@ -5,11 +5,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     TZ=UTC
 
-# 安装系统依赖与 psql 工具，便于健康检查；tzdata 用于时区同步
+# 安装系统依赖、字体与 psql 工具，便于健康检查；tzdata 用于时区同步
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tzdata \
     build-essential \
     ffmpeg \
+    fontconfig \
+    fonts-liberation \
+    fonts-noto-cjk \
+    fonts-noto-color-emoji \
     libpq-dev \
     postgresql-client \
   && rm -rf /var/lib/apt/lists/*
