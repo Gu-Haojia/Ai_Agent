@@ -19,6 +19,8 @@ WORKDIR /app
 # 仅拷贝依赖清单，保持镜像精简
 COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
+# X 推文截图渲染依赖 Playwright Chromium。
+RUN python -m playwright install --with-deps chromium
 
 # 提前放入入口脚本，运行时仍会被挂载的项目代码覆盖
 COPY docker/entrypoint.sh /app/docker/entrypoint.sh

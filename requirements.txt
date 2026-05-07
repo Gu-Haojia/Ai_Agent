@@ -24,6 +24,7 @@ filetype==1.2.0
 frozendict==2.4.6
 frozenlist==1.7.0
 geojson==3.2.0
+greenlet==3.5.0
 google-ai-generativelanguage==0.9.0
 google-api-core==2.25.1
 google-auth==2.48.0
@@ -82,6 +83,7 @@ peewee==3.18.2
 pillow==12.0.0
 PixivPy==3.7.0
 platformdirs==4.4.0
+playwright==1.59.0
 pluggy==1.6.0
 propcache==0.3.2
 proto-plus==1.26.1
@@ -98,6 +100,7 @@ pydantic_core==2.33.2
 Pygments==2.19.2
 PyJWT==2.10.1
 pylatexenc==2.10
+pyee==13.0.1
 pyowm==3.5.0
 pyparsing==3.2.5
 PySocks==1.7.1
