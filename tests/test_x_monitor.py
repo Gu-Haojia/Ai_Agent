@@ -14,7 +14,7 @@ from src.x_monitor import (
     _collect_post_image_urls,
     _normalize_username,
 )
-from src.x_monitor_media import compose_x_media_message
+from src.x_monitor_media import _send_group_msg, compose_x_media_message
 from src.x_monitor_render import BrowserRenderConfig, XTweetPayloadParser, render_tweet_html
 import qq_group_bot
 from qq_group_bot import QQBotHandler
@@ -245,6 +245,59 @@ class XMonitorMediaComposeTests(unittest.TestCase):
     """
     验证 X 推文 OneBot 图文消息拼装。
     """
+
+    def test_send_group_msg_uses_sixty_second_timeout(self) -> None:
+        """
+        OneBot 发送应等待 60 秒，减少图片消息响应慢导致的误判超时。
+        """
+
+        class FakeResponse:
+            """
+            模拟 OneBot HTTP 响应。
+            """
+
+            status = 200
+
+            def __enter__(self) -> "FakeResponse":
+                """
+                进入上下文管理器。
+
+                Returns:
+                    FakeResponse: 当前响应对象。
+
+                Raises:
+                    None: 本方法不主动抛出异常。
+                """
+                return self
+
+            def __exit__(
+                self,
+                exc_type: object,
+                exc: object,
+                traceback: object,
+            ) -> None:
+                """
+                退出上下文管理器。
+
+                Args:
+                    exc_type (object): 异常类型。
+                    exc (object): 异常实例。
+                    traceback (object): 异常栈。
+
+                Returns:
+                    None: 无返回值。
+
+                Raises:
+                    None: 本方法不主动抛出异常。
+                """
+                return None
+
+        with mock.patch(
+            "src.x_monitor_media.urlopen", return_value=FakeResponse()
+        ) as mocked:
+            _send_group_msg("http://onebot", 123, "hello", "token")
+
+        self.assertEqual(mocked.call_args.kwargs["timeout"], 60)
 
     def test_compose_renders_tweet_image_by_default(self) -> None:
         """
