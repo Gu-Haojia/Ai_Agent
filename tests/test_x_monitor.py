@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from src.x_monitor import (
+    DEFAULT_LIMIT,
     XMonitorManager,
     XPostResult,
     _collect_post_image_urls,
@@ -191,6 +192,85 @@ class XMonitorParseTests(unittest.TestCase):
         )
         self.assertIs(results[0].source_payload, payload)
         self.assertRegex(results[0].created_label, r"\d{2}-\d{2} \d{2}:\d{2}")
+
+    def test_latest_uses_default_limit_as_minimum_page_size(self) -> None:
+        """
+        latest 请求少量推文时，API 拉取数量应使用统一默认值 5。
+        """
+
+        class FakeClient:
+            """
+            记录 X API 调用参数的客户端替身。
+            """
+
+            def __init__(self) -> None:
+                """
+                初始化调用记录。
+
+                Args:
+                    None
+
+                Returns:
+                    None
+
+                Raises:
+                    None
+                """
+                self.max_results_calls: list[int] = []
+
+            def get_user_profile(self, username: str) -> SimpleNamespace:
+                """
+                返回固定用户资料。
+
+                Args:
+                    username (str): X 用户名。
+
+                Returns:
+                    SimpleNamespace: 含 user_id 与 username 的资料对象。
+
+                Raises:
+                    None
+                """
+                return SimpleNamespace(user_id="10", username=username.lstrip("@"))
+
+            def get_user_posts(
+                self,
+                user_id: str,
+                max_results: int = DEFAULT_LIMIT,
+                since_id: str | None = None,
+            ) -> dict[str, object]:
+                """
+                返回固定推文响应并记录 max_results。
+
+                Args:
+                    user_id (str): X 用户 ID。
+                    max_results (int): API 拉取数量。
+                    since_id (str | None): 增量拉取起点。
+
+                Returns:
+                    dict[str, object]: X API 风格响应。
+
+                Raises:
+                    None
+                """
+                self.max_results_calls.append(max_results)
+                return {
+                    "data": [
+                        {
+                            "id": str(100 + idx),
+                            "text": f"post {idx}",
+                            "created_at": "2026-05-05T01:02:03.000Z",
+                        }
+                        for idx in range(max_results)
+                    ]
+                }
+
+        client = FakeClient()
+        manager = XMonitorManager(client=client)
+        results = manager.latest("@kana_hanaiwa", limit=1)
+
+        self.assertEqual(client.max_results_calls, [DEFAULT_LIMIT])
+        self.assertEqual(len(results), 1)
 
 
 class XMonitorRenderTests(unittest.TestCase):

@@ -22,7 +22,6 @@ USER_LOOKUP_URL = "https://api.x.com/2/users/by/username/{username}"
 USER_POSTS_URL = "https://api.x.com/2/users/{user_id}/tweets"
 POST_URL = "https://x.com/{username}/status/{post_id}"
 DEFAULT_LIMIT = 5
-DEFAULT_API_PAGE_SIZE = 10
 MAX_WATCH_TASKS = 20
 DEFAULT_STORE_PATH = ".x_monitor.json"
 USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9_]{1,15}$")
@@ -278,7 +277,7 @@ class XAPIClient:
     def get_user_posts(
         self,
         user_id: str,
-        max_results: int = DEFAULT_API_PAGE_SIZE,
+        max_results: int = DEFAULT_LIMIT,
         since_id: Optional[str] = None,
     ) -> dict[str, object]:
         """
@@ -629,7 +628,7 @@ class XMonitorManager:
         """
         assert limit > 0, "limit 必须大于 0"
         profile = self._get_client().get_user_profile(username)
-        page_size = max(DEFAULT_API_PAGE_SIZE, min(100, limit))
+        page_size = max(DEFAULT_LIMIT, min(100, limit))
         return self._fetch_results(
             profile.username, profile.user_id, limit=page_size
         )[:limit]
@@ -823,7 +822,7 @@ class XMonitorManager:
         self,
         username: str,
         x_user_id: str,
-        limit: int = DEFAULT_API_PAGE_SIZE,
+        limit: int = DEFAULT_LIMIT,
         since_id: Optional[str] = None,
     ) -> list[XPostResult]:
         """
