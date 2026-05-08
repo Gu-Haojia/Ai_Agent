@@ -16,7 +16,12 @@ from src.x_monitor import (
     _normalize_username,
 )
 from src.x_monitor_media import _send_group_msg, compose_x_media_message
-from src.x_monitor_render import BrowserRenderConfig, XTweetPayloadParser, render_tweet_html
+from src.x_monitor_render import (
+    BrowserRenderConfig,
+    BrowserTweetRenderer,
+    XTweetPayloadParser,
+    render_tweet_html,
+)
 import qq_group_bot
 from qq_group_bot import QQBotHandler
 
@@ -277,6 +282,36 @@ class XMonitorRenderTests(unittest.TestCase):
     """
     验证 XMonitor 风格的 payload 解析与 HTML 渲染。
     """
+
+    def test_renderer_uses_configured_device_scale_factor(self) -> None:
+        """
+        截图渲染器应使用配置中的设备缩放因子。
+        """
+        payload = build_render_payload()
+        tweet = XTweetPayloadParser().parse(payload)[0]
+        locator = mock.MagicMock()
+        locator.screenshot.return_value = b"png"
+        page = mock.MagicMock()
+        page.locator.return_value = locator
+        browser = mock.MagicMock()
+        browser.new_page.return_value = page
+        playwright = SimpleNamespace(
+            chromium=SimpleNamespace(launch=mock.Mock(return_value=browser))
+        )
+        context = mock.MagicMock()
+        context.__enter__.return_value = playwright
+        context.__exit__.return_value = None
+
+        with mock.patch("playwright.sync_api.sync_playwright", return_value=context):
+            data = BrowserTweetRenderer(
+                BrowserRenderConfig(device_scale_factor=1.25)
+            ).render_to_png_bytes(tweet)
+
+        self.assertEqual(data, b"png")
+        self.assertEqual(
+            browser.new_page.call_args.kwargs["device_scale_factor"],
+            1.25,
+        )
 
     def test_parse_payload_reads_author_media_and_text_entities(self) -> None:
         """

@@ -192,6 +192,7 @@ class BrowserRenderConfig:
         width (int): 截图宽度。
         padding (int): 推文外边距。
         avatar_size (int): 头像尺寸。
+        device_scale_factor (float): 浏览器截图设备缩放因子。
         timeout_ms (int): 浏览器等待超时时间。
         timezone (str): 时间展示时区。
     """
@@ -199,6 +200,7 @@ class BrowserRenderConfig:
     width: int = 900
     padding: int = 34
     avatar_size: int = 58
+    device_scale_factor: float = 1.25
     timeout_ms: int = 30000
     timezone: str = "Asia/Tokyo"
 
@@ -390,7 +392,7 @@ class BrowserTweetRenderer:
             try:
                 page = browser.new_page(
                     viewport={"width": self.config.width, "height": 1600},
-                    device_scale_factor=1,
+                    device_scale_factor=self.config.device_scale_factor,
                 )
                 page.set_content(
                     html_doc,
