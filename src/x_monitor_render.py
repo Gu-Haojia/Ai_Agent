@@ -200,7 +200,7 @@ class BrowserRenderConfig:
     width: int = 900
     padding: int = 34
     avatar_size: int = 58
-    device_scale_factor: float = 1.25
+    device_scale_factor: float = 1.2
     timeout_ms: int = 30000
     timezone: str = "Asia/Tokyo"
 
