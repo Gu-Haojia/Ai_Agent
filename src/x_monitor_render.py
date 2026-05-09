@@ -639,7 +639,7 @@ def render_tweet_html(
       gap: 10px;
     }}
     .media {{
-      width: 100%;
+      width: 90%;
       height: auto;
       display: block;
       border-radius: 16px;
@@ -647,7 +647,7 @@ def render_tweet_html(
       border: 1px solid var(--soft);
     }}
     .media-placeholder {{
-      width: 100%;
+      width: 90%;
       aspect-ratio: var(--ratio, 1.6);
       border-radius: 16px;
       background: #f7f9f9;
