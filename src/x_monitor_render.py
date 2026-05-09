@@ -659,10 +659,17 @@ def render_tweet_html(
       border-radius: 16px;
       padding: 14px;
     }}
+    .agent-footer {{
+      margin-top: 18px;
+      color: var(--gray);
+      font-size: 14px;
+      line-height: 18px;
+      text-align: right;
+    }}
   </style>
 </head>
 <body>
-  <main id="capture">{body}</main>
+  <main id="capture">{body}<div class="agent-footer">本推文由筱泽广Agent提供</div></main>
 </body>
 </html>"""
 

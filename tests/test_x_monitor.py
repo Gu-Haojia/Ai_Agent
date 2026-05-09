@@ -331,6 +331,12 @@ class XMonitorRenderTests(unittest.TestCase):
         self.assertIn("https://example.com/1.jpg", html)
         self.assertIn('"Noto Sans CJK JP"', html)
         self.assertIn('"Noto Color Emoji"', html)
+        self.assertIn(
+            '<div class="agent-footer">本推文由筱泽广Agent提供</div>',
+            html,
+        )
+        self.assertIn(".agent-footer", html)
+        self.assertIn("text-align: right", html)
 
     def test_render_text_entities_does_not_mark_email_at(self) -> None:
         """
