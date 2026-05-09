@@ -25,6 +25,25 @@ DEFAULT_LIMIT = 5
 MAX_WATCH_TASKS = 20
 DEFAULT_STORE_PATH = ".x_monitor.json"
 USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9_]{1,15}$")
+NEW_POST_NOTICE_ENV = "X_MONITOR_NEW_POST_NOTICE"
+
+
+def _env_flag(name: str) -> bool:
+    """
+    判断环境变量是否开启。
+
+    Args:
+        name (str): 环境变量名。
+
+    Returns:
+        bool: 变量值为 1/true/yes/on 时返回 True。
+
+    Raises:
+        AssertionError: 当环境变量名为空时抛出。
+    """
+    assert name.strip(), "环境变量名不能为空"
+    value = os.environ.get(name, "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
 
 
 def _normalize_username(username: str) -> str:
@@ -193,6 +212,7 @@ class XPostResult:
         url (str): 推文链接。
         image_urls (tuple[str, ...]): 推文关联图片 URL。
         source_payload (Optional[dict[str, object]]): 生成图片所需的原始 X API 响应。
+        display_name (str): 推文作者显示名。
     """
 
     username: str
@@ -202,6 +222,7 @@ class XPostResult:
     url: str
     image_urls: tuple[str, ...] = ()
     source_payload: Optional[dict[str, object]] = None
+    display_name: str = ""
 
     def to_line(self, prefix: str = "") -> str:
         """
@@ -575,6 +596,8 @@ class _XWatchTask:
         subset = list(items)[: self._limit]
         message = self._formatter(subset, "NEW")
         assert message.strip(), "通知内容不能为空"
+        if _env_flag(NEW_POST_NOTICE_ENV):
+            self._notify(self._format_new_post_notice(subset))
         if self._notify_media is not None:
             self._notify_media(message, subset, "NEW")
         else:
@@ -583,6 +606,24 @@ class _XWatchTask:
             f"[XMonitor] 发现新推文 {len(subset)}/{len(items)} 条，用户=@{self._username}",
             flush=True,
         )
+
+    def _format_new_post_notice(self, items: Sequence[XPostResult]) -> str:
+        """
+        生成新推文批次的前置文字通知。
+
+        Args:
+            items (Sequence[XPostResult]): 本轮将要推送的推文列表。
+
+        Returns:
+            str: 前置文字通知。
+
+        Raises:
+            AssertionError: 当推文列表为空时抛出。
+        """
+        assert items, "推文列表不能为空"
+        display_name = (items[0].display_name or self._username).strip()
+        assert display_name, "用户显示名不能为空"
+        return f"关注的{display_name}发表了新的推文。"
 
 
 class XMonitorManager:
@@ -864,6 +905,7 @@ class XMonitorManager:
             ValueError: 当时间字段格式非法时抛出。
         """
         media_by_key = self._build_media_map(payload)
+        user_by_id = self._build_user_map(payload)
         data = payload.get("data") or []
         if not data:
             return []
@@ -876,6 +918,7 @@ class XMonitorManager:
             text = str(raw_post.get("text") or "").strip()
             created_label = _format_created_at(raw_post.get("created_at"))
             image_urls = _collect_post_image_urls(raw_post, media_by_key, limit=4)
+            display_name = self._post_display_name(raw_post, user_by_id, username)
             results.append(
                 XPostResult(
                     username=username,
@@ -885,9 +928,39 @@ class XMonitorManager:
                     url=POST_URL.format(username=username, post_id=post_id),
                     image_urls=image_urls,
                     source_payload=payload,
+                    display_name=display_name,
                 )
             )
         return results
+
+    def _post_display_name(
+        self,
+        post: dict[str, object],
+        user_by_id: dict[str, dict[str, object]],
+        default_name: str,
+    ) -> str:
+        """
+        从推文作者 expansion 中提取显示名。
+
+        Args:
+            post (dict[str, object]): 单条推文对象。
+            user_by_id (dict[str, dict[str, object]]): 用户 ID 到用户对象的映射。
+            default_name (str): 缺少作者 expansion 时使用的名称。
+
+        Returns:
+            str: 作者显示名。
+
+        Raises:
+            None: 本方法不主动抛出异常。
+        """
+        author_id = str(post.get("author_id") or "").strip()
+        raw_user = user_by_id.get(author_id) if author_id else None
+        if raw_user is None:
+            return default_name.strip()
+        name = str(raw_user.get("name") or "").strip()
+        if name:
+            return name
+        return str(raw_user.get("username") or default_name).strip()
 
     def _build_media_map(
         self, payload: dict[str, object]
@@ -919,6 +992,37 @@ class XMonitorManager:
             if media_key:
                 media_by_key[media_key] = raw_media
         return media_by_key
+
+    def _build_user_map(
+        self, payload: dict[str, object]
+    ) -> dict[str, dict[str, object]]:
+        """
+        从响应 includes 中构造用户映射。
+
+        Args:
+            payload (dict[str, object]): X API 原始响应。
+
+        Returns:
+            dict[str, dict[str, object]]: user_id 到用户对象的映射。
+
+        Raises:
+            AssertionError: 当 includes.users 类型异常时抛出。
+        """
+        includes = payload.get("includes") or {}
+        if not includes:
+            return {}
+        assert isinstance(includes, dict), "X API includes 必须为对象"
+        users = includes.get("users") or []
+        if not users:
+            return {}
+        assert isinstance(users, list), "X API includes.users 必须为列表"
+        user_by_id: dict[str, dict[str, object]] = {}
+        for raw_user in users:
+            assert isinstance(raw_user, dict), "X API 单条 user 必须为对象"
+            user_id = str(raw_user.get("id") or "").strip()
+            if user_id:
+                user_by_id[user_id] = raw_user
+        return user_by_id
 
     def _prune_dead_watch_tasks(self) -> None:
         """

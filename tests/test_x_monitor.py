@@ -10,10 +10,12 @@ from unittest import mock
 
 from src.x_monitor import (
     DEFAULT_LIMIT,
+    NEW_POST_NOTICE_ENV,
     XMonitorManager,
     XPostResult,
     _collect_post_image_urls,
     _normalize_username,
+    _XWatchTask,
 )
 from src.x_monitor_media import _send_group_msg, compose_x_media_message
 from src.x_monitor_render import (
@@ -171,11 +173,19 @@ class XMonitorParseTests(unittest.TestCase):
                 {
                     "id": "1919610000000000001",
                     "text": "hello\nworld",
+                    "author_id": "10",
                     "created_at": "2026-05-05T01:02:03.000Z",
                     "attachments": {"media_keys": ["3_1"]},
                 }
             ],
             "includes": {
+                "users": [
+                    {
+                        "id": "10",
+                        "name": "Kana Hanaiwa",
+                        "username": "kana_hanaiwa",
+                    }
+                ],
                 "media": [
                     {
                         "media_key": "3_1",
@@ -191,6 +201,7 @@ class XMonitorParseTests(unittest.TestCase):
         self.assertEqual(results[0].username, "kana_hanaiwa")
         self.assertEqual(results[0].post_id, "1919610000000000001")
         self.assertEqual(results[0].image_urls, ("https://example.com/p.jpg",))
+        self.assertEqual(results[0].display_name, "Kana Hanaiwa")
         self.assertEqual(
             results[0].url,
             "https://x.com/kana_hanaiwa/status/1919610000000000001",
@@ -550,6 +561,94 @@ class XMonitorMediaComposeTests(unittest.TestCase):
                 "https://example.com/2.jpg",
             ],
         )
+
+
+class XMonitorWatchTaskTests(unittest.TestCase):
+    """
+    验证 X 推文监控任务的新推文通知行为。
+    """
+
+    def test_new_post_notice_env_sends_one_text_before_media(self) -> None:
+        """
+        开启环境变量时，一批新推文应先发送一条关注用户文字。
+        """
+        events: list[tuple[str, object]] = []
+        task = _XWatchTask(
+            username="kana_hanaiwa",
+            x_user_id="10",
+            interval=60,
+            limit_per_cycle=5,
+            group_id=123,
+            user_id=456,
+            fetcher=lambda since_id: [],
+            formatter=lambda items, tag: "formatted",
+            notify=lambda text: events.append(("text", text)),
+            notify_media=lambda text, items, tag: events.append(
+                ("media", [item.post_id for item in items])
+            ),
+        )
+        items = [
+            XPostResult(
+                username="kana_hanaiwa",
+                post_id="1",
+                text="first",
+                created_label="05-05 10:02",
+                url="https://x.com/kana_hanaiwa/status/1",
+                display_name="Kana Hanaiwa",
+            ),
+            XPostResult(
+                username="kana_hanaiwa",
+                post_id="2",
+                text="second",
+                created_label="05-05 10:03",
+                url="https://x.com/kana_hanaiwa/status/2",
+                display_name="Kana Hanaiwa",
+            ),
+        ]
+
+        with mock.patch.dict("os.environ", {NEW_POST_NOTICE_ENV: "1"}):
+            task._handle_new_items(items)
+
+        self.assertEqual(
+            events,
+            [
+                ("text", "关注的Kana Hanaiwa发表了新的推文。"),
+                ("media", ["1", "2"]),
+            ],
+        )
+
+    def test_new_post_notice_env_disabled_keeps_media_only(self) -> None:
+        """
+        未开启环境变量时，不应发送额外前置文字。
+        """
+        events: list[tuple[str, object]] = []
+        task = _XWatchTask(
+            username="kana_hanaiwa",
+            x_user_id="10",
+            interval=60,
+            limit_per_cycle=5,
+            group_id=123,
+            user_id=456,
+            fetcher=lambda since_id: [],
+            formatter=lambda items, tag: "formatted",
+            notify=lambda text: events.append(("text", text)),
+            notify_media=lambda text, items, tag: events.append(
+                ("media", [item.post_id for item in items])
+            ),
+        )
+        item = XPostResult(
+            username="kana_hanaiwa",
+            post_id="1",
+            text="first",
+            created_label="05-05 10:02",
+            url="https://x.com/kana_hanaiwa/status/1",
+            display_name="Kana Hanaiwa",
+        )
+
+        with mock.patch.dict("os.environ", {NEW_POST_NOTICE_ENV: ""}):
+            task._handle_new_items([item])
+
+        self.assertEqual(events, [("media", ["1"])])
 
 
 class QQBotXMonitorCommandTests(unittest.TestCase):
