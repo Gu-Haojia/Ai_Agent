@@ -343,10 +343,55 @@ class XMonitorRenderTests(unittest.TestCase):
         self.assertIn('"Noto Sans CJK JP"', html)
         self.assertIn('"Noto Color Emoji"', html)
         self.assertIn(
-            '<div class="agent-footer">本推文由筱泽广Agent提供</div>',
+            '<div class="agent-footer">本推文由 筱泽广Agent 提供</div>',
             html,
         )
         self.assertIn(".agent-footer", html)
+
+    def test_render_quote_only_expands_one_level(self) -> None:
+        """
+        引用推文内部的再次引用不应继续递归渲染。
+        """
+        payload = {
+            "data": [
+                {
+                    "id": "1",
+                    "text": "top body",
+                    "author_id": "10",
+                    "referenced_tweets": [{"type": "quoted", "id": "2"}],
+                }
+            ],
+            "includes": {
+                "users": [
+                    {"id": "10", "name": "Top User", "username": "top_user"},
+                    {"id": "20", "name": "Quote User", "username": "quote_user"},
+                    {"id": "30", "name": "Nested User", "username": "nested_user"},
+                ],
+                "tweets": [
+                    {
+                        "id": "2",
+                        "text": "quote body",
+                        "author_id": "20",
+                        "referenced_tweets": [{"type": "quoted", "id": "3"}],
+                    },
+                    {
+                        "id": "3",
+                        "text": "nested body",
+                        "author_id": "30",
+                    },
+                ],
+            },
+        }
+        tweets = XTweetPayloadParser().parse(payload)
+
+        html = render_tweet_html(tweets[0], BrowserRenderConfig(width=720))
+
+        self.assertIn("Top User", html)
+        self.assertIn("Quote User", html)
+        self.assertIn("quote body", html)
+        self.assertNotIn("Nested User", html)
+        self.assertNotIn("nested body", html)
+        self.assertEqual(html.count('<div class="quote">'), 1)
 
     def test_render_text_entities_does_not_mark_email_at(self) -> None:
         """
@@ -612,7 +657,7 @@ class XMonitorWatchTaskTests(unittest.TestCase):
         self.assertEqual(
             events,
             [
-                ("text", "关注的Kana Hanaiwa发表了新的推文。"),
+                ("text", "[NEW] Kana Hanaiwa 更新了推文"),
                 ("media", ["1", "2"]),
             ],
         )

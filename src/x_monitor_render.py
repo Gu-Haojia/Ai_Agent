@@ -960,7 +960,7 @@ def _render_tweet(
     compact_class = " compact" if compact else ""
     quote = (
         f'<div class="quote">{_render_tweet(tweet.quote.tweet, compact=True, config=config)}</div>'
-        if tweet.quote
+        if tweet.quote and not compact
         else ""
     )
     return f"""
