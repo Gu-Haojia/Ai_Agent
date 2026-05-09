@@ -623,7 +623,7 @@ class _XWatchTask:
         assert items, "推文列表不能为空"
         display_name = (items[0].display_name or self._username).strip()
         assert display_name, "用户显示名不能为空"
-        return f"关注的{display_name}发表了新的推文。"
+        return f"[NEW] {display_name} 更新了推文"
 
 
 class XMonitorManager:
