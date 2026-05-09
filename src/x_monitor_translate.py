@@ -205,7 +205,7 @@ class GeminiTweetTranslator:
         payload = json.dumps(list(texts), ensure_ascii=False)
         return (
             "请将下面 JSON 数组中的 X/Twitter 推文正文翻译为简体中文。"
-            "保留换行、URL、@用户名、#话题标签、emoji 和专有名词。"
+            "保留URL、@用户名、#话题标签、emoji 和专有名词和原文一致。"
             "只返回 JSON 对象，格式必须为 {\"translations\":[...]}，"
             "数组长度必须与输入完全一致。\n"
             f"输入：{payload}"
