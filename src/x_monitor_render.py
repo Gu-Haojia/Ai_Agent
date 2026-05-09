@@ -632,7 +632,7 @@ def render_tweet_html(
     .translation {{
       margin-top: 14px;
       padding-top: 12px;
-      border-top: 1px solid var(--border);
+      position: relative;
       font-family: "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei",
         "Noto Sans CJK JP", -apple-system, BlinkMacSystemFont, "Segoe UI",
         sans-serif;
@@ -640,6 +640,15 @@ def render_tweet_html(
       line-height: 1.36;
       white-space: pre-wrap;
       overflow-wrap: anywhere;
+    }}
+    .translation::before {{
+      content: "";
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 90%;
+      height: 1px;
+      background: var(--border);
     }}
     .compact .text {{
       margin-top: 4px;
