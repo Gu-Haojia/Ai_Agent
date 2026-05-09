@@ -429,6 +429,21 @@ class XMonitorRenderTests(unittest.TestCase):
         self.assertIn("&lt;<span class=\"hashtag\">#いずみんち</span> &amp; next", html)
         self.assertNotIn("&amp;lt;#いずみんち", html)
 
+    def test_render_translation_label_with_underline(self) -> None:
+        """
+        对照模式的简中翻译提示应渲染为下划线标签。
+        """
+        payload = build_render_payload(text="hello\n\n简中翻译：\n你好")
+        tweets = XTweetPayloadParser().parse(payload)
+
+        html = render_tweet_html(tweets[0], BrowserRenderConfig(width=720))
+
+        self.assertIn(
+            '<span class="translation-label">简中翻译：</span>',
+            html,
+        )
+        self.assertIn("text-decoration: underline", html)
+
 
 class XMonitorTranslationTests(unittest.TestCase):
     """

@@ -627,6 +627,10 @@ def render_tweet_html(
     .mention {{
       color: var(--blue);
     }}
+    .translation-label {{
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }}
     .compact .text {{
       margin-top: 4px;
       font-size: 18px;
@@ -1145,7 +1149,14 @@ def _render_text_entities(text: str) -> str:
     parts: list[str] = []
     index = 0
     length = len(text)
+    translation_label = "简中翻译："
     while index < length:
+        if text.startswith(translation_label, index):
+            parts.append(
+                f'<span class="translation-label">{_escape(translation_label)}</span>'
+            )
+            index += len(translation_label)
+            continue
         if text[index] == "#" and _is_entity_start(text, index, _is_hashtag_char):
             end = _find_entity_end(text, index, _is_hashtag_char)
             if end > index + 1:
