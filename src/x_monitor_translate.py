@@ -285,7 +285,7 @@ class XRenderedTweetTextTranslator:
         translations = self._translator.translate_texts(originals)
         assert len(translations) == len(targets), "翻译结果数量与推文数量不一致"
         for target, original, translation in zip(targets, originals, translations):
-            target.text = self._compose_text(original, translation, normalized)
+            self._apply_translation(target, original, translation, normalized)
 
     def _collect_tweets(self, tweet: XRenderedTweet) -> list[XRenderedTweet]:
         """
@@ -326,24 +326,31 @@ class XRenderedTweetTextTranslator:
         visit(tweet)
         return ordered
 
-    def _compose_text(self, original: str, translation: str, mode: str) -> str:
+    def _apply_translation(
+        self, tweet: XRenderedTweet, original: str, translation: str, mode: str
+    ) -> None:
         """
-        根据翻译模式组合正文。
+        根据翻译模式更新可渲染推文正文和译文字段。
 
         Args:
+            tweet (XRenderedTweet): 需要更新的推文。
             original (str): 原文。
             translation (str): 简体中文译文。
             mode (str): 翻译模式。
 
         Returns:
-            str: 用于渲染的正文。
+            None: 直接修改推文对象。
 
         Raises:
             AssertionError: 当模式非法时抛出。
         """
         normalized = XTweetTranslationMode.normalize(mode)
         if normalized == XTweetTranslationMode.TRANSLATED:
-            return translation.strip()
+            tweet.text = translation.strip()
+            tweet.translation_text = None
+            return
         if normalized == XTweetTranslationMode.BILINGUAL:
-            return f"{original.strip()}\n\n简中翻译：\n{translation.strip()}"
+            tweet.text = original.strip()
+            tweet.translation_text = translation.strip()
+            return
         raise AssertionError(f"不支持的翻译模式: {mode}")

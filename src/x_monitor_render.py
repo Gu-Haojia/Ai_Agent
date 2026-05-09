@@ -127,6 +127,7 @@ class XRenderedTweet:
         created_at (Optional[str]): X API 原始 ISO 时间。
         media (list[XRenderedMedia]): 推文媒体集合。
         references (list[XRenderedReference]): 引用推文集合。
+        translation_text (Optional[str]): 对照模式下单独渲染的简体中文译文。
         raw (dict[str, Any]): 原始推文对象副本。
     """
 
@@ -136,6 +137,7 @@ class XRenderedTweet:
     created_at: Optional[str] = None
     media: list[XRenderedMedia] = field(default_factory=list)
     references: list[XRenderedReference] = field(default_factory=list)
+    translation_text: Optional[str] = None
     raw: dict[str, Any] = field(default_factory=dict)
 
     def first_reference(self, reference_type: str) -> Optional[XRenderedReference]:
@@ -631,8 +633,26 @@ def render_tweet_html(
       text-decoration: underline;
       text-underline-offset: 3px;
     }}
+    .translation {{
+      margin-top: 10px;
+      font-family: "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei",
+        "Noto Sans CJK JP", -apple-system, BlinkMacSystemFont, "Segoe UI",
+        sans-serif;
+      font-size: 24px;
+      line-height: 1.36;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }}
+    .translation-text {{
+      margin-top: 4px;
+    }}
     .compact .text {{
       margin-top: 4px;
+      font-size: 18px;
+      line-height: 1.35;
+    }}
+    .compact .translation {{
+      margin-top: 8px;
       font-size: 18px;
       line-height: 1.35;
     }}
@@ -973,6 +993,7 @@ def _render_tweet(
       <div class="body">
         {_render_header(tweet, config)}
         {_render_text(tweet.text)}
+        {_render_translation(tweet.translation_text)}
         {_render_media_stack(tweet.media)}
         {quote}
       </div>
@@ -1042,6 +1063,29 @@ def _render_text(text: str) -> str:
     if not text:
         return ""
     return f'<div class="text">{_render_text_entities(text)}</div>'
+
+
+def _render_translation(text: Optional[str]) -> str:
+    """
+    渲染独立译文容器。
+
+    Args:
+        text (Optional[str]): 简体中文译文。
+
+    Returns:
+        str: HTML 片段。
+
+    Raises:
+        None: 本函数不主动抛出异常。
+    """
+    if not text:
+        return ""
+    return (
+        '<section class="translation" lang="zh-CN">'
+        '<div class="translation-label">简中翻译：</div>'
+        f'<div class="translation-text">{_render_text_entities(text)}</div>'
+        "</section>"
+    )
 
 
 def _render_media_stack(media: list[XRenderedMedia]) -> str:
@@ -1149,14 +1193,7 @@ def _render_text_entities(text: str) -> str:
     parts: list[str] = []
     index = 0
     length = len(text)
-    translation_label = "简中翻译："
     while index < length:
-        if text.startswith(translation_label, index):
-            parts.append(
-                f'<span class="translation-label">{_escape(translation_label)}</span>'
-            )
-            index += len(translation_label)
-            continue
         if text[index] == "#" and _is_entity_start(text, index, _is_hashtag_char):
             end = _find_entity_end(text, index, _is_hashtag_char)
             if end > index + 1:

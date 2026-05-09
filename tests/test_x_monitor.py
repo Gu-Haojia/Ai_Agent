@@ -429,20 +429,25 @@ class XMonitorRenderTests(unittest.TestCase):
         self.assertIn("&lt;<span class=\"hashtag\">#いずみんち</span> &amp; next", html)
         self.assertNotIn("&amp;lt;#いずみんち", html)
 
-    def test_render_translation_label_with_underline(self) -> None:
+    def test_render_translation_container_with_chinese_font(self) -> None:
         """
-        对照模式的简中翻译提示应渲染为下划线标签。
+        对照模式的简体中文译文应使用独立容器和中文字体。
         """
-        payload = build_render_payload(text="hello\n\n简中翻译：\n你好")
+        payload = build_render_payload(text="hello")
         tweets = XTweetPayloadParser().parse(payload)
+        tweets[0].translation_text = "你好 @official #话题"
 
         html = render_tweet_html(tweets[0], BrowserRenderConfig(width=720))
 
+        self.assertIn('<section class="translation" lang="zh-CN">', html)
         self.assertIn(
-            '<span class="translation-label">简中翻译：</span>',
+            '<div class="translation-label">简中翻译：</div>',
             html,
         )
         self.assertIn("text-decoration: underline", html)
+        self.assertIn('"Noto Sans CJK SC"', html)
+        self.assertIn('<span class="mention">@official</span>', html)
+        self.assertIn('<span class="hashtag">#话题</span>', html)
 
 
 class XMonitorTranslationTests(unittest.TestCase):
@@ -554,10 +559,11 @@ class XMonitorTranslationTests(unittest.TestCase):
         translator.apply(tweet, XTweetTranslationMode.TRANSLATED)
 
         self.assertEqual(tweet.text, "你好")
+        self.assertIsNone(tweet.translation_text)
 
     def test_rendered_tweet_translator_can_render_bilingual_text(self) -> None:
         """
-        对照模式应同时保留原文和简体中文译文。
+        对照模式应保留原文，并将简体中文译文放入独立字段。
         """
 
         class FakeTranslator:
@@ -585,7 +591,8 @@ class XMonitorTranslationTests(unittest.TestCase):
 
         translator.apply(tweet, XTweetTranslationMode.BILINGUAL)
 
-        self.assertEqual(tweet.text, "hello\n\n简中翻译：\n你好")
+        self.assertEqual(tweet.text, "hello")
+        self.assertEqual(tweet.translation_text, "你好")
 
 
 class XMonitorMediaComposeTests(unittest.TestCase):
