@@ -632,7 +632,7 @@ def render_tweet_html(
     .translation {{
       margin-top: 14px;
       padding-top: 12px;
-      border-top: 1px solid var(--soft);
+      border-top: 1px solid var(--border);
       font-family: "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei",
         "Noto Sans CJK JP", -apple-system, BlinkMacSystemFont, "Segoe UI",
         sans-serif;

@@ -440,7 +440,7 @@ class XMonitorRenderTests(unittest.TestCase):
         html = render_tweet_html(tweets[0], BrowserRenderConfig(width=720))
 
         self.assertIn('<section class="translation" lang="zh-CN">', html)
-        self.assertIn("border-top: 1px solid var(--soft)", html)
+        self.assertIn("border-top: 1px solid var(--border)", html)
         self.assertNotIn("简中翻译", html)
         self.assertIn('"Noto Sans CJK SC"', html)
         self.assertIn('<span class="mention">@official</span>', html)
