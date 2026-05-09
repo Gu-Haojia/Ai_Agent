@@ -629,12 +629,10 @@ def render_tweet_html(
     .mention {{
       color: var(--blue);
     }}
-    .translation-label {{
-      text-decoration: underline;
-      text-underline-offset: 3px;
-    }}
     .translation {{
-      margin-top: 10px;
+      margin-top: 14px;
+      padding-top: 12px;
+      border-top: 1px solid var(--soft);
       font-family: "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei",
         "Noto Sans CJK JP", -apple-system, BlinkMacSystemFont, "Segoe UI",
         sans-serif;
@@ -643,16 +641,14 @@ def render_tweet_html(
       white-space: pre-wrap;
       overflow-wrap: anywhere;
     }}
-    .translation-text {{
-      margin-top: 4px;
-    }}
     .compact .text {{
       margin-top: 4px;
       font-size: 18px;
       line-height: 1.35;
     }}
     .compact .translation {{
-      margin-top: 8px;
+      margin-top: 10px;
+      padding-top: 10px;
       font-size: 18px;
       line-height: 1.35;
     }}
@@ -1082,7 +1078,6 @@ def _render_translation(text: Optional[str]) -> str:
         return ""
     return (
         '<section class="translation" lang="zh-CN">'
-        '<div class="translation-label">简中翻译：</div>'
         f'<div class="translation-text">{_render_text_entities(text)}</div>'
         "</section>"
     )

@@ -429,9 +429,9 @@ class XMonitorRenderTests(unittest.TestCase):
         self.assertIn("&lt;<span class=\"hashtag\">#いずみんち</span> &amp; next", html)
         self.assertNotIn("&amp;lt;#いずみんち", html)
 
-    def test_render_translation_container_with_chinese_font(self) -> None:
+    def test_render_translation_container_with_divider_and_chinese_font(self) -> None:
         """
-        对照模式的简体中文译文应使用独立容器和中文字体。
+        对照模式的简体中文译文应使用分隔线容器和中文字体。
         """
         payload = build_render_payload(text="hello")
         tweets = XTweetPayloadParser().parse(payload)
@@ -440,11 +440,8 @@ class XMonitorRenderTests(unittest.TestCase):
         html = render_tweet_html(tweets[0], BrowserRenderConfig(width=720))
 
         self.assertIn('<section class="translation" lang="zh-CN">', html)
-        self.assertIn(
-            '<div class="translation-label">简中翻译：</div>',
-            html,
-        )
-        self.assertIn("text-decoration: underline", html)
+        self.assertIn("border-top: 1px solid var(--soft)", html)
+        self.assertNotIn("简中翻译", html)
         self.assertIn('"Noto Sans CJK SC"', html)
         self.assertIn('<span class="mention">@official</span>', html)
         self.assertIn('<span class="hashtag">#话题</span>', html)
