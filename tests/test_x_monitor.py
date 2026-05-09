@@ -4,6 +4,7 @@ X 推文监控解析与图文消息拼装单元测试。
 
 from __future__ import annotations
 
+import os
 import unittest
 from types import SimpleNamespace
 from typing import Sequence
@@ -937,6 +938,32 @@ class QQBotXMonitorCommandTests(unittest.TestCase):
     """
     验证 QQBot 中隐藏的 X 推文监控测试命令。
     """
+
+    def test_xtrans_command_cycles_translation_mode(self) -> None:
+        """
+        /xtrans 应循环切换 XMonitor 翻译模式环境变量。
+        """
+        handler = QQBotHandler.__new__(QQBotHandler)
+        handler.bot_cfg = SimpleNamespace(
+            api_base="http://onebot",
+            access_token="token",
+            cmd_allowed_users=(),
+        )
+
+        with mock.patch.dict("os.environ", {TRANSLATION_MODE_ENV: "none"}):
+            with mock.patch.object(qq_group_bot, "_send_group_msg") as send_text:
+                handled = handler._handle_commands(123, 456, "/xtrans")
+                handled_second = handler._handle_commands(123, 456, "/xtrans")
+                handled_third = handler._handle_commands(123, 456, "/xtrans")
+
+            self.assertTrue(handled)
+            self.assertTrue(handled_second)
+            self.assertTrue(handled_third)
+            self.assertEqual(os.environ[TRANSLATION_MODE_ENV], "none")
+            self.assertEqual(send_text.call_count, 3)
+            self.assertIn("不翻译 -> 仅翻译", send_text.call_args_list[0].args[2])
+            self.assertIn("仅翻译 -> 对照", send_text.call_args_list[1].args[2])
+            self.assertIn("对照 -> 不翻译", send_text.call_args_list[2].args[2])
 
     def test_hidden_test_command_sends_latest_tweet_with_media(self) -> None:
         """

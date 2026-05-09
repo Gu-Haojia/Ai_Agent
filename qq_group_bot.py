@@ -186,6 +186,7 @@ from src.x_monitor import (
     XPostResult,
 )
 from src.x_monitor_media import send_x_message_with_images
+from src.x_monitor_translate import TRANSLATION_MODE_ENV, XTweetTranslationMode
 from image_storage import GeneratedImage, ImageStorageManager, StoredImage, StoredVideo
 from src.yt_dlp_downloader import YtDlpVideoDownloader
 from daily_task import (
@@ -1990,6 +1991,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
         - /boost              → 在 Gemini 文本模型之间切换并重建 Agent
         - /image              → 在 Gemini 生图模型之间切换
         - /imageprovider      → 在 Gemini/OpenAI 生图服务商之间切换
+        - /xtrans             → 循环切换 XMonitor 推文翻译模式
         - /clear              → 为当前群新建线程
         - /whoami             → 先回当前系统提示词，再基于“你是谁”生成一条消息
         - /token              → 统计当前群对应线程的消息 token 数
@@ -2059,7 +2061,8 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 "14) /meruwatch \"关键词\" <间隔秒> [价格阈值] - 新品监控 (/meruwatch off 停止)\n"
                 "15) /xmonitor 用户 间隔秒 - 监控 X 账号新推文 (/xmonitor 用户 off 停止)\n"
                 "16) /xmonitor list - 查看 X 推文监控任务\n"
-                "17) /dl <链接> - 下载视频并直接发送到群聊"
+                "17) /xtrans - 切换 X 推文翻译模式\n"
+                "18) /dl <链接> - 下载视频并直接发送到群聊"
             )
             _send_group_msg(
                 self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
@@ -2170,6 +2173,35 @@ class QQBotHandler(BaseHTTPRequestHandler):
             next_provider = "openai" if current_provider == "gemini" else "gemini"
             os.environ["IMAGE_PROVIDER"] = next_provider
             msg = f"生图服务商已切换：{current_provider} -> {next_provider}。"
+            _send_group_msg(
+                self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
+            )
+            return True
+
+        if cmd == "/xtrans" and len(parts) == 1:
+            labels = {
+                XTweetTranslationMode.NONE: "不翻译",
+                XTweetTranslationMode.TRANSLATED: "仅翻译",
+                XTweetTranslationMode.BILINGUAL: "对照",
+            }
+            candidates = (
+                XTweetTranslationMode.NONE,
+                XTweetTranslationMode.TRANSLATED,
+                XTweetTranslationMode.BILINGUAL,
+            )
+            try:
+                current_mode = XTweetTranslationMode.from_env()
+                current_index = candidates.index(current_mode)
+                next_mode = candidates[(current_index + 1) % len(candidates)]
+                os.environ[TRANSLATION_MODE_ENV] = next_mode
+                msg = (
+                    "X 推文翻译模式已切换："
+                    f"{labels[current_mode]} -> {labels[next_mode]}。"
+                )
+            except AssertionError as e:
+                msg = f"切换失败：{e}"
+            except Exception as e:
+                msg = f"切换失败（内部错误）：{e}"
             _send_group_msg(
                 self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
             )
