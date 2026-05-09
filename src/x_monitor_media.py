@@ -19,6 +19,10 @@ import requests
 
 from src.x_monitor import XPostResult
 from src.x_monitor_render import BrowserTweetRenderer, XRenderedTweet, XTweetPayloadParser
+from src.x_monitor_translate import (
+    XRenderedTweetTextTranslator,
+    XTweetTranslationMode,
+)
 
 MessagePayload = Sequence[dict[str, dict[str, str]]] | str
 RenderedImageFetcher = Callable[[XPostResult], tuple[str, str]]
@@ -169,6 +173,7 @@ class XPostImagePayloadBuilder:
         self,
         parser: Optional[XTweetPayloadParser] = None,
         renderer: Optional[BrowserTweetRenderer] = None,
+        text_translator: Optional[XRenderedTweetTextTranslator] = None,
     ) -> None:
         """
         初始化推文图片构建器。
@@ -176,6 +181,8 @@ class XPostImagePayloadBuilder:
         Args:
             parser (Optional[XTweetPayloadParser]): X API payload 解析器。
             renderer (Optional[BrowserTweetRenderer]): 推文截图渲染器。
+            text_translator (Optional[XRenderedTweetTextTranslator]):
+                推文正文翻译器。
 
         Returns:
             None: 构造函数无返回值。
@@ -185,6 +192,7 @@ class XPostImagePayloadBuilder:
         """
         self._parser = parser or XTweetPayloadParser()
         self._renderer = renderer or BrowserTweetRenderer()
+        self._text_translator = text_translator or XRenderedTweetTextTranslator()
 
     def render(self, item: XPostResult) -> tuple[str, str]:
         """
@@ -204,6 +212,7 @@ class XPostImagePayloadBuilder:
         assert payload is not None, "生成推文图片需要 source_payload"
         tweets = self._parser.parse(payload)
         tweet = self._find_tweet(tweets, item.post_id)
+        self._text_translator.apply(tweet, XTweetTranslationMode.from_env())
         png = self._renderer.render_to_png_bytes(tweet)
         assert png, "生成的推文图片不能为空"
         return base64.b64encode(png).decode("ascii"), "image/png"

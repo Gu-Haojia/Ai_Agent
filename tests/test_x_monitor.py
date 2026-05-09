@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import unittest
 from types import SimpleNamespace
+from typing import Sequence
 from unittest import mock
 
 from src.x_monitor import (
@@ -17,12 +18,23 @@ from src.x_monitor import (
     _normalize_username,
     _XWatchTask,
 )
-from src.x_monitor_media import _send_group_msg, compose_x_media_message
+from src.x_monitor_media import (
+    XPostImagePayloadBuilder,
+    _send_group_msg,
+    compose_x_media_message,
+)
 from src.x_monitor_render import (
     BrowserRenderConfig,
     BrowserTweetRenderer,
     XTweetPayloadParser,
     render_tweet_html,
+)
+from src.x_monitor_translate import (
+    GeminiTweetTranslator,
+    TRANSLATION_MODEL,
+    TRANSLATION_MODE_ENV,
+    XRenderedTweetTextTranslator,
+    XTweetTranslationMode,
 )
 import qq_group_bot
 from qq_group_bot import QQBotHandler
@@ -417,6 +429,149 @@ class XMonitorRenderTests(unittest.TestCase):
         self.assertNotIn("&amp;lt;#いずみんち", html)
 
 
+class XMonitorTranslationTests(unittest.TestCase):
+    """
+    验证 XMonitor 推文正文翻译模式。
+    """
+
+    def test_translation_mode_accepts_expected_aliases(self) -> None:
+        """
+        翻译模式应支持不翻译、仅翻译和对照三类配置。
+        """
+        self.assertEqual(
+            XTweetTranslationMode.normalize("不翻译"),
+            XTweetTranslationMode.NONE,
+        )
+        self.assertEqual(
+            XTweetTranslationMode.normalize("仅翻译"),
+            XTweetTranslationMode.TRANSLATED,
+        )
+        self.assertEqual(
+            XTweetTranslationMode.normalize("对照"),
+            XTweetTranslationMode.BILINGUAL,
+        )
+
+    def test_gemini_translator_uses_official_client_model(self) -> None:
+        """
+        Gemini 翻译器应调用指定模型并解析 JSON 译文。
+        """
+
+        class FakeModels:
+            """
+            模拟 Google GenAI models API。
+            """
+
+            def __init__(self) -> None:
+                """
+                初始化调用记录。
+
+                Args:
+                    None
+
+                Returns:
+                    None
+
+                Raises:
+                    None
+                """
+                self.calls: list[dict[str, object]] = []
+
+            def generate_content(
+                self, model: str, contents: object, config: object
+            ) -> SimpleNamespace:
+                """
+                记录生成请求并返回固定 JSON。
+
+                Args:
+                    model (str): 模型名称。
+                    contents (object): 请求内容。
+                    config (object): 生成配置。
+
+                Returns:
+                    SimpleNamespace: 模拟响应。
+
+                Raises:
+                    None
+                """
+                self.calls.append(
+                    {"model": model, "contents": contents, "config": config}
+                )
+                return SimpleNamespace(text='{"translations":["你好"]}')
+
+        fake_models = FakeModels()
+        client = SimpleNamespace(models=fake_models)
+
+        result = GeminiTweetTranslator(client=client).translate_texts(["hello"])
+
+        self.assertEqual(result, ["你好"])
+        self.assertEqual(fake_models.calls[0]["model"], TRANSLATION_MODEL)
+        self.assertIn("hello", str(fake_models.calls[0]["contents"]))
+
+    def test_rendered_tweet_translator_can_replace_text_only(self) -> None:
+        """
+        仅翻译模式应使用简体中文译文替换原文。
+        """
+
+        class FakeTranslator:
+            """
+            返回固定译文的翻译器。
+            """
+
+            def translate_texts(self, texts: Sequence[str]) -> list[str]:
+                """
+                返回与输入数量一致的固定译文。
+
+                Args:
+                    texts (Sequence[str]): 原文列表。
+
+                Returns:
+                    list[str]: 固定译文列表。
+
+                Raises:
+                    None
+                """
+                return ["你好" for _ in texts]
+
+        tweet = XTweetPayloadParser().parse(build_render_payload(text="hello"))[0]
+        translator = XRenderedTweetTextTranslator(FakeTranslator())
+
+        translator.apply(tweet, XTweetTranslationMode.TRANSLATED)
+
+        self.assertEqual(tweet.text, "你好")
+
+    def test_rendered_tweet_translator_can_render_bilingual_text(self) -> None:
+        """
+        对照模式应同时保留原文和简体中文译文。
+        """
+
+        class FakeTranslator:
+            """
+            返回固定译文的翻译器。
+            """
+
+            def translate_texts(self, texts: Sequence[str]) -> list[str]:
+                """
+                返回与输入数量一致的固定译文。
+
+                Args:
+                    texts (Sequence[str]): 原文列表。
+
+                Returns:
+                    list[str]: 固定译文列表。
+
+                Raises:
+                    None
+                """
+                return ["你好" for _ in texts]
+
+        tweet = XTweetPayloadParser().parse(build_render_payload(text="hello"))[0]
+        translator = XRenderedTweetTextTranslator(FakeTranslator())
+
+        translator.apply(tweet, XTweetTranslationMode.BILINGUAL)
+
+        self.assertEqual(tweet.text, "hello\n\n简中翻译：\n你好")
+
+
 class XMonitorMediaComposeTests(unittest.TestCase):
     """
     验证 X 推文 OneBot 图文消息拼装。
@@ -474,6 +629,88 @@ class XMonitorMediaComposeTests(unittest.TestCase):
             _send_group_msg("http://onebot", 123, "hello", "token")
 
         self.assertEqual(mocked.call_args.kwargs["timeout"], 60)
+
+    def test_image_builder_uses_translation_mode_env(self) -> None:
+        """
+        推文图片构建器应在渲染前按环境变量翻译正文。
+        """
+
+        class FakeRenderer:
+            """
+            记录渲染时收到的推文文本。
+            """
+
+            def __init__(self) -> None:
+                """
+                初始化捕获字段。
+
+                Args:
+                    None
+
+                Returns:
+                    None
+
+                Raises:
+                    None
+                """
+                self.captured_text = ""
+
+            def render_to_png_bytes(self, tweet: object) -> bytes:
+                """
+                捕获推文文本并返回固定 PNG 字节。
+
+                Args:
+                    tweet (object): 可渲染推文。
+
+                Returns:
+                    bytes: 固定 PNG 字节。
+
+                Raises:
+                    None
+                """
+                self.captured_text = str(getattr(tweet, "text"))
+                return b"png"
+
+        class FakeTranslator:
+            """
+            返回固定译文的翻译器。
+            """
+
+            def translate_texts(self, texts: Sequence[str]) -> list[str]:
+                """
+                返回与输入数量一致的固定译文。
+
+                Args:
+                    texts (Sequence[str]): 原文列表。
+
+                Returns:
+                    list[str]: 固定译文列表。
+
+                Raises:
+                    None
+                """
+                return ["你好" for _ in texts]
+
+        item = XPostResult(
+            username="kana_hanaiwa",
+            post_id="1",
+            text="hello",
+            created_label="05-05 10:02",
+            url="https://x.com/kana_hanaiwa/status/1",
+            source_payload=build_render_payload(text="hello"),
+        )
+        fake_renderer = FakeRenderer()
+        builder = XPostImagePayloadBuilder(
+            renderer=fake_renderer,
+            text_translator=XRenderedTweetTextTranslator(FakeTranslator()),
+        )
+
+        with mock.patch.dict("os.environ", {TRANSLATION_MODE_ENV: "only"}):
+            b64, mime = builder.render(item)
+
+        self.assertEqual(b64, "cG5n")
+        self.assertEqual(mime, "image/png")
+        self.assertEqual(fake_renderer.captured_text, "你好")
 
     def test_compose_renders_tweet_image_by_default(self) -> None:
         """
