@@ -336,7 +336,6 @@ class XMonitorRenderTests(unittest.TestCase):
             html,
         )
         self.assertIn(".agent-footer", html)
-        self.assertIn("text-align: right", html)
 
     def test_render_text_entities_does_not_mark_email_at(self) -> None:
         """

@@ -661,10 +661,10 @@ def render_tweet_html(
     }}
     .agent-footer {{
       margin-top: 18px;
-      color: var(--gray);
+      color: #b8c1c9;
       font-size: 14px;
       line-height: 18px;
-      text-align: right;
+      text-align: center;
     }}
   </style>
 </head>
