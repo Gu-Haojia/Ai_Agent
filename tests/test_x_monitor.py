@@ -13,10 +13,12 @@ from unittest import mock
 from src.x_monitor import (
     DEFAULT_LIMIT,
     NEW_POST_NOTICE_ENV,
+    XAPIClient,
     XMonitorManager,
     XPostResult,
     _collect_post_image_urls,
     _normalize_username,
+    _parse_tweet_link,
     _XWatchTask,
 )
 from src.x_monitor_media import (
@@ -111,6 +113,7 @@ class FakeXMonitorManager(XMonitorManager):
             None
         """
         self.latest_calls: list[tuple[str, int]] = []
+        self.fetch_link_calls: list[str] = []
 
     def latest(self, username: str, limit: int = 5) -> list[XPostResult]:
         """
@@ -139,6 +142,30 @@ class FakeXMonitorManager(XMonitorManager):
             )
         ]
 
+    def fetch_link(self, url: str) -> XPostResult:
+        """
+        返回固定的链接推文。
+
+        Args:
+            url (str): X 推文链接。
+
+        Returns:
+            XPostResult: 固定推文。
+
+        Raises:
+            None
+        """
+        self.fetch_link_calls.append(url)
+        return XPostResult(
+            username="kana_hanaiwa",
+            post_id="1",
+            text="linked post",
+            created_label="05-05 10:02",
+            url="https://x.com/kana_hanaiwa/status/1",
+            image_urls=("https://example.com/1.jpg",),
+            source_payload=build_render_payload(text="linked post"),
+        )
+
 
 class XMonitorParseTests(unittest.TestCase):
     """
@@ -150,6 +177,24 @@ class XMonitorParseTests(unittest.TestCase):
         用户名允许带 @ 前缀，并会被清理为裸用户名。
         """
         self.assertEqual(_normalize_username("@kana_hanaiwa"), "kana_hanaiwa")
+
+    def test_parse_tweet_link_reads_status_id(self) -> None:
+        """
+        推文链接解析应支持带查询参数的 x.com 链接。
+        """
+        link = _parse_tweet_link(
+            "https://x.com/kana_hanaiwa/status/1919610000000000001?s=20"
+        )
+
+        self.assertEqual(link.username, "kana_hanaiwa")
+        self.assertEqual(link.tweet_id, "1919610000000000001")
+
+    def test_parse_tweet_link_rejects_invalid_host(self) -> None:
+        """
+        非 X/Twitter 域名不应被当作推文链接处理。
+        """
+        with self.assertRaises(AssertionError):
+            _parse_tweet_link("https://example.com/kana/status/1")
 
     def test_collect_post_image_urls_reads_photo_and_preview(self) -> None:
         """
@@ -220,7 +265,136 @@ class XMonitorParseTests(unittest.TestCase):
             "https://x.com/kana_hanaiwa/status/1919610000000000001",
         )
         self.assertIs(results[0].source_payload, payload)
-        self.assertRegex(results[0].created_label, r"\d{2}-\d{2} \d{2}:\d{2}")
+
+    def test_get_tweet_by_id_uses_lookup_fields(self) -> None:
+        """
+        单推文拉取应请求图片渲染所需字段和 expansions。
+        """
+
+        class FakeClient(XAPIClient):
+            """
+            记录 X API 请求参数的客户端。
+            """
+
+            def __init__(self) -> None:
+                """
+                初始化请求记录。
+
+                Args:
+                    None
+
+                Returns:
+                    None
+
+                Raises:
+                    None
+                """
+                self.calls: list[dict[str, object]] = []
+
+            def _request_json(
+                self, url: str, params: dict[str, str] | None = None
+            ) -> dict[str, object]:
+                """
+                记录请求并返回空响应。
+
+                Args:
+                    url (str): 请求 URL。
+                    params (dict[str, str] | None): 查询参数。
+
+                Returns:
+                    dict[str, object]: 空 X API 响应。
+
+                Raises:
+                    None
+                """
+                self.calls.append({"url": url, "params": params or {}})
+                return {"data": []}
+
+        client = FakeClient()
+        payload = client.get_tweet_by_id("1919610000000000001")
+
+        self.assertEqual(payload, {"data": []})
+        self.assertEqual(client.calls[0]["url"], "https://api.x.com/2/tweets")
+        params = client.calls[0]["params"]
+        self.assertIsInstance(params, dict)
+        self.assertEqual(params["ids"], "1919610000000000001")
+        self.assertIn("referenced_tweets.id", params["expansions"])
+        self.assertIn("profile_image_url", params["user.fields"])
+
+    def test_fetch_link_builds_single_post_result(self) -> None:
+        """
+        管理器应按链接拉取单条推文并使用 API 作者信息构造结果。
+        """
+
+        class FakeClient:
+            """
+            返回固定单推文响应的客户端。
+            """
+
+            def __init__(self) -> None:
+                """
+                初始化调用记录。
+
+                Args:
+                    None
+
+                Returns:
+                    None
+
+                Raises:
+                    None
+                """
+                self.calls: list[str] = []
+
+            def get_tweet_by_id(self, tweet_id: str) -> dict[str, object]:
+                """
+                返回固定推文 payload。
+
+                Args:
+                    tweet_id (str): 推文 ID。
+
+                Returns:
+                    dict[str, object]: X API 风格响应。
+
+                Raises:
+                    None
+                """
+                self.calls.append(tweet_id)
+                return {
+                    "data": [
+                        {
+                            "id": tweet_id,
+                            "text": "linked post",
+                            "author_id": "10",
+                            "created_at": "2026-05-05T01:02:03.000Z",
+                        }
+                    ],
+                    "includes": {
+                        "users": [
+                            {
+                                "id": "10",
+                                "name": "Kana Hanaiwa",
+                                "username": "kana_hanaiwa",
+                            }
+                        ]
+                    },
+                }
+
+        client = FakeClient()
+        manager = XMonitorManager(client=client)
+        result = manager.fetch_link(
+            "https://x.com/someone/status/1919610000000000001?s=20"
+        )
+
+        self.assertEqual(client.calls, ["1919610000000000001"])
+        self.assertEqual(result.username, "kana_hanaiwa")
+        self.assertEqual(result.display_name, "Kana Hanaiwa")
+        self.assertEqual(
+            result.url,
+            "https://x.com/kana_hanaiwa/status/1919610000000000001",
+        )
+        self.assertIsNotNone(result.source_payload)
+        self.assertRegex(result.created_label, r"\d{2}-\d{2} \d{2}:\d{2}")
 
     def test_latest_uses_default_limit_as_minimum_page_size(self) -> None:
         """
@@ -1051,6 +1225,107 @@ class QQBotXMonitorCommandTests(unittest.TestCase):
             self.assertIn("[X NEW] | @kana_hanaiwa", str(sent[0]["text"]))
             self.assertIn("latest post", str(sent[0]["text"]))
             self.assertEqual(len(sent[0]["items"]), 1)
+        finally:
+            QQBotHandler.x_monitor = old_monitor
+            if old_cfg is not None:
+                QQBotHandler.bot_cfg = old_cfg
+
+    def test_xlink_command_sends_target_tweet_with_media(self) -> None:
+        """
+        /xlink 推文链接应拉取目标推文并走图文发送路径。
+        """
+        handler = QQBotHandler.__new__(QQBotHandler)
+        old_cfg = getattr(QQBotHandler, "bot_cfg", None)
+        old_monitor = getattr(QQBotHandler, "x_monitor", None)
+        monitor = FakeXMonitorManager()
+        sent: list[dict[str, object]] = []
+
+        def fake_send_x_message_with_images(
+            api_base: str,
+            group_id: int,
+            access_token: str,
+            text: str,
+            items: list[XPostResult],
+        ) -> None:
+            """
+            记录 X 图文发送参数。
+
+            Args:
+                api_base (str): OneBot API 基地址。
+                group_id (int): 群号。
+                access_token (str): API Token。
+                text (str): 文本内容。
+                items (list[XPostResult]): 推文列表。
+
+            Returns:
+                None
+
+            Raises:
+                None
+            """
+            sent.append(
+                {
+                    "api_base": api_base,
+                    "group_id": group_id,
+                    "access_token": access_token,
+                    "text": text,
+                    "items": items,
+                }
+            )
+
+        try:
+            QQBotHandler.bot_cfg = SimpleNamespace(
+                api_base="http://onebot", access_token="token"
+            )
+            QQBotHandler.x_monitor = monitor
+            with mock.patch.object(
+                qq_group_bot,
+                "send_x_message_with_images",
+                side_effect=fake_send_x_message_with_images,
+            ), mock.patch.object(qq_group_bot, "_send_group_msg") as send_text:
+                handled = handler._handle_commands(
+                    123,
+                    456,
+                    "/xlink https://x.com/kana_hanaiwa/status/1?s=20",
+                )
+
+            self.assertTrue(handled)
+            self.assertEqual(
+                monitor.fetch_link_calls,
+                ["https://x.com/kana_hanaiwa/status/1?s=20"],
+            )
+            send_text.assert_not_called()
+            self.assertEqual(len(sent), 1)
+            self.assertEqual(sent[0]["api_base"], "http://onebot")
+            self.assertEqual(sent[0]["group_id"], 123)
+            self.assertIn("[X LINK] | @kana_hanaiwa", str(sent[0]["text"]))
+            self.assertIn("linked post", str(sent[0]["text"]))
+            self.assertEqual(len(sent[0]["items"]), 1)
+        finally:
+            QQBotHandler.x_monitor = old_monitor
+            if old_cfg is not None:
+                QQBotHandler.bot_cfg = old_cfg
+
+    def test_xlink_command_reports_usage_when_url_missing(self) -> None:
+        """
+        /xlink 缺少链接时应返回用法提示。
+        """
+        handler = QQBotHandler.__new__(QQBotHandler)
+        old_cfg = getattr(QQBotHandler, "bot_cfg", None)
+        old_monitor = getattr(QQBotHandler, "x_monitor", None)
+        monitor = FakeXMonitorManager()
+
+        try:
+            QQBotHandler.bot_cfg = SimpleNamespace(
+                api_base="http://onebot", access_token="token"
+            )
+            QQBotHandler.x_monitor = monitor
+            with mock.patch.object(qq_group_bot, "_send_group_msg") as send_text:
+                handled = handler._handle_commands(123, 456, "/xlink")
+
+            self.assertTrue(handled)
+            self.assertEqual(monitor.fetch_link_calls, [])
+            self.assertIn("用法: /xlink 推文链接", send_text.call_args.args[2])
         finally:
             QQBotHandler.x_monitor = old_monitor
             if old_cfg is not None:

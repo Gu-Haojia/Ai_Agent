@@ -1981,6 +1981,76 @@ class QQBotHandler(BaseHTTPRequestHandler):
         )
         return True
 
+    def _handle_x_link_command(
+        self, group_id: int, user_id: int, argv: list[str]
+    ) -> bool:
+        """
+        处理按链接渲染单条 X 推文的命令。
+
+        Args:
+            group_id (int): 群号。
+            user_id (int): 用户号。
+            argv (list[str]): 解析后的命令参数。
+
+        Returns:
+            bool: True 表示已处理该命令。
+
+        Raises:
+            AssertionError: 当 group_id 或 user_id 非法时抛出。
+        """
+        assert group_id > 0, "group_id 必须为正整数"
+        assert user_id > 0, "user_id 必须为正整数"
+        if not argv or argv[0] != "/xlink":
+            return False
+        monitor = self._require_x_monitor()
+
+        def _send_to_group(text: str) -> None:
+            """
+            向当前群发送文本消息。
+
+            Args:
+                text (str): 要发送的文本。
+
+            Returns:
+                None: 无返回值。
+
+            Raises:
+                RuntimeError: 当 OneBot 发送失败时抛出。
+            """
+            assert text is not None
+            _send_group_msg(
+                self.bot_cfg.api_base, group_id, text, self.bot_cfg.access_token
+            )
+
+        if len(argv) != 2 or not argv[1].strip():
+            _send_to_group("用法: /xlink 推文链接")
+            return True
+        url = argv[1].strip()
+        try:
+            item = monitor.fetch_link(url)
+        except AssertionError as err:
+            _send_to_group(f"解析推文链接失败：{err}")
+            return True
+        except RuntimeError as err:
+            _send_to_group(str(err))
+            return True
+        except ValueError as err:
+            _send_to_group(f"拉取推文失败：{err}")
+            return True
+        message = monitor.format_lines([item], "LINK")
+        send_x_message_with_images(
+            self.bot_cfg.api_base,
+            group_id,
+            self.bot_cfg.access_token,
+            message,
+            [item],
+        )
+        print(
+            f"[XMonitor] 链接拉取 url='{url}' group={group_id} user={user_id}",
+            flush=True,
+        )
+        return True
+
     def _handle_commands(self, group_id: int, user_id: int, text: str) -> bool:
         """处理内部命令。
 
@@ -1992,6 +2062,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
         - /image              → 在 Gemini 生图模型之间切换
         - /imageprovider      → 在 Gemini/OpenAI 生图服务商之间切换
         - /xtrans             → 循环切换 XMonitor 推文翻译模式
+        - /xlink <url>        → 解析指定 X 推文链接并按当前翻译模式发图
         - /clear              → 为当前群新建线程
         - /whoami             → 先回当前系统提示词，再基于“你是谁”生成一条消息
         - /token              → 统计当前群对应线程的消息 token 数
@@ -2023,7 +2094,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
             )
             return True
 
-        if cmd in {"/merusearch", "/meruwatch", "/merulist", "/xmonitor"}:
+        if cmd in {"/merusearch", "/meruwatch", "/merulist", "/xmonitor", "/xlink"}:
             try:
                 argv = shlex.split(text)
             except ValueError as err:
@@ -2036,6 +2107,8 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 return True
             if cmd == "/xmonitor":
                 handled = self._handle_x_monitor_commands(group_id, user_id, argv)
+            elif cmd == "/xlink":
+                handled = self._handle_x_link_command(group_id, user_id, argv)
             else:
                 handled = self._handle_meru_commands(group_id, user_id, argv)
             if handled:
@@ -2062,7 +2135,8 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 "15) /xmonitor 用户 间隔秒 - 监控 X 账号新推文 (/xmonitor 用户 off 停止)\n"
                 "16) /xmonitor list - 查看 X 推文监控任务\n"
                 "17) /xtrans - 切换 X 推文翻译模式\n"
-                "18) /dl <链接> - 下载视频并直接发送到群聊"
+                "18) /xlink <推文链接> - 解析指定 X 推文并按当前翻译模式发图\n"
+                "19) /dl <链接> - 下载视频并直接发送到群聊"
             )
             _send_group_msg(
                 self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token

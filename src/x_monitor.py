@@ -15,16 +15,19 @@ from datetime import datetime
 from pathlib import Path
 from threading import Event, Lock, Thread
 from typing import Callable, Optional, Sequence
+from urllib.parse import urlparse
 
 import requests
 
 USER_LOOKUP_URL = "https://api.x.com/2/users/by/username/{username}"
 USER_POSTS_URL = "https://api.x.com/2/users/{user_id}/tweets"
+TWEET_LOOKUP_URL = "https://api.x.com/2/tweets"
 POST_URL = "https://x.com/{username}/status/{post_id}"
 DEFAULT_LIMIT = 5
 MAX_WATCH_TASKS = 20
 DEFAULT_STORE_PATH = ".x_monitor.json"
 USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9_]{1,15}$")
+X_LINK_HOSTS = {"x.com", "twitter.com", "mobile.twitter.com"}
 NEW_POST_NOTICE_ENV = "X_MONITOR_NEW_POST_NOTICE"
 
 
@@ -106,6 +109,31 @@ def _post_id_key(post_id: str) -> int:
     return int(normalized)
 
 
+def _tweet_payload_params() -> dict[str, str]:
+    """
+    返回渲染推文图片所需的 X API 字段参数。
+
+    Returns:
+        dict[str, str]: 可传给 X API v2 tweets 相关接口的字段参数。
+
+    Raises:
+        None: 本函数不主动抛出异常。
+    """
+    return {
+        "tweet.fields": (
+            "attachments,author_id,created_at,entities,public_metrics,"
+            "referenced_tweets"
+        ),
+        "expansions": (
+            "author_id,attachments.media_keys,referenced_tweets.id,"
+            "referenced_tweets.id.author_id,"
+            "referenced_tweets.id.attachments.media_keys"
+        ),
+        "user.fields": "id,name,username,profile_image_url",
+        "media.fields": "media_key,type,url,preview_image_url,width,height,alt_text",
+    }
+
+
 def _extract_api_error(payload: object) -> str:
     """
     提取 X API 错误摘要。
@@ -130,6 +158,56 @@ def _extract_api_error(payload: object) -> str:
     detail = str(first.get("detail") or "").strip()
     title = str(first.get("title") or "").strip()
     return detail or title
+
+
+@dataclass(frozen=True)
+class XTweetLink:
+    """
+    X 推文链接解析结果。
+
+    Attributes:
+        username (str): 链接路径中的用户名，缺失时为空字符串。
+        tweet_id (str): 推文 ID。
+    """
+
+    username: str
+    tweet_id: str
+
+
+def _parse_tweet_link(url: str) -> XTweetLink:
+    """
+    从 X/Twitter 推文链接中解析用户名与推文 ID。
+
+    Args:
+        url (str): 用户输入的推文链接。
+
+    Returns:
+        XTweetLink: 解析后的链接信息。
+
+    Raises:
+        AssertionError: 当链接为空、域名不支持或缺少合法推文 ID 时抛出。
+    """
+    raw = url.strip()
+    assert raw, "推文链接不能为空"
+    candidate = raw if "://" in raw else f"https://{raw}"
+    parsed = urlparse(candidate)
+    host = parsed.netloc.lower()
+    if host.startswith("www."):
+        host = host[4:]
+    assert host in X_LINK_HOSTS, "仅支持 x.com/twitter.com 推文链接"
+
+    parts = [part for part in parsed.path.split("/") if part]
+    status_index = next(
+        (idx for idx, part in enumerate(parts) if part in {"status", "statuses"}),
+        -1,
+    )
+    assert status_index >= 0, "链接中缺少 status 路径"
+    assert status_index + 1 < len(parts), "链接中缺少推文 ID"
+    tweet_id = parts[status_index + 1].strip()
+    assert tweet_id.isdigit(), "推文 ID 必须为数字"
+    raw_username = parts[status_index - 1].strip() if status_index > 0 else ""
+    username = raw_username if USERNAME_PATTERN.fullmatch(raw_username) else ""
+    return XTweetLink(username=username, tweet_id=tweet_id)
 
 
 def _collect_post_image_urls(
@@ -320,21 +398,9 @@ class XAPIClient:
         normalized_user_id = user_id.strip()
         assert normalized_user_id, "user_id 不能为空"
         assert 5 <= max_results <= 100, "max_results 必须在 5 到 100 之间"
-        params: dict[str, str] = {
-            "max_results": str(max_results),
-            "tweet.fields": (
-                "attachments,author_id,created_at,entities,public_metrics,"
-                "referenced_tweets"
-            ),
-            "expansions": (
-                "author_id,attachments.media_keys,referenced_tweets.id,"
-                "referenced_tweets.id.author_id,"
-                "referenced_tweets.id.attachments.media_keys"
-            ),
-            "user.fields": "id,name,username,profile_image_url",
-            "media.fields": "media_key,type,url,preview_image_url,width,height,alt_text",
-            "exclude": "retweets",
-        }
+        params = _tweet_payload_params()
+        params["max_results"] = str(max_results)
+        params["exclude"] = "retweets"
         if since_id is not None:
             normalized_since_id = since_id.strip()
             assert normalized_since_id, "since_id 不能为空字符串"
@@ -343,6 +409,28 @@ class XAPIClient:
             USER_POSTS_URL.format(user_id=normalized_user_id),
             params=params,
         )
+
+    def get_tweet_by_id(self, tweet_id: str) -> dict[str, object]:
+        """
+        按推文 ID 获取单条推文及渲染所需 expansions。
+
+        Args:
+            tweet_id (str): X 推文 ID。
+
+        Returns:
+            dict[str, object]: X API 原始 JSON 响应。
+
+        Raises:
+            AssertionError: 当推文 ID 为空或不是数字时抛出。
+            RuntimeError: 当网络或 API 调用失败时抛出。
+            ValueError: 当 API 返回非 JSON 数据时抛出。
+        """
+        normalized = tweet_id.strip()
+        assert normalized, "tweet_id 不能为空"
+        assert normalized.isdigit(), "tweet_id 必须为数字"
+        params = _tweet_payload_params()
+        params["ids"] = normalized
+        return self._request_json(TWEET_LOOKUP_URL, params=params)
 
     def _request_json(
         self, url: str, params: Optional[dict[str, str]] = None
@@ -674,6 +762,29 @@ class XMonitorManager:
             profile.username, profile.user_id, limit=page_size
         )[:limit]
 
+    def fetch_link(self, url: str) -> XPostResult:
+        """
+        按 X/Twitter 推文链接获取单条推文结果。
+
+        Args:
+            url (str): X/Twitter 推文链接。
+
+        Returns:
+            XPostResult: 单条推文结果，包含图片渲染所需 source_payload。
+
+        Raises:
+            AssertionError: 当链接非法或响应中缺少目标推文时抛出。
+            RuntimeError: 当 X API 调用失败时抛出。
+            ValueError: 当 API 返回字段格式非法时抛出。
+        """
+        link = _parse_tweet_link(url)
+        payload = self._get_client().get_tweet_by_id(link.tweet_id)
+        results = self._parse_posts(link.username or "unknown", payload)
+        for item in results:
+            if item.post_id == link.tweet_id:
+                return item
+        raise AssertionError("未获取到目标推文")
+
     def list_watch_tasks(self) -> list[dict[str, object]]:
         """
         返回当前所有监控任务快照。
@@ -918,20 +1029,52 @@ class XMonitorManager:
             text = str(raw_post.get("text") or "").strip()
             created_label = _format_created_at(raw_post.get("created_at"))
             image_urls = _collect_post_image_urls(raw_post, media_by_key, limit=4)
-            display_name = self._post_display_name(raw_post, user_by_id, username)
+            post_username = self._post_username(raw_post, user_by_id, username)
+            display_name = self._post_display_name(
+                raw_post, user_by_id, post_username
+            )
             results.append(
                 XPostResult(
-                    username=username,
+                    username=post_username,
                     post_id=post_id,
                     text=text,
                     created_label=created_label,
-                    url=POST_URL.format(username=username, post_id=post_id),
+                    url=POST_URL.format(username=post_username, post_id=post_id),
                     image_urls=image_urls,
                     source_payload=payload,
                     display_name=display_name,
                 )
             )
         return results
+
+    def _post_username(
+        self,
+        post: dict[str, object],
+        user_by_id: dict[str, dict[str, object]],
+        default_name: str,
+    ) -> str:
+        """
+        从推文作者 expansion 中提取用户名。
+
+        Args:
+            post (dict[str, object]): 单条推文对象。
+            user_by_id (dict[str, dict[str, object]]): 用户 ID 到用户对象的映射。
+            default_name (str): 缺少作者 expansion 时使用的名称。
+
+        Returns:
+            str: 推文作者用户名。
+
+        Raises:
+            AssertionError: 当无法确定用户名时抛出。
+        """
+        author_id = str(post.get("author_id") or "").strip()
+        raw_user = user_by_id.get(author_id) if author_id else None
+        username = ""
+        if raw_user is not None:
+            username = str(raw_user.get("username") or "").strip()
+        resolved = username or default_name.strip()
+        assert resolved, "推文作者用户名不能为空"
+        return resolved
 
     def _post_display_name(
         self,
