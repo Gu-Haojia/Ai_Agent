@@ -121,7 +121,7 @@ def _tweet_payload_params() -> dict[str, str]:
     """
     return {
         "tweet.fields": (
-            "attachments,author_id,created_at,entities,public_metrics,"
+            "attachments,author_id,created_at,entities,note_tweet,public_metrics,"
             "referenced_tweets"
         ),
         "expansions": (

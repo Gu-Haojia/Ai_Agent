@@ -318,6 +318,7 @@ class XMonitorParseTests(unittest.TestCase):
         params = client.calls[0]["params"]
         self.assertIsInstance(params, dict)
         self.assertEqual(params["ids"], "1919610000000000001")
+        self.assertIn("note_tweet", params["tweet.fields"])
         self.assertIn("referenced_tweets.id", params["expansions"])
         self.assertIn("profile_image_url", params["user.fields"])
 
