@@ -1,4 +1,5 @@
 import base64
+from io import BytesIO
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,6 +8,7 @@ from unittest import mock
 
 import image_storage
 from image_storage import ImageStorageManager, StoredImage
+from PIL import Image
 
 try:
     from qq_group_bot import QQBotHandler, _extract_cq_images, _parse_message_and_at
@@ -20,6 +22,30 @@ except ModuleNotFoundError:
 
 
 class MultimodalUnitTest(unittest.TestCase):
+    @staticmethod
+    def _make_image_base64(width: int, height: int, image_format: str) -> str:
+        """
+        生成测试用图片 Base64 字符串。
+
+        Args:
+            width (int): 图片宽度。
+            height (int): 图片高度。
+            image_format (str): Pillow 图片格式，例如 ``PNG`` 或 ``JPEG``。
+
+        Returns:
+            str: 图片二进制内容的 Base64 字符串。
+
+        Raises:
+            AssertionError: 当尺寸或格式非法时抛出。
+        """
+        assert width > 0 and height > 0, "测试图片尺寸必须为正数"
+        assert image_format.strip(), "测试图片格式不能为空"
+        buffer = BytesIO()
+        Image.new("RGB", (width, height), color=(128, 160, 192)).save(
+            buffer, format=image_format
+        )
+        return base64.b64encode(buffer.getvalue()).decode("ascii")
+
     @unittest.skipUnless(_QQ_MODULE_AVAILABLE, "缺少 langgraph 依赖，跳过 QQ 解析逻辑测试")
     def test_extract_cq_images_parses_multiple_segments(self) -> None:
         raw = (
@@ -141,7 +167,7 @@ class MultimodalUnitTest(unittest.TestCase):
     def test_save_base64_image(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             manager = ImageStorageManager(tmp_dir)
-            data = base64.b64encode(b"test").decode("ascii")
+            data = self._make_image_base64(1, 1, "JPEG")
             stored = manager.save_base64_image(data, "image/jpeg")
             self.assertTrue(stored.path.exists())
             self.assertTrue(stored.base64_data)
@@ -149,7 +175,7 @@ class MultimodalUnitTest(unittest.TestCase):
     def test_load_stored_image_by_filename(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             manager = ImageStorageManager(tmp_dir)
-            data = base64.b64encode(b"reference").decode("ascii")
+            data = self._make_image_base64(1, 1, "PNG")
             stored = manager.save_base64_image(data, "image/png")
             loaded = manager.load_stored_image(stored.path.name)
             self.assertEqual(loaded.path, stored.path)
@@ -157,6 +183,18 @@ class MultimodalUnitTest(unittest.TestCase):
             self.assertTrue(loaded.base64_data)
             with self.assertRaises(AssertionError):
                 manager.load_stored_image("missing.png")
+
+    def test_save_base64_image_resizes_when_pixels_exceed_limit(self) -> None:
+        """确认超过像素上限的入站图片会自动缩放后保存。"""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            manager = ImageStorageManager(tmp_dir)
+            data = self._make_image_base64(20, 20, "PNG")
+            with mock.patch.object(image_storage, "MAX_STORED_IMAGE_PIXELS", 100):
+                stored = manager.save_base64_image(data, "image/png")
+
+            self.assertEqual(stored.mime_type, "image/jpeg")
+            with Image.open(stored.path) as saved:
+                self.assertLessEqual(saved.size[0] * saved.size[1], 100)
 
     def test_generate_url_candidates_prefers_twitter_orig(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

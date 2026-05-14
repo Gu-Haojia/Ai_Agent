@@ -23,6 +23,7 @@ import requests
 from google import genai
 from google.genai import types
 from google.genai import errors
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 if TYPE_CHECKING:
     from openai.types.images_response import ImagesResponse
@@ -37,6 +38,8 @@ __all__ = [
 # Gemini 接口需要的参考图像结构：(mime_type, base64 数据)
 GeminiReferenceImage = tuple[str, str]
 OpenAIReferenceImage = str | Path | Sequence[str | Path]
+MAX_STORED_IMAGE_PIXELS = 96_000_000
+MAX_IMAGE_DECODE_PIXELS = 512_000_000
 
 
 @dataclass(frozen=True)
@@ -213,6 +216,112 @@ class ImageStorageManager:
         with self._lock:
             path.write_bytes(data)
         return path
+
+    @staticmethod
+    def _resize_image_data_if_needed(data: bytes, mime_type: str) -> tuple[bytes, str]:
+        """
+        在图片超过安全像素上限时按比例缩放。
+
+        Args:
+            data (bytes): 原始图片二进制数据。
+            mime_type (str): 已识别的图片 MIME 类型。
+
+        Returns:
+            tuple[bytes, str]: 可能被缩放后的图片数据与对应 MIME 类型。
+
+        Raises:
+            AssertionError: 当图片数据为空、MIME 非图片或图片尺寸非法时抛出。
+        """
+        assert data, "图片数据不能为空"
+        assert mime_type.startswith("image/"), "仅支持处理图片 MIME 类型"
+        previous_limit = Image.MAX_IMAGE_PIXELS
+        Image.MAX_IMAGE_PIXELS = MAX_IMAGE_DECODE_PIXELS
+        try:
+            try:
+                image = Image.open(BytesIO(data))
+            except UnidentifiedImageError as exc:
+                raise AssertionError("无法解析图片数据") from exc
+            with image:
+                width, height = image.size
+                pixels = width * height
+                assert width > 0 and height > 0, "图片尺寸非法"
+                assert (
+                    pixels <= MAX_IMAGE_DECODE_PIXELS
+                ), f"图片像素数超过解码安全上限: {pixels}"
+                if pixels <= MAX_STORED_IMAGE_PIXELS:
+                    return data, mime_type
+
+                scale = (MAX_STORED_IMAGE_PIXELS / pixels) ** 0.5
+                new_width = max(1, int(width * scale))
+                new_height = max(1, int(height * scale))
+                assert (
+                    new_width * new_height <= MAX_STORED_IMAGE_PIXELS
+                ), "缩放后图片仍超过像素上限"
+                normalized = ImageOps.exif_transpose(image)
+                resized = normalized.convert("RGB").resize(
+                    (new_width, new_height), Image.Resampling.LANCZOS
+                )
+                output = BytesIO()
+                resized.save(output, format="JPEG", quality=90, optimize=True)
+                return output.getvalue(), "image/jpeg"
+        finally:
+            Image.MAX_IMAGE_PIXELS = previous_limit
+
+    @staticmethod
+    def _suffix_for_image_mime(mime_type: str, filename_hint: Optional[str]) -> str:
+        """
+        根据图片 MIME 与文件名提示选择扩展名。
+
+        Args:
+            mime_type (str): 图片 MIME 类型。
+            filename_hint (Optional[str]): 原始文件名提示。
+
+        Returns:
+            str: 以 ``.`` 开头的文件扩展名。
+
+        Raises:
+            AssertionError: 当无法确定扩展名时抛出。
+        """
+        suffix = {
+            "image/jpeg": ".jpg",
+            "image/png": ".png",
+            "image/gif": ".gif",
+            "image/webp": ".webp",
+        }.get(mime_type)
+        if suffix:
+            return suffix
+        if mime_type and mime_type.startswith("image/"):
+            guessed = mimetypes.guess_extension(mime_type, strict=False)
+            if guessed:
+                return guessed
+        if filename_hint and "." in filename_hint:
+            return "." + filename_hint.rsplit(".", 1)[-1]
+        raise AssertionError(f"无法确定图片扩展名: {mime_type}")
+
+    def _store_image_bytes(
+        self, data: bytes, mime_type: str, filename_hint: Optional[str] = None
+    ) -> StoredImage:
+        """
+        规范化并保存入站图片二进制数据。
+
+        Args:
+            data (bytes): 原始图片数据。
+            mime_type (str): 图片 MIME 类型。
+            filename_hint (Optional[str]): 原始文件名提示。
+
+        Returns:
+            StoredImage: 保存后的图片路径、MIME 与 Base64 数据。
+
+        Raises:
+            AssertionError: 当图片类型或尺寸非法时抛出。
+        """
+        normalized_data, normalized_mime = self._resize_image_data_if_needed(
+            data, mime_type
+        )
+        suffix = self._suffix_for_image_mime(normalized_mime, filename_hint)
+        path = self._write_bytes(self._incoming_dir, normalized_data, suffix)
+        b64 = base64.b64encode(normalized_data).decode("ascii")
+        return StoredImage(path=path, mime_type=normalized_mime, base64_data=b64)
 
     @staticmethod
     def _extract_block_reason(response: object) -> Optional[str]:
@@ -415,25 +524,7 @@ class ImageStorageManager:
 
         if not filename_hint:
             filename_hint = os.path.basename(urlparse(chosen_url).path)
-        suffix = {
-            "image/jpeg": ".jpg",
-            "image/png": ".png",
-            "image/gif": ".gif",
-            "image/webp": ".webp",
-        }.get(mime)
-        if not suffix:
-            if mime and mime.startswith("image/"):
-                guessed = mimetypes.guess_extension(mime, strict=False)
-                if guessed:
-                    suffix = guessed
-            if not suffix and filename_hint and "." in filename_hint:
-                suffix = "." + filename_hint.rsplit(".", 1)[-1]
-            if not suffix:
-                # 默认兜底为 jpg，保证写盘成功
-                suffix = ".jpg"
-        path = self._write_bytes(self._incoming_dir, data, suffix)
-        b64 = base64.b64encode(data).decode("ascii")
-        return StoredImage(path=path, mime_type=mime, base64_data=b64)
+        return self._store_image_bytes(data, mime, filename_hint)
 
     def save_remote_video(
         self, url: str, filename_hint: Optional[str] = None
@@ -541,15 +632,7 @@ class ImageStorageManager:
         """
         assert b64_data, "Base64 数据不能为空"
         data = base64.b64decode(b64_data)
-        suffix = {
-            "image/png": ".png",
-            "image/jpeg": ".jpg",
-            "image/gif": ".gif",
-            "image/webp": ".webp",
-        }.get(mime_type, ".jpg")
-        path = self._write_bytes(self._incoming_dir, data, suffix)
-        encoded = base64.b64encode(data).decode("ascii")
-        return StoredImage(path=path, mime_type=mime_type, base64_data=encoded)
+        return self._store_image_bytes(data, mime_type)
 
     def load_stored_image(self, filename: str) -> StoredImage:
         """
@@ -580,6 +663,20 @@ class ImageStorageManager:
                 if guessed and guessed.startswith("image/")
                 else self._infer_mime(data_bytes, guessed)
             )
+            normalized_data, normalized_mime = self._resize_image_data_if_needed(
+                data_bytes, mime
+            )
+            if normalized_data != data_bytes:
+                suffix = self._suffix_for_image_mime(normalized_mime, path.name)
+                normalized_path = self._write_bytes(
+                    self._incoming_dir, normalized_data, suffix
+                )
+                encoded = base64.b64encode(normalized_data).decode("ascii")
+                return StoredImage(
+                    path=normalized_path,
+                    mime_type=normalized_mime,
+                    base64_data=encoded,
+                )
             encoded = base64.b64encode(data_bytes).decode("ascii")
             return StoredImage(path=path, mime_type=mime, base64_data=encoded)
 
