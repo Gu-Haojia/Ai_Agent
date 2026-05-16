@@ -114,6 +114,7 @@ Kimi 兼容说明：`kimi-code:kimi-for-coding` 会默认解析为 Anthropic-com
 | `ONEBOT_API_BASE` | NapCat HTTP API 地址（默认 `http://127.0.0.1:3000`） |
 | `ONEBOT_SECRET` / `ONEBOT_ACCESS_TOKEN` | 回调签名与 API Token（可选） |
 | `ALLOWED_GROUPS` / `CMD_ALLOWED_USERS` | 群聊/命令白名单，逗号分隔 |
+| `PRIVATE_ALLOWED_USERS` | 允许私聊机器人聊天的 QQ 号，逗号分隔；为空时不响应私聊 |
 | `THREAD_STORE_FILE` | 群 → 线程 ID 映射文件，默认 `.qq_group_threads.json` |
 | `DAILY_TASK` / `NIGHTLY_TASK` | 需要播报的群号（逗号分隔） |
 | `DAILY_TASK_TIME` / `NIGHTLY_TASK_TIME` | HH:MM（24 小时制） |

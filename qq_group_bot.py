@@ -196,6 +196,8 @@ from daily_task import (
     parse_schedule_times,
 )
 
+X_MONITOR_FIXED_INTERVAL_SECONDS = 300
+PRIVATE_CONTEXT_OFFSET = 900_000_000_000_000_000
 _IMAGE_UPLOADER: Optional[ReverseImageUploader] = None
 _IMAGE_UPLOADER_LOCK = Lock()
 
@@ -254,6 +256,7 @@ class BotConfig:
     blacklist_groups: tuple[int, ...] = ()
     limitlist_groups: tuple[int, ...] = ()
     cmd_allowed_users: tuple[int, ...] = ()  # 命令白名单用户（为空表示放行）
+    private_allowed_users: tuple[int, ...] = ()  # 允许私聊的用户（为空表示关闭私聊）
     use_local_image_base64: bool = True
 
     @staticmethod
@@ -288,6 +291,12 @@ class BotConfig:
             cmd_allowed = tuple(
                 int(x) for x in cmd_env.split(",") if x.strip().isdigit()
             )
+        private_env = os.environ.get("PRIVATE_ALLOWED_USERS", "").strip()
+        private_allowed: tuple[int, ...] = ()
+        if private_env:
+            private_allowed = tuple(
+                int(x) for x in private_env.split(",") if x.strip().isdigit()
+            )
         local_img_env = os.environ.get("LOCAL_IMG")
         use_local_image_base64 = True
         if local_img_env is not None:
@@ -305,6 +314,7 @@ class BotConfig:
             blacklist_groups=blacklist,
             limitlist_groups=limitlist,
             cmd_allowed_users=cmd_allowed,
+            private_allowed_users=private_allowed,
             use_local_image_base64=use_local_image_base64,
         )
         # 基础校验
@@ -345,6 +355,33 @@ def _send_group_msg(
     with urlopen(req, timeout=60) as resp:
         if resp.status != 200:
             raise RuntimeError(f"send_group_msg HTTP {resp.status}")
+
+
+def _send_private_msg(
+    api_base: str, user_id: int, message: MessagePayload, access_token: str = ""
+) -> None:
+    """
+    调用 OneBot HTTP API 发送私聊消息（NapCat 兼容）。
+
+    Args:
+        api_base (str): NapCat HTTP API 基地址。
+        user_id (int): 目标 QQ 号。
+        message (MessagePayload): 文本或消息段列表。
+        access_token (str): API Token，可为空。
+
+    Raises:
+        RuntimeError: 当 HTTP 响应码非 200 时抛出。
+    """
+    assert isinstance(user_id, int) and user_id > 0, "user_id 必须为正整数"
+    url = urljoin(api_base + "/", "send_private_msg")
+    payload = {"user_id": user_id, "message": message}
+    headers = {"Content-Type": "application/json"}
+    if access_token:
+        headers["Authorization"] = f"Bearer {access_token}"
+    req = Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers)
+    with urlopen(req, timeout=60) as resp:
+        if resp.status != 200:
+            raise RuntimeError(f"send_private_msg HTTP {resp.status}")
 
 
 def _send_group_at_message(
@@ -1149,6 +1186,178 @@ class QQBotHandler(BaseHTTPRequestHandler):
             contents.append(content)
         return contents
 
+    @staticmethod
+    def _private_context_id(user_id: int) -> int:
+        """
+        为私聊用户生成独立的正整数上下文 ID，复用现有线程/记忆存储。
+
+        Args:
+            user_id (int): QQ 用户号。
+
+        Returns:
+            int: 不与普通群号冲突的上下文 ID。
+
+        Raises:
+            AssertionError: 当 user_id 非法时抛出。
+        """
+        assert isinstance(user_id, int) and user_id > 0, "user_id 必须为正整数"
+        return PRIVATE_CONTEXT_OFFSET + user_id
+
+    def _handle_private_message_event(self, event: dict[str, object]) -> None:
+        """
+        处理白名单用户私聊消息。
+
+        Args:
+            event (dict[str, object]): OneBot v11 私聊消息事件。
+
+        Returns:
+            None: 直接发送私聊回复并返回 204。
+
+        Raises:
+            None: 内部异常会被转换为文本回复。
+        """
+        user_id = int(event.get("user_id", 0) or 0)
+        allow_users = getattr(self.bot_cfg, "private_allowed_users", ()) or ()
+        if user_id <= 0 or user_id not in allow_users:
+            self._send_no_content()
+            return
+
+        parsed = _parse_message_and_at(event)
+        if (
+            not parsed.text
+            and not parsed.images
+            and not parsed.videos
+            and not parsed.reply_message_ids
+        ):
+            self._send_no_content()
+            return
+
+        text = (parsed.text or "").strip()
+        context_id = self._private_context_id(user_id)
+        author = _extract_sender_name(event)
+
+        if text == "/cmd":
+            _send_private_msg(
+                self.bot_cfg.api_base,
+                user_id,
+                "私聊可用命令：/cmd、/clear。普通聊天无需 @，仅 PRIVATE_ALLOWED_USERS 中的用户可用。",
+                self.bot_cfg.access_token,
+            )
+            self._send_no_content()
+            return
+
+        if text == "/clear":
+            new_tid = f"thread-{context_id}-{self.agent._config.thread_id}-{int(time.time())}"
+            new_ns = f"store-{context_id}-{self.agent._config.store_id}-{int(time.time())}"
+            self._group_threads[context_id] = new_tid
+            self._group_namespaces[context_id] = new_ns
+            QQBotHandler.save_thread_store()
+            QQBotHandler.save_namespace_store()
+            _send_private_msg(
+                self.bot_cfg.api_base,
+                user_id,
+                "已清除当前私聊线程与记忆命名空间。",
+                self.bot_cfg.access_token,
+            )
+            self._send_no_content()
+            return
+
+        try:
+            print(
+                f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m "
+                f"\033[34m[PrivateChat]\033[0m Request get: User {user_id} Name {author}: {text or '[No text]'}"
+            )
+            self.agent.set_token_printer(lambda s: sys.stdout.write(s))
+            self.agent.set_memory_namespace(self._namespace_for(context_id))
+
+            user_text = parsed.text
+            if not user_text:
+                if parsed.images and parsed.videos:
+                    user_text = "（用户未提供文本，仅包含图片和视频）"
+                elif parsed.images:
+                    user_text = "（用户未提供文本，仅包含图片）"
+                elif parsed.videos:
+                    user_text = "（用户未提供文本，仅包含视频）"
+                else:
+                    user_text = "（用户未提供文本）"
+            model_input = (
+                f"Private_chat: [true]; User_id: [{user_id}]; "
+                f"User_name: {author}; Msg:\n[{user_text}]"
+            )
+
+            stored_images: list[StoredImage] = []
+            stored_videos: list[StoredVideo] = []
+            storage: Optional[ImageStorageManager] = None
+            if parsed.images or parsed.videos:
+                storage = self._require_image_storage()
+            if parsed.images and storage:
+                seen_tokens: set[str] = set()
+                for seg in parsed.images:
+                    assert seg.url, "当前仅支持通过 URL 获取的图片消息"
+                    token = seg.url or seg.file_id or seg.filename or ""
+                    if token and token in seen_tokens:
+                        continue
+                    if token:
+                        seen_tokens.add(token)
+                    saved = storage.save_remote_image(seg.url, seg.filename)
+                    if saved:
+                        stored_images.append(saved)
+            if parsed.videos and storage:
+                seen_tokens: set[str] = set()
+                for seg in parsed.videos:
+                    assert seg.url, "当前仅支持通过 URL 获取的视频消息"
+                    token = seg.url or seg.file_id or seg.filename or ""
+                    if token and token in seen_tokens:
+                        continue
+                    if token:
+                        seen_tokens.add(token)
+                    stored_videos.append(storage.save_remote_video(seg.url, seg.filename))
+
+            payload = (
+                self._build_multimodal_content(
+                    model_input,
+                    stored_images,
+                    stored_videos,
+                    self.agent._config.model_name,
+                )
+                if stored_images or stored_videos
+                else model_input
+            )
+            answer = self.agent.chat_once_stream(
+                payload, thread_id=self._thread_id_for(context_id)
+            )
+            answer = (answer or "").strip() or "（未生成回复）"
+            generated_images = self.agent.consume_generated_images()
+        except KeyboardInterrupt:
+            answer = "（生成已中断）"
+            generated_images = []
+        except AssertionError as e:
+            answer = f"（配置错误）{e}"
+            generated_images = []
+        except Exception as e:
+            answer = f"（内部错误）{e}"
+            generated_images = []
+
+        image_payloads: list[tuple[str, str]] = []
+        for img in generated_images:
+            try:
+                data_b64 = base64.b64encode(img.path.read_bytes()).decode("ascii")
+                image_payloads.append((data_b64, img.mime_type))
+            except Exception as err:
+                sys.stderr.write(f"[PrivateChat] 读取生成图片失败: {img.path} -> {err}\n")
+
+        try:
+            message_body = self._compose_group_message(answer, image_payloads)
+            _send_private_msg(
+                self.bot_cfg.api_base,
+                user_id,
+                message_body,
+                self.bot_cfg.access_token,
+            )
+        except Exception as e:
+            sys.stderr.write(f"[HTTP] send_private_msg failed: {e}\n")
+        self._send_no_content()
+
     def do_GET(self) -> None:  # noqa: N802
         """健康检查：仅 /healthz 返回 200，其他 GET 返回 501。"""
         if self.path.rstrip("/") == "/healthz":
@@ -1201,7 +1410,11 @@ class QQBotHandler(BaseHTTPRequestHandler):
             self._send_json(400, {"error": "invalid json"})
             return
 
-        # 仅处理群消息
+        # 处理消息事件；群聊需要 @，私聊需要显式白名单。
+        if event.get("post_type") == "message" and event.get("message_type") == "private":
+            self._handle_private_message_event(event)
+            return
+
         if not (
             event.get("post_type") == "message" and event.get("message_type") == "group"
         ):
@@ -1940,19 +2153,16 @@ class QQBotHandler(BaseHTTPRequestHandler):
             )
             return True
 
-        if len(argv) < 3:
-            _send_to_group("用法: /xmonitor 用户 间隔秒；停止：/xmonitor 用户 off；列表：/xmonitor list")
+        if len(argv) != 2:
+            _send_to_group(
+                "用法: /xmonitor 推特ID；测试：/xmonitor 推特ID test；停止：/xmonitor 推特ID off；列表：/xmonitor list"
+            )
             return True
         username = argv[1].strip()
         if not username:
-            _send_to_group("用户名不能为空。")
+            _send_to_group("推特ID不能为空。")
             return True
-        try:
-            interval = float(argv[2])
-            assert interval > 0
-        except Exception:
-            _send_to_group("interval 必须为正数（秒）。")
-            return True
+        interval = float(X_MONITOR_FIXED_INTERVAL_SECONDS)
         try:
             monitor.start_watch(
                 username=username,
@@ -1973,7 +2183,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
             _send_to_group(f"启动监控失败（接口异常）：{err}")
             return True
         _send_to_group(
-            f"开始监控 @{username.lstrip('@')} 的新推文，轮询间隔 {interval:.0f} 秒。首次轮询只记录现有推文。"
+            f"开始监控 @{username.lstrip('@')} 的新推文，轮询间隔固定 5 分钟。首次轮询只记录现有推文。"
         )
         print(
             f"[XMonitor] 启动监控 username='{username}' interval={interval}s group={group_id} user={user_id}",
@@ -2132,7 +2342,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 "12) /apicheck - 检测当前模型 API 是否可用\n"
                 "13) /merusearch \"关键词\" [limit] - 查询 Meru 最新在售\n"
                 "14) /meruwatch \"关键词\" <间隔秒> [价格阈值] - 新品监控 (/meruwatch off 停止)\n"
-                "15) /xmonitor 用户 间隔秒 - 监控 X 账号新推文 (/xmonitor 用户 off 停止)\n"
+                "15) /xmonitor 推特ID - 监控 X 账号新推文，固定 5 分钟轮询 (/xmonitor 推特ID off 停止)\n"
                 "16) /xmonitor list - 查看 X 推文监控任务\n"
                 "17) /xtrans - 切换 X 推文翻译模式\n"
                 "18) /xlink <推文链接> - 解析指定 X 推文并按当前翻译模式发图\n"

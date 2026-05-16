@@ -116,6 +116,7 @@ class FakeXMonitorManager(XMonitorManager):
         """
         self.latest_calls: list[tuple[str, int]] = []
         self.fetch_link_calls: list[str] = []
+        self.start_watch_calls: list[dict[str, object]] = []
 
     def latest(self, username: str, limit: int = 5) -> list[XPostResult]:
         """
@@ -167,6 +168,12 @@ class FakeXMonitorManager(XMonitorManager):
             image_urls=("https://example.com/1.jpg",),
             source_payload=build_render_payload(text="linked post"),
         )
+
+    def start_watch(self, **kwargs: object) -> None:
+        """
+        记录启动监控参数。
+        """
+        self.start_watch_calls.append(kwargs)
 
 
 class FakeBrowserClient:
@@ -1350,6 +1357,40 @@ class QQBotXMonitorCommandTests(unittest.TestCase):
             if old_cfg is not None:
                 QQBotHandler.bot_cfg = old_cfg
 
+    def test_xmonitor_start_uses_twitter_id_with_fixed_five_minute_interval(
+        self,
+    ) -> None:
+        """
+        /xmonitor 启动命令只接收推特 ID，并固定 5 分钟轮询。
+        """
+        handler = QQBotHandler.__new__(QQBotHandler)
+        old_cfg = getattr(QQBotHandler, "bot_cfg", None)
+        old_monitor = getattr(QQBotHandler, "x_monitor", None)
+        monitor = FakeXMonitorManager()
+
+        try:
+            QQBotHandler.bot_cfg = SimpleNamespace(
+                api_base="http://onebot", access_token="token"
+            )
+            QQBotHandler.x_monitor = monitor
+            with mock.patch.object(qq_group_bot, "_send_group_msg") as send_text:
+                handled = handler._handle_x_monitor_commands(
+                    123, 456, ["/xmonitor", "@kana_hanaiwa"]
+                )
+
+            self.assertTrue(handled)
+            self.assertEqual(len(monitor.start_watch_calls), 1)
+            call = monitor.start_watch_calls[0]
+            self.assertEqual(call["username"], "@kana_hanaiwa")
+            self.assertEqual(call["interval"], 300.0)
+            self.assertEqual(call["group_id"], 123)
+            self.assertEqual(call["user_id"], 456)
+            self.assertIn("轮询间隔固定 5 分钟", send_text.call_args.args[2])
+        finally:
+            QQBotHandler.x_monitor = old_monitor
+            if old_cfg is not None:
+                QQBotHandler.bot_cfg = old_cfg
+
     def test_xlink_command_sends_target_tweet_with_media(self) -> None:
         """
         /xlink 推文链接应拉取目标推文并走图文发送路径。
@@ -1450,6 +1491,113 @@ class QQBotXMonitorCommandTests(unittest.TestCase):
             QQBotHandler.x_monitor = old_monitor
             if old_cfg is not None:
                 QQBotHandler.bot_cfg = old_cfg
+
+
+class QQBotPrivateChatTests(unittest.TestCase):
+    """
+    验证 QQBot 私聊白名单链路。
+    """
+
+    def test_private_message_from_allowed_user_uses_private_sender(self) -> None:
+        """
+        白名单用户私聊应进入独立线程并通过 send_private_msg 回复。
+        """
+
+        class FakeAgent:
+            """
+            记录私聊输入的 Agent 替身。
+            """
+
+            def __init__(self) -> None:
+                self._config = SimpleNamespace(
+                    thread_id="tid",
+                    store_id="sid",
+                    model_name="anthropic:kimi",
+                )
+                self.namespace = ""
+                self.thread_id = ""
+                self.payload = ""
+
+            def set_token_printer(self, printer: object) -> None:
+                self.printer = printer
+
+            def set_memory_namespace(self, namespace: str) -> None:
+                self.namespace = namespace
+
+            def chat_once_stream(self, payload: object, thread_id: str) -> str:
+                self.payload = str(payload)
+                self.thread_id = thread_id
+                return "私聊回复"
+
+            def consume_generated_images(self) -> list[object]:
+                return []
+
+        handler = QQBotHandler.__new__(QQBotHandler)
+        old_threads = QQBotHandler._group_threads
+        old_namespaces = QQBotHandler._group_namespaces
+        old_thread_store = QQBotHandler._thread_store_file
+        old_ns_store = QQBotHandler._ns_store_file
+        fake_agent = FakeAgent()
+        try:
+            QQBotHandler._group_threads = {}
+            QQBotHandler._group_namespaces = {}
+            QQBotHandler._thread_store_file = ""
+            QQBotHandler._ns_store_file = ""
+            handler.bot_cfg = qq_group_bot.BotConfig(
+                api_base="http://onebot",
+                access_token="token",
+                private_allowed_users=(456,),
+            )
+            handler.agent = fake_agent
+            handler._send_no_content = mock.Mock()
+            event = {
+                "post_type": "message",
+                "message_type": "private",
+                "user_id": 456,
+                "self_id": 999,
+                "raw_message": "你好",
+                "sender": {"nickname": "Tester"},
+            }
+
+            with mock.patch.object(qq_group_bot, "_send_private_msg") as send_private:
+                handler._handle_private_message_event(event)
+
+            send_private.assert_called_once()
+            self.assertEqual(send_private.call_args.args[:3], ("http://onebot", 456, "私聊回复"))
+            self.assertIn("Private_chat", fake_agent.payload)
+            self.assertIn("你好", fake_agent.payload)
+            self.assertTrue(fake_agent.thread_id.startswith("thread-900000000000000456-"))
+            self.assertTrue(fake_agent.namespace.startswith("store-900000000000000456-"))
+            handler._send_no_content.assert_called_once()
+        finally:
+            QQBotHandler._group_threads = old_threads
+            QQBotHandler._group_namespaces = old_namespaces
+            QQBotHandler._thread_store_file = old_thread_store
+            QQBotHandler._ns_store_file = old_ns_store
+
+    def test_private_message_from_disallowed_user_is_ignored(self) -> None:
+        """
+        未在 PRIVATE_ALLOWED_USERS 中的私聊不会触发回复。
+        """
+        handler = QQBotHandler.__new__(QQBotHandler)
+        handler.bot_cfg = qq_group_bot.BotConfig(
+            api_base="http://onebot",
+            access_token="token",
+            private_allowed_users=(456,),
+        )
+        handler._send_no_content = mock.Mock()
+        event = {
+            "post_type": "message",
+            "message_type": "private",
+            "user_id": 789,
+            "raw_message": "你好",
+        }
+
+        with mock.patch.object(qq_group_bot, "_send_private_msg") as send_private:
+            handler._handle_private_message_event(event)
+
+        send_private.assert_not_called()
+        handler._send_no_content.assert_called_once()
 
 
 if __name__ == "__main__":
