@@ -7,7 +7,7 @@ services:
       LANGGRAPH_PG: postgresql://languser:langpass@postgres:5432/langgraph
       BOT_HOST: 0.0.0.0
       BOT_PORT: 8080
-      ONEBOT_API_BASE: http://host.docker.internal:3001
+      ONEBOT_API_BASE: http://openclaw-napcat:3000
       TZ: Asia/Tokyo
     volumes:
       - .:/app
@@ -21,7 +21,7 @@ services:
       - "host.docker.internal:host-gateway"
 
     ports:
-      - "${EXPOSED_PORT:-8080}:8080"   # 对外暴露非 3001 端口
+      - "127.0.0.1:${EXPOSED_PORT:-18080}:8080"   # 仅本机暴露，避免公开 HTTP 回调端口
     depends_on:
       postgres:
         condition: service_healthy

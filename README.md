@@ -90,14 +90,21 @@ LangGraph/
 
 | 变量 | 作用 | 默认 |
 | --- | --- | --- |
-| `OPENAI_API_KEY` | OpenAI/兼容模型密钥 | - |
-| `MODEL_NAME` | 模型名，支持 `openai:gpt-4o-mini` 等 | `openai:gpt-4o-mini` |
+| `MODEL_NAME` | 模型名，支持 `openai:gpt-4o-mini`、`anthropic:...`、`kimi-code:kimi-for-coding`、`moonshot:<model>` 等 | `openai:gpt-4o-mini` |
+| `SUMMARY_MODEL` | Web Browser 摘要模型；为空时复用 `MODEL_NAME` | 同 `MODEL_NAME` |
+| `KIMI_API_KEY` | Kimi Code API Key，可自动桥接到 Anthropic/OpenAI 兼容 provider | - |
+| `KIMI_PROTOCOL` | `kimi-code:` 别名使用的协议，`anthropic` 或 `openai` | `anthropic` |
+| `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` | Anthropic 兼容模型配置；Kimi Code 推荐 `https://api.kimi.com/coding/` | - |
+| `OPENAI_API_KEY` / `OPENAI_BASE_URL` | OpenAI 或 OpenAI-compatible 模型配置；Kimi Code 为 `https://api.kimi.com/coding/v1` | - |
 | `SYS_MSG_FILE` | 系统提示词路径（`prompts/*.txt`） | 必填（增强版必需） |
 | `LANGGRAPH_PG` | PostgreSQL 连接串，例如 `postgresql://user:pass@host:5432/db` | 空则走内存 |
 | `THREAD_ID` | 默认线程 ID | `demo-plus` / `demo-sql` |
 | `DRY_RUN` | 设为 `1` 时使用内存检查点 | `0` |
 | `ENABLE_TOOLS` | 设为 `1` 时显式启用工具节点 | `1` |
+| `MEM_EMBED_MODEL` | 长期记忆向量索引模型；Kimi-only 部署可设为 `none` 避免隐式依赖 OpenAI embedding | 自动检测 |
 | `TAVILY_API_KEY` | Tavily 搜索工具 Key | 可选 |
+
+Kimi 兼容说明：`kimi-code:kimi-for-coding` 会默认解析为 Anthropic-compatible 调用，并在缺少 `ANTHROPIC_API_KEY` 时尝试复用 `KIMI_API_KEY`；`moonshot:<model>` 会解析为 OpenAI-compatible 调用，并默认使用 Kimi Platform 的 `https://api.moonshot.cn/v1`。Kimi Code 和 Kimi Platform 的 Key/URL 不可混用。
 
 ### QQ 机器人 & 自动任务
 

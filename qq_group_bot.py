@@ -172,10 +172,10 @@ def _load_env_from_files(files: list[str]) -> None:
 _load_env_from_files([".env.local", ".env"])
 
 # 复用现有 Agent
-from langchain.chat_models import init_chat_model
 from sql_agent_cli_stream_plus import (
     AgentConfig,
     SQLCheckpointAgentStreamingPlus,
+    _init_chat_model,
 )
 from src.google_reverse_image_tool import ReverseImageUploader
 from src.meru_monitor import DEFAULT_LIMIT, MeruMonitorManager, MeruSearchResult
@@ -1566,7 +1566,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
         assert model_name and model_name.strip(), "模型名称不可为空"
 
         def _invoke() -> str:
-            chat_model = init_chat_model(model_name)
+            chat_model = _init_chat_model(model_name)
             result = chat_model.invoke("现在是api测试，不要进行任何推理，只需回复 'Hello, world!' 即可。")
             content = getattr(result, "content", None)
             text = content if isinstance(content, str) else str(result)

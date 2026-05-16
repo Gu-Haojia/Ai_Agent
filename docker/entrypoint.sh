@@ -20,7 +20,7 @@ set_core_env_fixed() {
   export LANGGRAPH_PG="postgresql://languser:langpass@postgres:5432/langgraph"
   export BOT_HOST="0.0.0.0"
   export BOT_PORT="8080"
-  export ONEBOT_API_BASE="http://host.docker.internal:3001"
+  export ONEBOT_API_BASE="http://openclaw-napcat:3000"
   export TZ="Asia/Tokyo"
 }
 
