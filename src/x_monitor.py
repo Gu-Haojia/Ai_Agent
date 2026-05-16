@@ -20,12 +20,14 @@ from urllib.parse import urlparse
 import requests
 
 USER_LOOKUP_URL = "https://api.x.com/2/users/by/username/{username}"
+USER_BY_ID_URL = "https://api.x.com/2/users/{user_id}"
 USER_POSTS_URL = "https://api.x.com/2/users/{user_id}/tweets"
 TWEET_LOOKUP_URL = "https://api.x.com/2/tweets"
 POST_URL = "https://x.com/{username}/status/{post_id}"
 DEFAULT_LIMIT = 5
 MAX_WATCH_TASKS = 20
 DEFAULT_STORE_PATH = ".x_monitor.json"
+USER_PROFILE_FIELDS = "id,name,username,most_recent_tweet_id"
 USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9_]{1,15}$")
 X_LINK_HOSTS = {"x.com", "twitter.com", "mobile.twitter.com"}
 NEW_POST_NOTICE_ENV = "X_MONITOR_NEW_POST_NOTICE"
@@ -270,11 +272,13 @@ class XUserProfile:
         user_id (str): X 用户 ID。
         username (str): X 用户名。
         name (str): 显示名称。
+        most_recent_tweet_id (str): 用户最新推文 ID，可能为空。
     """
 
     user_id: str
     username: str
     name: str
+    most_recent_tweet_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -362,16 +366,61 @@ class XAPIClient:
         normalized = _normalize_username(username)
         payload = self._request_json(
             USER_LOOKUP_URL.format(username=normalized),
-            params={"user.fields": "id,name,username"},
+            params={"user.fields": USER_PROFILE_FIELDS},
         )
+        return self._profile_from_payload(payload)
+
+    def get_user_profile_by_id(self, user_id: str) -> XUserProfile:
+        """
+        按用户 ID 获取 X 用户资料。
+
+        Args:
+            user_id (str): X 用户 ID。
+
+        Returns:
+            XUserProfile: 用户资料。
+
+        Raises:
+            AssertionError: 当参数非法或响应缺少必要字段时抛出。
+            RuntimeError: 当网络或 API 调用失败时抛出。
+            ValueError: 当 API 返回非 JSON 数据时抛出。
+        """
+        normalized_user_id = user_id.strip()
+        assert normalized_user_id, "user_id 不能为空"
+        assert normalized_user_id.isdigit(), "user_id 必须为数字"
+        payload = self._request_json(
+            USER_BY_ID_URL.format(user_id=normalized_user_id),
+            params={"user.fields": USER_PROFILE_FIELDS},
+        )
+        return self._profile_from_payload(payload)
+
+    def _profile_from_payload(self, payload: dict[str, object]) -> XUserProfile:
+        """
+        从 X API 用户响应解析标准用户资料。
+
+        Args:
+            payload (dict[str, object]): X API 用户响应。
+
+        Returns:
+            XUserProfile: 解析后的用户资料。
+
+        Raises:
+            AssertionError: 当响应缺少必要字段时抛出。
+        """
         data = payload.get("data")
         assert isinstance(data, dict), "X API 用户响应缺少 data 对象"
         user_id = str(data.get("id") or "").strip()
         api_username = str(data.get("username") or "").strip()
         name = str(data.get("name") or "").strip()
+        most_recent_tweet_id = str(data.get("most_recent_tweet_id") or "").strip()
         assert user_id, "X API 用户响应缺少 id"
         assert api_username, "X API 用户响应缺少 username"
-        return XUserProfile(user_id=user_id, username=api_username, name=name)
+        return XUserProfile(
+            user_id=user_id,
+            username=api_username,
+            name=name,
+            most_recent_tweet_id=most_recent_tweet_id,
+        )
 
     def get_user_posts(
         self,
@@ -492,12 +541,14 @@ class _XWatchTask:
         limit_per_cycle: int,
         group_id: Optional[int],
         user_id: Optional[int],
-        fetcher: Callable[[Optional[str]], Sequence[XPostResult]],
+        initial_since_id: str,
+        fetcher: Callable[[str], Sequence[XPostResult]],
         formatter: Callable[[Sequence[XPostResult], str], str],
         notify: Callable[[str], None],
         notify_media: Optional[
             Callable[[str, Sequence[XPostResult], str], None]
         ] = None,
+        wait_initial_interval: bool = True,
     ) -> None:
         """
         初始化监控任务。
@@ -509,11 +560,13 @@ class _XWatchTask:
             limit_per_cycle (int): 单轮推送上限。
             group_id (Optional[int]): 触发命令的群号。
             user_id (Optional[int]): 触发命令的用户号。
-            fetcher (Callable[[Optional[str]], Sequence[XPostResult]]): 数据获取函数。
+            initial_since_id (str): 任务启动时的增量拉取起点。
+            fetcher (Callable[[str], Sequence[XPostResult]]): 数据获取函数。
             formatter (Callable[[Sequence[XPostResult], str], str]): 文本格式化函数。
             notify (Callable[[str], None]): 纯文本通知回调。
             notify_media (Optional[Callable[[str, Sequence[XPostResult], str], None]]):
                 携带图片的通知回调。
+            wait_initial_interval (bool): 是否等待一个轮询间隔后再首次请求。
 
         Raises:
             AssertionError: 当任务参数非法时抛出。
@@ -522,6 +575,9 @@ class _XWatchTask:
         assert x_user_id and x_user_id.strip(), "x_user_id 不能为空"
         assert interval > 0, "interval 必须大于 0"
         assert limit_per_cycle > 0, "limit_per_cycle 必须大于 0"
+        normalized_since_id = initial_since_id.strip()
+        assert normalized_since_id, "initial_since_id 不能为空"
+        assert normalized_since_id.isdigit(), "initial_since_id 必须为数字"
         self._username = username.strip()
         self._x_user_id = x_user_id.strip()
         self._interval = interval
@@ -534,9 +590,9 @@ class _XWatchTask:
         self._notify_media = notify_media
         self._stop_event = Event()
         self._thread = Thread(target=self._run, name="x-monitor", daemon=True)
-        self._seen: set[str] = set()
-        self._since_id: Optional[str] = None
-        self._first_cycle = True
+        self._seen: set[str] = {normalized_since_id}
+        self._since_id = normalized_since_id
+        self._wait_initial_interval = wait_initial_interval
 
     def start(self) -> None:
         """
@@ -626,19 +682,17 @@ class _XWatchTask:
         Raises:
             None: 后台异常会被记录并进入下一轮。
         """
+        if self._wait_initial_interval and self._stop_event.wait(self._interval):
+            return
         while not self._stop_event.is_set():
             try:
                 results = list(self._fetcher(self._since_id))
-                if self._first_cycle:
-                    self._refresh_seen(results)
-                    self._first_cycle = False
-                else:
-                    new_items = [
-                        item for item in results if item.post_id not in self._seen
-                    ]
-                    if new_items:
-                        self._handle_new_items(new_items)
-                    self._refresh_seen(results)
+                new_items = [
+                    item for item in results if item.post_id not in self._seen
+                ]
+                if new_items:
+                    self._handle_new_items(new_items)
+                self._refresh_seen(results)
             except Exception as err:
                 print(f"[XMonitor] 监控轮询异常: {err}", flush=True)
             self._stop_event.wait(self._interval)
@@ -840,11 +894,15 @@ class XMonitorManager:
         assert limit_per_cycle > 0, "limit_per_cycle 必须大于 0"
         assert notify is not None, "notify 回调不能为空"
         resolved_x_user_id = str(x_user_id or "").strip()
-        resolved_username = normalized
-        if not resolved_x_user_id:
+        if resolved_x_user_id:
+            profile = self._get_client().get_user_profile_by_id(resolved_x_user_id)
+        else:
             profile = self._get_client().get_user_profile(normalized)
-            resolved_username = profile.username
-            resolved_x_user_id = profile.user_id
+        resolved_username = profile.username
+        resolved_x_user_id = profile.user_id
+        initial_since_id = profile.most_recent_tweet_id.strip()
+        assert initial_since_id, "目标用户没有可用的最新推文 ID"
+        assert initial_since_id.isdigit(), "目标用户最新推文 ID 必须为数字"
         with self._lock:
             self._prune_dead_watch_tasks()
             if len(self._watch_tasks) >= MAX_WATCH_TASKS:
@@ -860,6 +918,7 @@ class XMonitorManager:
                 limit_per_cycle=limit_per_cycle,
                 group_id=group_id,
                 user_id=user_id,
+                initial_since_id=initial_since_id,
                 fetcher=fetcher,
                 formatter=formatter,
                 notify=notify,

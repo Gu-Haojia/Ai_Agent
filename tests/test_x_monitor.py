@@ -5,7 +5,9 @@ X 推文监控解析与图文消息拼装单元测试。
 from __future__ import annotations
 
 import os
+import time
 import unittest
+from threading import Event
 from types import SimpleNamespace
 from typing import Sequence
 from unittest import mock
@@ -322,6 +324,130 @@ class XMonitorParseTests(unittest.TestCase):
         self.assertIn("referenced_tweets.id", params["expansions"])
         self.assertIn("profile_image_url", params["user.fields"])
 
+    def test_get_user_profile_requests_most_recent_tweet_id(self) -> None:
+        """
+        按用户名查询资料时应请求最新推文 ID 字段。
+        """
+
+        class FakeClient(XAPIClient):
+            """
+            记录用户查询请求的客户端。
+            """
+
+            def __init__(self) -> None:
+                """
+                初始化请求记录。
+
+                Args:
+                    None
+
+                Returns:
+                    None
+
+                Raises:
+                    None
+                """
+                self.calls: list[dict[str, object]] = []
+
+            def _request_json(
+                self, url: str, params: dict[str, str] | None = None
+            ) -> dict[str, object]:
+                """
+                记录请求并返回固定用户响应。
+
+                Args:
+                    url (str): 请求 URL。
+                    params (dict[str, str] | None): 查询参数。
+
+                Returns:
+                    dict[str, object]: X API 用户响应。
+
+                Raises:
+                    None
+                """
+                self.calls.append({"url": url, "params": params or {}})
+                return {
+                    "data": {
+                        "id": "10",
+                        "name": "Kana Hanaiwa",
+                        "username": "kana_hanaiwa",
+                        "most_recent_tweet_id": "12345",
+                    }
+                }
+
+        client = FakeClient()
+        profile = client.get_user_profile("@kana_hanaiwa")
+
+        self.assertEqual(
+            client.calls[0]["url"],
+            "https://api.x.com/2/users/by/username/kana_hanaiwa",
+        )
+        params = client.calls[0]["params"]
+        self.assertIsInstance(params, dict)
+        self.assertIn("most_recent_tweet_id", params["user.fields"])
+        self.assertEqual(profile.most_recent_tweet_id, "12345")
+
+    def test_get_user_profile_by_id_requests_most_recent_tweet_id(self) -> None:
+        """
+        按用户 ID 查询资料时应请求最新推文 ID 字段。
+        """
+
+        class FakeClient(XAPIClient):
+            """
+            记录按 ID 查询用户请求的客户端。
+            """
+
+            def __init__(self) -> None:
+                """
+                初始化请求记录。
+
+                Args:
+                    None
+
+                Returns:
+                    None
+
+                Raises:
+                    None
+                """
+                self.calls: list[dict[str, object]] = []
+
+            def _request_json(
+                self, url: str, params: dict[str, str] | None = None
+            ) -> dict[str, object]:
+                """
+                记录请求并返回固定用户响应。
+
+                Args:
+                    url (str): 请求 URL。
+                    params (dict[str, str] | None): 查询参数。
+
+                Returns:
+                    dict[str, object]: X API 用户响应。
+
+                Raises:
+                    None
+                """
+                self.calls.append({"url": url, "params": params or {}})
+                return {
+                    "data": {
+                        "id": "10",
+                        "name": "Kana Hanaiwa",
+                        "username": "kana_hanaiwa",
+                        "most_recent_tweet_id": "67890",
+                    }
+                }
+
+        client = FakeClient()
+        profile = client.get_user_profile_by_id("10")
+
+        self.assertEqual(client.calls[0]["url"], "https://api.x.com/2/users/10")
+        params = client.calls[0]["params"]
+        self.assertIsInstance(params, dict)
+        self.assertIn("most_recent_tweet_id", params["user.fields"])
+        self.assertEqual(profile.username, "kana_hanaiwa")
+        self.assertEqual(profile.most_recent_tweet_id, "67890")
+
     def test_fetch_link_builds_single_post_result(self) -> None:
         """
         管理器应按链接拉取单条推文并使用 API 作者信息构造结果。
@@ -435,7 +561,11 @@ class XMonitorParseTests(unittest.TestCase):
                 Raises:
                     None
                 """
-                return SimpleNamespace(user_id="10", username=username.lstrip("@"))
+                return SimpleNamespace(
+                    user_id="10",
+                    username=username.lstrip("@"),
+                    most_recent_tweet_id="12345",
+                )
 
             def get_user_posts(
                 self,
@@ -1059,6 +1189,7 @@ class XMonitorWatchTaskTests(unittest.TestCase):
             limit_per_cycle=5,
             group_id=123,
             user_id=456,
+            initial_since_id="100",
             fetcher=lambda since_id: [],
             formatter=lambda items, tag: "formatted",
             notify=lambda text: events.append(("text", text)),
@@ -1108,6 +1239,7 @@ class XMonitorWatchTaskTests(unittest.TestCase):
             limit_per_cycle=5,
             group_id=123,
             user_id=456,
+            initial_since_id="100",
             fetcher=lambda since_id: [],
             formatter=lambda items, tag: "formatted",
             notify=lambda text: events.append(("text", text)),
@@ -1128,6 +1260,392 @@ class XMonitorWatchTaskTests(unittest.TestCase):
             task._handle_new_items([item])
 
         self.assertEqual(events, [("media", ["1"])])
+
+    def test_task_waits_one_interval_before_first_poll_by_default(self) -> None:
+        """
+        监控任务默认应等待一个 interval 后再首次请求 timeline。
+        """
+        fetch_calls: list[str] = []
+
+        def fake_fetch(since_id: str) -> list[XPostResult]:
+            """
+            记录增量拉取起点。
+
+            Args:
+                since_id (str): 增量拉取起点。
+
+            Returns:
+                list[XPostResult]: 空推文列表。
+
+            Raises:
+                None
+            """
+            fetch_calls.append(since_id)
+            return []
+
+        task = _XWatchTask(
+            username="kana_hanaiwa",
+            x_user_id="10",
+            interval=0.2,
+            limit_per_cycle=5,
+            group_id=123,
+            user_id=456,
+            initial_since_id="100",
+            fetcher=fake_fetch,
+            formatter=lambda items, tag: "formatted",
+            notify=lambda text: None,
+        )
+
+        task.start()
+        time.sleep(0.05)
+        task.stop()
+
+        self.assertEqual(fetch_calls, [])
+
+    def test_task_first_actual_poll_sends_new_items(self) -> None:
+        """
+        首次实际轮询拿到 since_id 之后的新推文时应正常发送。
+        """
+        fetch_calls: list[str] = []
+        events: list[str] = []
+        fetched = Event()
+
+        def fake_fetch(since_id: str) -> list[XPostResult]:
+            """
+            返回一条比初始 since_id 更新的推文。
+
+            Args:
+                since_id (str): 增量拉取起点。
+
+            Returns:
+                list[XPostResult]: 固定新推文列表。
+
+            Raises:
+                None
+            """
+            fetch_calls.append(since_id)
+            fetched.set()
+            return [
+                XPostResult(
+                    username="kana_hanaiwa",
+                    post_id="101",
+                    text="new post",
+                    created_label="05-05 10:05",
+                    url="https://x.com/kana_hanaiwa/status/101",
+                    display_name="Kana Hanaiwa",
+                )
+            ]
+
+        task = _XWatchTask(
+            username="kana_hanaiwa",
+            x_user_id="10",
+            interval=60,
+            limit_per_cycle=5,
+            group_id=123,
+            user_id=456,
+            initial_since_id="100",
+            fetcher=fake_fetch,
+            formatter=lambda items, tag: ",".join(item.post_id for item in items),
+            notify=lambda text: events.append(text),
+            wait_initial_interval=False,
+        )
+
+        with mock.patch.dict("os.environ", {NEW_POST_NOTICE_ENV: ""}):
+            task.start()
+            self.assertTrue(fetched.wait(timeout=1))
+            task.stop()
+
+        self.assertEqual(fetch_calls[:1], ["100"])
+        self.assertEqual(events, ["101"])
+
+    def test_start_watch_uses_profile_since_id_without_immediate_timeline(self) -> None:
+        """
+        新建监控应使用用户资料里的最新推文 ID，并默认不立刻拉 timeline。
+        """
+
+        class FakeClient:
+            """
+            记录监控启动阶段 API 调用的客户端替身。
+            """
+
+            def __init__(self) -> None:
+                """
+                初始化调用记录。
+
+                Args:
+                    None
+
+                Returns:
+                    None
+
+                Raises:
+                    None
+                """
+                self.profile_calls: list[str] = []
+                self.profile_by_id_calls: list[str] = []
+                self.post_calls: list[tuple[str, str | None]] = []
+
+            def get_user_profile(self, username: str) -> SimpleNamespace:
+                """
+                返回带最新推文 ID 的固定用户资料。
+
+                Args:
+                    username (str): X 用户名。
+
+                Returns:
+                    SimpleNamespace: 用户资料。
+
+                Raises:
+                    None
+                """
+                self.profile_calls.append(username)
+                return SimpleNamespace(
+                    user_id="10",
+                    username="kana_hanaiwa",
+                    most_recent_tweet_id="12345",
+                )
+
+            def get_user_profile_by_id(self, user_id: str) -> SimpleNamespace:
+                """
+                记录不应发生的按 ID 查询。
+
+                Args:
+                    user_id (str): X 用户 ID。
+
+                Returns:
+                    SimpleNamespace: 用户资料。
+
+                Raises:
+                    AssertionError: 本测试不期望调用该方法。
+                """
+                self.profile_by_id_calls.append(user_id)
+                raise AssertionError("不应按 ID 查询")
+
+            def get_user_posts(
+                self,
+                user_id: str,
+                max_results: int = DEFAULT_LIMIT,
+                since_id: str | None = None,
+            ) -> dict[str, object]:
+                """
+                记录 timeline 拉取调用。
+
+                Args:
+                    user_id (str): X 用户 ID。
+                    max_results (int): API 拉取数量。
+                    since_id (str | None): 增量拉取起点。
+
+                Returns:
+                    dict[str, object]: 空 timeline 响应。
+
+                Raises:
+                    None
+                """
+                self.post_calls.append((user_id, since_id))
+                return {"data": []}
+
+        client = FakeClient()
+        manager = XMonitorManager(client=client)  # type: ignore[arg-type]
+
+        manager.start_watch(
+            "@kana_hanaiwa",
+            interval=0.2,
+            notify=lambda text: None,
+            persist=False,
+        )
+        time.sleep(0.05)
+        for task in list(manager._watch_tasks):
+            task.stop()
+
+        self.assertEqual(client.profile_calls, ["kana_hanaiwa"])
+        self.assertEqual(client.profile_by_id_calls, [])
+        self.assertEqual(client.post_calls, [])
+
+    def test_start_watch_restore_uses_user_id_profile_since_id(self) -> None:
+        """
+        恢复已有监控时应按 user id 获取最新推文 ID 初始化 since_id。
+        """
+
+        class FakeClient:
+            """
+            记录恢复监控时 API 调用的客户端替身。
+            """
+
+            def __init__(self) -> None:
+                """
+                初始化调用记录。
+
+                Args:
+                    None
+
+                Returns:
+                    None
+
+                Raises:
+                    None
+                """
+                self.profile_calls: list[str] = []
+                self.profile_by_id_calls: list[str] = []
+                self.post_calls: list[tuple[str, str | None]] = []
+
+            def get_user_profile(self, username: str) -> SimpleNamespace:
+                """
+                记录不应发生的用户名查询。
+
+                Args:
+                    username (str): X 用户名。
+
+                Returns:
+                    SimpleNamespace: 用户资料。
+
+                Raises:
+                    AssertionError: 本测试不期望调用该方法。
+                """
+                self.profile_calls.append(username)
+                raise AssertionError("恢复任务不应按用户名查询")
+
+            def get_user_profile_by_id(self, user_id: str) -> SimpleNamespace:
+                """
+                返回带最新推文 ID 的固定用户资料。
+
+                Args:
+                    user_id (str): X 用户 ID。
+
+                Returns:
+                    SimpleNamespace: 用户资料。
+
+                Raises:
+                    None
+                """
+                self.profile_by_id_calls.append(user_id)
+                return SimpleNamespace(
+                    user_id=user_id,
+                    username="kana_hanaiwa",
+                    most_recent_tweet_id="67890",
+                )
+
+            def get_user_posts(
+                self,
+                user_id: str,
+                max_results: int = DEFAULT_LIMIT,
+                since_id: str | None = None,
+            ) -> dict[str, object]:
+                """
+                记录 timeline 拉取调用。
+
+                Args:
+                    user_id (str): X 用户 ID。
+                    max_results (int): API 拉取数量。
+                    since_id (str | None): 增量拉取起点。
+
+                Returns:
+                    dict[str, object]: 空 timeline 响应。
+
+                Raises:
+                    None
+                """
+                self.post_calls.append((user_id, since_id))
+                return {"data": []}
+
+        client = FakeClient()
+        manager = XMonitorManager(client=client)  # type: ignore[arg-type]
+
+        manager.start_watch(
+            "old_name",
+            interval=0.2,
+            notify=lambda text: None,
+            persist=False,
+            x_user_id="10",
+        )
+        time.sleep(0.05)
+        states = [task.to_state() for task in manager._watch_tasks]
+        for task in list(manager._watch_tasks):
+            task.stop()
+
+        self.assertEqual(client.profile_calls, [])
+        self.assertEqual(client.profile_by_id_calls, ["10"])
+        self.assertEqual(client.post_calls, [])
+        self.assertEqual(states[0]["username"], "kana_hanaiwa")
+
+    def test_start_watch_requires_most_recent_tweet_id(self) -> None:
+        """
+        用户资料缺少最新推文 ID 时应直接失败，不回退到 timeline 初始化。
+        """
+
+        class FakeClient:
+            """
+            返回缺少最新推文 ID 的用户资料。
+            """
+
+            def __init__(self) -> None:
+                """
+                初始化调用记录。
+
+                Args:
+                    None
+
+                Returns:
+                    None
+
+                Raises:
+                    None
+                """
+                self.post_calls: list[str] = []
+
+            def get_user_profile(self, username: str) -> SimpleNamespace:
+                """
+                返回没有最新推文 ID 的用户资料。
+
+                Args:
+                    username (str): X 用户名。
+
+                Returns:
+                    SimpleNamespace: 用户资料。
+
+                Raises:
+                    None
+                """
+                return SimpleNamespace(
+                    user_id="10",
+                    username=username,
+                    most_recent_tweet_id="",
+                )
+
+            def get_user_posts(
+                self,
+                user_id: str,
+                max_results: int = DEFAULT_LIMIT,
+                since_id: str | None = None,
+            ) -> dict[str, object]:
+                """
+                记录不应发生的 timeline 拉取。
+
+                Args:
+                    user_id (str): X 用户 ID。
+                    max_results (int): API 拉取数量。
+                    since_id (str | None): 增量拉取起点。
+
+                Returns:
+                    dict[str, object]: 空 timeline 响应。
+
+                Raises:
+                    None
+                """
+                self.post_calls.append(user_id)
+                return {"data": []}
+
+        client = FakeClient()
+        manager = XMonitorManager(client=client)  # type: ignore[arg-type]
+
+        with self.assertRaises(AssertionError):
+            manager.start_watch(
+                "kana_hanaiwa",
+                interval=60,
+                notify=lambda text: None,
+                persist=False,
+            )
+
+        self.assertEqual(client.post_calls, [])
 
 
 class QQBotXMonitorCommandTests(unittest.TestCase):
