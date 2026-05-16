@@ -90,14 +90,21 @@ LangGraph/
 
 | 变量 | 作用 | 默认 |
 | --- | --- | --- |
-| `OPENAI_API_KEY` | OpenAI/兼容模型密钥 | - |
-| `MODEL_NAME` | 模型名，支持 `openai:gpt-4o-mini` 等 | `openai:gpt-4o-mini` |
+| `MODEL_NAME` | 模型名，支持 `openai:gpt-4o-mini`、`anthropic:...`、`kimi-code:kimi-for-coding`、`moonshot:<model>` 等 | `openai:gpt-4o-mini` |
+| `SUMMARY_MODEL` | Web Browser 摘要模型；为空时复用 `MODEL_NAME` | 同 `MODEL_NAME` |
+| `KIMI_API_KEY` | Kimi Code API Key，可自动桥接到 Anthropic/OpenAI 兼容 provider | - |
+| `KIMI_PROTOCOL` | `kimi-code:` 别名使用的协议，`anthropic` 或 `openai` | `anthropic` |
+| `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` | Anthropic 兼容模型配置；Kimi Code 推荐 `https://api.kimi.com/coding/` | - |
+| `OPENAI_API_KEY` / `OPENAI_BASE_URL` | OpenAI 或 OpenAI-compatible 模型配置；Kimi Code 为 `https://api.kimi.com/coding/v1` | - |
 | `SYS_MSG_FILE` | 系统提示词路径（`prompts/*.txt`） | 必填（增强版必需） |
 | `LANGGRAPH_PG` | PostgreSQL 连接串，例如 `postgresql://user:pass@host:5432/db` | 空则走内存 |
 | `THREAD_ID` | 默认线程 ID | `demo-plus` / `demo-sql` |
 | `DRY_RUN` | 设为 `1` 时使用内存检查点 | `0` |
 | `ENABLE_TOOLS` | 设为 `1` 时显式启用工具节点 | `1` |
+| `MEM_EMBED_MODEL` | 长期记忆向量索引模型；Kimi-only 部署可设为 `none` 避免隐式依赖 OpenAI embedding | 自动检测 |
 | `TAVILY_API_KEY` | Tavily 搜索工具 Key | 可选 |
+
+Kimi 兼容说明：`kimi-code:kimi-for-coding` 会默认解析为 Anthropic-compatible 调用，并在缺少 `ANTHROPIC_API_KEY` 时尝试复用 `KIMI_API_KEY`；`moonshot:<model>` 会解析为 OpenAI-compatible 调用，并默认使用 Kimi Platform 的 `https://api.moonshot.cn/v1`。Kimi Code 和 Kimi Platform 的 Key/URL 不可混用。
 
 ### QQ 机器人 & 自动任务
 
@@ -107,12 +114,16 @@ LangGraph/
 | `ONEBOT_API_BASE` | NapCat HTTP API 地址（默认 `http://127.0.0.1:3000`） |
 | `ONEBOT_SECRET` / `ONEBOT_ACCESS_TOKEN` | 回调签名与 API Token（可选） |
 | `ALLOWED_GROUPS` / `CMD_ALLOWED_USERS` | 群聊/命令白名单，逗号分隔 |
+| `PRIVATE_ALLOWED_USERS` | 允许私聊机器人聊天的 QQ 号，逗号分隔；为空时不响应私聊 |
 | `THREAD_STORE_FILE` | 群 → 线程 ID 映射文件，默认 `.qq_group_threads.json` |
 | `DAILY_TASK` / `NIGHTLY_TASK` | 需要播报的群号（逗号分隔） |
 | `DAILY_TASK_TIME` / `NIGHTLY_TASK_TIME` | HH:MM（24 小时制） |
 | `TICKET_TASK` | 接收 Ticket 更新的群号 |
 | `TICKET_TASK_TIME` | 单个或逗号分隔的多个 HH:MM（例：`02:05,16:05,22:05`） |
 | `TICKET_TASK_PROMPT` | （可选）覆盖 Ticket 更新时给 Agent 的提示 |
+| `X_MONITOR_SOURCE` | X 监控数据源：`api` 使用 X API v2；`browser` 使用 Playwright 读取公开页面，不绕过登录墙、验证码、私密账号或付费限制 |
+| `X_BEARER_TOKEN` | `X_MONITOR_SOURCE=api` 时需要的 X API Bearer Token |
+| `X_MONITOR_BROWSER_TIMEOUT_MS` / `X_MONITOR_BROWSER_WAIT_MS` | `browser` 模式下页面超时与等待渲染时间 |
 
 > `.env` 中所有敏感信息均不会被仓库追踪，请通过环境变量或密钥管理服务注入。
 

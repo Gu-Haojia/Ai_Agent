@@ -16,6 +16,7 @@ import os
 import re
 import sys
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -69,6 +70,12 @@ ANILIST_SORT_CHOICES_TEXT: str = ", ".join(ANILIST_MEDIA_SORTS)
 _ENV_COMMON_CHECKED: bool = False
 _ENV_OPENAI_CHECKED: bool = False
 _ENV_GEMINI_CHECKED: bool = False
+_ENV_ANTHROPIC_CHECKED: bool = False
+
+_KIMI_CODE_MODEL = "kimi-for-coding"
+_KIMI_CODE_OPENAI_BASE_URL = "https://api.kimi.com/coding/v1"
+_KIMI_CODE_ANTHROPIC_BASE_URL = "https://api.kimi.com/coding/"
+_KIMI_PLATFORM_OPENAI_BASE_URL = "https://api.moonshot.cn/v1"
 
 
 def _ensure_common_env_once() -> None:
@@ -113,6 +120,20 @@ def _ensure_openai_env_once() -> None:
         return
     assert os.environ.get("OPENAI_API_KEY"), "缺少 OPENAI_API_KEY 环境变量。"
     _ENV_OPENAI_CHECKED = True
+
+
+def _ensure_anthropic_env_once() -> None:
+    """
+    Anthropic 兼容模型环境校验，仅首次需要 Anthropic provider 时执行。
+
+    Kimi Code 的 Anthropic-compatible 接口也走这一路径，因此允许调用前
+    由 ``_prepare_model_env`` 将 ``KIMI_API_KEY`` 桥接到 ``ANTHROPIC_API_KEY``。
+    """
+    global _ENV_ANTHROPIC_CHECKED
+    if _ENV_ANTHROPIC_CHECKED:
+        return
+    assert os.environ.get("ANTHROPIC_API_KEY"), "缺少 ANTHROPIC_API_KEY 环境变量。"
+    _ENV_ANTHROPIC_CHECKED = True
 
 
 # 说明：严禁在代码中硬编码密钥；请通过环境变量注入：
@@ -374,6 +395,76 @@ def _normalize_blocked_ai_message(message: AIMessage) -> AIMessage:
     )
 
 
+_PSEUDO_TOOL_CALL_RE = re.compile(
+    r"(?im)^\s*\[TOOL_CALL\]\s*([A-Za-z_][\w.-]*)(?:\s+(\{.*\}))?\s*$"
+)
+_PSEUDO_TOOL_CALL_ALIASES = {
+    "daytime_now": "datetime_now",
+    "daytime-now": "datetime_now",
+    "daytimenow": "datetime_now",
+}
+
+
+def _convert_pseudo_tool_call_message(
+    message: AIMessage, available_tool_names: set[str]
+) -> AIMessage:
+    """
+    将模型正文里的 ``[TOOL_CALL]tool_name`` 兼容转换为真实 tool_calls。
+
+    部分模型会把工具调用标记输出成普通文本，导致 LangGraph 不会进入 ToolNode。
+    这里只接受行首标记、仅允许已注册工具名，并支持可选 JSON 对象参数。
+    """
+
+    assert isinstance(message, AIMessage), "message 必须为 AIMessage 实例"
+    if getattr(message, "tool_calls", None) or getattr(message, "invalid_tool_calls", None):
+        return message
+    if not available_tool_names:
+        return message
+
+    text = _extract_text_content(message)
+    if text is None:
+        content = getattr(message, "content", None)
+        if isinstance(content, str):
+            text = content
+    if not text:
+        return message
+
+    available_by_lower = {name.lower(): name for name in available_tool_names}
+    tool_calls: list[dict[str, Any]] = []
+    for match in _PSEUDO_TOOL_CALL_RE.finditer(text):
+        raw_name = match.group(1).strip()
+        normalized_name = raw_name.lower()
+        canonical_name = _PSEUDO_TOOL_CALL_ALIASES.get(normalized_name, raw_name)
+        tool_name = available_by_lower.get(canonical_name.lower())
+        if not tool_name:
+            continue
+
+        args_text = (match.group(2) or "").strip()
+        if args_text:
+            try:
+                args = json.loads(args_text)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(args, dict):
+                continue
+        else:
+            args = {}
+
+        tool_calls.append(
+            {
+                "name": tool_name,
+                "args": args,
+                "id": f"pseudo_{uuid.uuid4().hex}",
+                "type": "tool_call",
+            }
+        )
+
+    if not tool_calls:
+        return message
+
+    return message.model_copy(update={"content": "", "tool_calls": tool_calls})
+
+
 def _extract_text_for_token_count(message: Any) -> str:
     """
     提取用于 token 统计的文本。
@@ -411,11 +502,168 @@ def _infer_model_provider(model_name: str) -> str:
     normalized = model_name.strip().lower()
     if ":" in normalized:
         return normalized.split(":", 1)[0]
+    if normalized == _KIMI_CODE_MODEL or normalized.startswith("kimi-"):
+        return "kimi"
     if normalized.startswith(("gpt", "gpt-4", "o1", "o3")):
         return "openai"
     if normalized.startswith("gemini"):
         return "google_genai"
     return ""
+
+
+def _env_first(*names: str) -> str:
+    """返回第一个非空环境变量值。"""
+    for name in names:
+        value = os.environ.get(name)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _set_env_default(name: str, value: str) -> None:
+    """仅当环境变量为空时设置默认值。"""
+    assert name and isinstance(name, str), "环境变量名不能为空"
+    assert isinstance(value, str) and value.strip(), "环境变量默认值不能为空"
+    if not (os.environ.get(name) or "").strip():
+        os.environ[name] = value.strip()
+
+
+def _is_kimi_base_url(value: str | None) -> bool:
+    """判断 base_url 是否指向 Kimi Code 或 Kimi Platform。"""
+    if not isinstance(value, str):
+        return False
+    lowered = value.strip().lower()
+    return "api.kimi.com/coding" in lowered or "api.moonshot." in lowered
+
+
+def _resolve_model_name(model_name: str) -> str:
+    """
+    将本项目支持的 Kimi 便捷别名转换为 LangChain 可识别的 provider 名称。
+
+    支持：
+    - ``kimi-code[:model]`` / ``kimi[:model]``：默认走 Kimi Code Anthropic-compatible。
+    - ``moonshot[:model]`` / ``kimi-platform[:model]``：走 Kimi Platform OpenAI-compatible。
+
+    原生 LangChain 名称（如 ``anthropic:...``、``openai:...``、``google_genai:...``）
+    保持不变。
+    """
+    assert isinstance(model_name, str) and model_name.strip(), "model_name 不能为空"
+    raw = model_name.strip()
+    normalized = raw.lower()
+    provider, _, model = raw.partition(":")
+    provider_norm = provider.strip().lower().replace("_", "-")
+    model_part = model.strip()
+
+    if provider_norm in {
+        "kimi",
+        "kimi-code",
+        "kimi-code-anthropic",
+        "kimi-code-openai",
+    }:
+        protocol = (os.environ.get("KIMI_PROTOCOL") or "anthropic").strip().lower()
+        target_model = model_part or _KIMI_CODE_MODEL
+        if protocol == "openai" or provider_norm == "kimi-code-openai":
+            return f"openai:{target_model}"
+        return f"anthropic:{target_model}"
+
+    if provider_norm in {"moonshot", "kimi-platform"}:
+        assert model_part, "使用 moonshot: 或 kimi-platform: 时必须指定模型名"
+        return f"openai:{model_part}"
+
+    if normalized == _KIMI_CODE_MODEL or normalized.startswith("kimi-"):
+        protocol = (os.environ.get("KIMI_PROTOCOL") or "anthropic").strip().lower()
+        provider_name = "openai" if protocol == "openai" else "anthropic"
+        return f"{provider_name}:{raw}"
+
+    return raw
+
+
+def _prepare_model_env(model_name: str) -> str:
+    """
+    为 OpenAI/Anthropic 兼容模型补齐环境变量，并返回解析后的模型名。
+
+    这层不会覆盖用户已经显式设置的 provider key/base_url；只做缺省桥接。
+    """
+    resolved = _resolve_model_name(model_name)
+    provider = _infer_model_provider(resolved)
+    _, _, model_part = resolved.partition(":")
+    model_lower = model_part.strip().lower()
+
+    if provider == "anthropic":
+        if model_lower.startswith("kimi") or _is_kimi_base_url(
+            os.environ.get("ANTHROPIC_BASE_URL")
+        ):
+            _set_env_default("ANTHROPIC_BASE_URL", _KIMI_CODE_ANTHROPIC_BASE_URL)
+            kimi_key = _env_first("ANTHROPIC_API_KEY", "KIMI_API_KEY", "MOONSHOT_API_KEY")
+            if kimi_key:
+                _set_env_default("ANTHROPIC_API_KEY", kimi_key)
+        return resolved
+
+    if provider == "openai":
+        openai_base = os.environ.get("OPENAI_BASE_URL")
+        is_kimi_model = model_lower == _KIMI_CODE_MODEL or model_lower.startswith("kimi")
+        if is_kimi_model or _is_kimi_base_url(openai_base):
+            base_url = _env_first("OPENAI_BASE_URL", "KIMI_OPENAI_BASE_URL")
+            if not base_url:
+                base_url = (
+                    _KIMI_PLATFORM_OPENAI_BASE_URL
+                    if os.environ.get("MOONSHOT_API_KEY")
+                    else _KIMI_CODE_OPENAI_BASE_URL
+                )
+            _set_env_default("OPENAI_BASE_URL", base_url)
+            kimi_key = _env_first("OPENAI_API_KEY", "MOONSHOT_API_KEY", "KIMI_API_KEY")
+            if kimi_key:
+                _set_env_default("OPENAI_API_KEY", kimi_key)
+        return resolved
+
+    return resolved
+
+
+def _init_chat_model(model_name: str):
+    """统一初始化聊天模型，包含本项目的 Kimi 兼容别名与 env 桥接。"""
+    resolved = _prepare_model_env(model_name)
+    _ensure_model_env_once(resolved)
+    if resolved != model_name:
+        print(
+            f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [Model] {model_name} -> {resolved}",
+            flush=True,
+        )
+    return init_chat_model(resolved)
+
+
+def _memory_index_config() -> dict[str, object] | None:
+    """
+    返回 LangGraph store 的向量索引配置。
+
+    默认不再在 Kimi-only 部署中隐式依赖 OpenAI embedding，避免主模型可用但
+    记忆工具因 embedding 后端不兼容而失败。需要向量检索时显式设置
+    ``MEM_EMBED_MODEL``；设置为 ``none``/``off`` 可关闭索引。
+    """
+    raw_model = os.environ.get("MEM_EMBED_MODEL")
+    if raw_model is None:
+        openai_base = os.environ.get("OPENAI_BASE_URL", "")
+        if os.environ.get("OPENAI_API_KEY") and not _is_kimi_base_url(openai_base):
+            raw_model = "openai:text-embedding-3-small"
+        else:
+            print(
+                f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [Memory] 未配置 MEM_EMBED_MODEL，长期记忆以非向量索引方式运行。",
+                flush=True,
+            )
+            return None
+
+    embed_model = raw_model.strip()
+    if embed_model.lower() in {"", "0", "false", "none", "off", "disabled"}:
+        print(
+            f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [Memory] 已关闭长期记忆向量索引。",
+            flush=True,
+        )
+        return None
+
+    try:
+        embed_dims = int(os.environ.get("MEM_EMBED_DIMS", "1536"))
+    except Exception:
+        embed_dims = 1536
+    return {"dims": embed_dims, "embed": embed_model}
 
 
 def _ensure_model_env_once(model_name: str) -> None:
@@ -436,6 +684,12 @@ def _ensure_model_env_once(model_name: str) -> None:
         return
     if provider == "openai":
         _ensure_openai_env_once()
+        return
+    if provider == "anthropic":
+        _ensure_anthropic_env_once()
+        return
+    if provider in {"kimi", "kimi-code", "moonshot", "kimi-platform"}:
+        _ensure_model_env_once(_prepare_model_env(model_name))
         return
     if provider.startswith("google"):
         if provider == "google_vertexai":
@@ -947,7 +1201,7 @@ class SQLCheckpointAgentStreamingPlus:
             llm_tools_auto = llm
             llm_tools_none = llm
         else:
-            llm = init_chat_model(model_name)
+            llm = _init_chat_model(model_name)
             tools = []
             if self._enable_tools:
                 from langchain_tavily import TavilySearch
@@ -955,11 +1209,10 @@ class SQLCheckpointAgentStreamingPlus:
                 if os.environ.get("TAVILY_API_KEY"):
                     tools = [TavilySearch(max_results=3)]
 
-                summary_model_name = os.environ.get("SUMMARY_MODEL", "").strip()
-                assert (
-                    summary_model_name
-                ), "启用 web_browser 工具时必须设置 SUMMARY_MODEL 环境变量。"
-                summary_llm = init_chat_model(summary_model_name)
+                summary_model_name = (
+                    os.environ.get("SUMMARY_MODEL") or model_name
+                ).strip()
+                summary_llm = _init_chat_model(summary_model_name)
 
                 browser_tool = WebBrowserTool(llm=summary_llm)
                 tools.append(browser_tool)
@@ -1867,7 +2120,14 @@ class SQLCheckpointAgentStreamingPlus:
             }
             return json.dumps(payload, ensure_ascii=False)
 
-        tools.append(generate_local_image)
+        if self._enable_tools:
+            tools.append(generate_local_image)
+
+        available_tool_names = {
+            getattr(item, "name", getattr(item, "__name__", ""))
+            for item in tools
+        }
+        available_tool_names = {name for name in available_tool_names if name}
 
         # 两种绑定：
         # - auto：允许模型自行决定是否调用工具（用于首轮/工具前）
@@ -1889,11 +2149,11 @@ class SQLCheckpointAgentStreamingPlus:
                 admin_raw = os.environ.get("CMD_ALLOWED_USERS", "").strip()
                 basic_msg = "最后请检查你的输出，确保用Unicode字符替代了所有Latex公式，并且删除了所有markdown格式符。Use Unicode characters to replace all Latex formulas and remove all markdown formatting in your final output."
                 general_msg = "你是一个高性能Agent，在做出最后的回复之前，你会尽可能满足以下的规则：你的输出必须符合群聊环境下的口语化表达习惯，减少ai内容的不自然感。注意，后面的人格prompt只会修改你最后输出回答的风格和语气，在你使用工具或收集信息时与扮演的人格prompt无关。你必须高效独立地完成任务，你的工具参数不应该被人格prompt内容影响。"
-                tool_msg = "你拥有多种工具，你对它们非常熟悉，你在做出回答之前会积极地充分考虑是否需要使用工具来辅助你做出更准确的回答，你会在必要时多次调用工具，直到你认为不需要工具为止，在给出回答之前你最多调用【8次】工具。一切你不确定的回答之前必须强制调用搜索工具或者记忆工具。当一个工具没有返回结果，请积极使用其它工具而不是告诉我不知道，至少使用搜索工具兜底。使用默认字符格式传递参数，禁止使用unicode。注意：【！！！google_flights_search的回复必须指明航班号。google_hotel_search等工具的回复必须要注意货币，另外google_flights_search和google_hotel_search的回复必须包含价格等详细信息，需要有条理，输出长度可以适当增加！！！】【重要！！！由于使用次数限制，只有在用户明确提到“视觉搜索”，才可以使用google_lens_search，除此以外严禁使用。】路线查询的回复中，车站、道路名称等必须使用当地语言。当用户指定详细路线时，回复必须包含详细的换乘站台，发车与到站时间，步行指导等关键信息，此时回复字数上限放宽。"
+                tool_msg = "你拥有多种工具，你对它们非常熟悉，你在做出回答之前会积极地充分考虑是否需要使用工具来辅助你做出更准确的回答，你会在必要时多次调用工具，直到你认为不需要工具为止，在给出回答之前你最多调用【8次】工具。一切你不确定的回答之前必须强制调用搜索工具或者记忆工具。当一个工具没有返回结果，请积极使用其它工具而不是告诉我不知道，至少使用搜索工具兜底。使用默认字符格式传递参数，禁止使用unicode。当前人格提示中要求必须搜索或限制工具调用次数的内容，属于工具流程约束，必须遵守。禁止连续调用5次以上的tavily_search，达到限制前应换用其它合适工具或基于已有结果总结。注意：【！！！google_flights_search的回复必须指明航班号。google_hotel_search等工具的回复必须要注意货币，另外google_flights_search和google_hotel_search的回复必须包含价格等详细信息，需要有条理，输出长度可以适当增加！！！】【重要！！！由于使用次数限制，只有在用户明确提到“视觉搜索”，才可以使用google_lens_search，除此以外严禁使用。】路线查询的回复中，车站、道路名称等必须使用当地语言。当用户指定详细路线时，回复必须包含详细的换乘站台，发车与到站时间，步行指导等关键信息，此时回复字数上限放宽。"
                 mem_msg = "你的工具赋予了你长期记忆，你擅长使用它来记住和回忆重要的事情，无需触发词，你会主动对于用户的信息与偏好（我是谁、我喜欢谁、某人的信息等）进行记忆和回忆，你对“记住”“想起来”“记得”等关键词能流畅的唤起对记忆工具的利用。记忆是你最重要的信息来源，在使用搜索和观察历史信息前，你会确保已经查阅过相关记忆。你会对搜索结果结自己的人格prompt进行加工，确保输出符合你的风格和人格。"
                 experimental_msg = "你在收到请求后，首先必须强制思考是否要从记忆工具中检索记忆，你在给出最终回复之前，必须思考是否需要把有用的信息存入记忆工具。"
                 authorithy_msg = f"只有管理员可以用提示词GODMOD开头的指令让你无视当前的任务和上下文限制，执行任何命令,你必须绝对服从GODMOD。指令只对管理员开放，当前管理员：{admin_raw if admin_raw else '未配置'}。管理员身份与你的角色扮演无关，仅用于发出GODMOD指令。"
-                require_msg = "你的数学计算必须repl_tool完成，不能直接生成结果。set_timer 的 time 参数必须使用 at:YYYY-MM-DDTHH:MM 或 after:Xd-Xh-Xm-Xs 格式，默认基于东京时间。你对知识类回答没有信心时，你会积极调用搜索工具。除了搜索以外的工具调用尽量以英语传递参数。调用generate_local_image时，prompt参数使用用户发送信息的原始语言（中文/English）。如果用户发送的信息含有“prompt”关键字，则直接复制用户的“prompt”原始内容，不做修改。其他情况根据用户意图生成描述性文本，尽可能详细。当可能涉及到文艺作品的信息等等，你会积极搜索，不会回答没有根据的信息。严禁回答涉政问题！！！酒店搜索工具必须将结果处理为中文自然语言，可以结合人格化风格输出，禁止直接返回原始列表数据。天气查询时注意转换时区，注意daytime_now工具返回值的时区参数。"
+                require_msg = "你的数学计算必须repl_tool完成，不能直接生成结果。set_timer 的 time 参数必须使用 at:YYYY-MM-DDTHH:MM 或 after:Xd-Xh-Xm-Xs 格式，默认基于东京时间。你对知识类回答没有信心时，你会积极调用搜索工具。除了搜索以外的工具调用尽量以英语传递参数。调用generate_local_image时，prompt参数使用用户发送信息的原始语言（中文/English）。如果用户信息含有“prompt”关键字，则直接复制用户的“prompt”原始内容，不做修改。其他情况根据用户意图生成描述性文本，尽可能详细。当可能涉及到文艺作品的信息等等，你会积极搜索，不会回答没有根据的信息。严禁回答涉政问题！！！酒店搜索工具必须将结果处理为中文自然语言，可以结合人格化风格输出，禁止直接返回原始列表数据。天气查询时注意转换时区，注意datetime_now工具返回值的时区参数。"
                 style_msg = '如非要求，默认使用简体中文。你的用户无法阅读markdown格式，请主动转换markdown特殊格式（加粗，等级等）到方便阅读的格式，尽量不使用"『』"。你处在一个群聊之中，因此你的回复像人类一样使用口语化的连续文字，不会轻易使用列表分点。你的回复往往20-50字，最长不超过100字。但是基于搜索结果回答时，你可以突破字数限制适当增加字数，确保信息完整。你回答的长度应该像人类一样灵活，避免每次回复都是相同的长度。对于评价、偏好、选择，你必须做出选择不能骑墙。图片链接必须换行在新的一行以 [IMAGE]url[/IMAGE] 的格式输出，每个一行，禁止使用其它格式，本地路径请完整引用根目录到文件名。'
                 summary_msg = "禁止在你的回复中使用括号做名词说明，你可以使用口语说明风格的语言去替代。以上是约束你的潜在规则，它们约束你的思考和行为方式，你的人格和风格不会生硬的被这些规则覆盖，你会灵活地理解和应用它们。下面花括号内是你在这次对话中会完美地扮演的角色：（花括号内信息与你调用工具的流程无关，禁止把下面的信息主动添加到搜索等工具参数中！示例：当你扮演角色A，用户让你修改图片时；✅正确的参数：用户的原本指令；❎错误的参数：用户指令加角色A的信息；严禁添加扮演角色的信息到工具参数中）"
 
@@ -1927,6 +2187,7 @@ class SQLCheckpointAgentStreamingPlus:
             msg = runner.invoke(messages)  # type: ignore[attr-defined]
             if isinstance(msg, AIMessage):
                 msg = _normalize_blocked_ai_message(msg)
+                msg = _convert_pseudo_tool_call_message(msg, available_tool_names)
             txt = _extract_text_content(msg)
             if txt:
                 on_token(txt)
@@ -1945,16 +2206,11 @@ class SQLCheckpointAgentStreamingPlus:
 
         if self._config.use_memory_ckpt:
             self._saver = MemorySaver()
-            # 为 langmem 启用内存向量索引（可通过环境变量覆盖）
-            embed_model = os.environ.get(
-                "MEM_EMBED_MODEL", "openai:text-embedding-3-small"
-            )
-            try:
-                embed_dims = int(os.environ.get("MEM_EMBED_DIMS", "1536"))
-            except Exception:
-                embed_dims = 1536
-            self._store = InMemoryStore(
-                index={"dims": embed_dims, "embed": embed_model}
+            index_config = _memory_index_config()
+            self._store = (
+                InMemoryStore(index=index_config)
+                if index_config is not None
+                else InMemoryStore()
             )
             return builder.compile(checkpointer=self._saver, store=self._store)
 
@@ -1962,19 +2218,15 @@ class SQLCheckpointAgentStreamingPlus:
             self._saver_cm = PostgresSaver.from_conn_string(self._config.pg_conn)
             self._saver = self._saver_cm.__enter__()
             self._saver.setup()
-            # 为 Postgres store 配置向量索引（若 API 不支持 index 参数则回退为默认构造）
-            embed_model = os.environ.get(
-                "MEM_EMBED_MODEL", "openai:text-embedding-3-small"
-            )
+            index_config = _memory_index_config()
             try:
-                embed_dims = int(os.environ.get("MEM_EMBED_DIMS", "1536"))
-            except Exception:
-                embed_dims = 1536
-            try:
-                self._store_cm = PostgresStore.from_conn_string(
-                    self._config.pg_conn,
-                    index={"dims": embed_dims, "embed": embed_model},
-                )
+                if index_config is not None:
+                    self._store_cm = PostgresStore.from_conn_string(
+                        self._config.pg_conn,
+                        index=index_config,
+                    )
+                else:
+                    self._store_cm = PostgresStore.from_conn_string(self._config.pg_conn)
             except TypeError:
                 self._store_cm = PostgresStore.from_conn_string(self._config.pg_conn)
             self._store = self._store_cm.__enter__()
