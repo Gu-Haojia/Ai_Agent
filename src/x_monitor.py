@@ -29,6 +29,8 @@ DEFAULT_STORE_PATH = ".x_monitor.json"
 USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9_]{1,15}$")
 X_LINK_HOSTS = {"x.com", "twitter.com", "mobile.twitter.com"}
 NEW_POST_NOTICE_ENV = "X_MONITOR_NEW_POST_NOTICE"
+SOURCE_ENV = "X_MONITOR_SOURCE"
+BROWSER_SOURCE_ALIASES = {"browser", "playwright", "headless"}
 
 
 def _env_flag(name: str) -> bool:
@@ -723,6 +725,7 @@ class XMonitorManager:
         self,
         client: Optional[XAPIClient] = None,
         store_path: str = DEFAULT_STORE_PATH,
+        browser_client: Optional[object] = None,
     ) -> None:
         """
         初始化管理器。
@@ -730,12 +733,15 @@ class XMonitorManager:
         Args:
             client (Optional[XAPIClient]): 可选的自定义 X API 客户端。
             store_path (str): 监控任务持久化 JSON 路径。
+            browser_client (Optional[object]): 可选的浏览器模式客户端。
 
         Raises:
             None: 客户端按需初始化，因此构造函数不读取密钥。
         """
         self._client = client
+        self._browser_client = browser_client
         self._client_lock = Lock()
+        self._browser_client_lock = Lock()
         self._lock = Lock()
         self._watch_tasks: list[_XWatchTask] = []
         self._store_path = Path(store_path)
@@ -756,6 +762,8 @@ class XMonitorManager:
             RuntimeError: 当 X API 调用失败时抛出。
         """
         assert limit > 0, "limit 必须大于 0"
+        if self._use_browser_source():
+            return self._get_browser_client().latest(username, limit=limit)
         profile = self._get_client().get_user_profile(username)
         page_size = max(DEFAULT_LIMIT, min(100, limit))
         return self._fetch_results(
@@ -777,6 +785,8 @@ class XMonitorManager:
             RuntimeError: 当 X API 调用失败时抛出。
             ValueError: 当 API 返回字段格式非法时抛出。
         """
+        if self._use_browser_source():
+            return self._get_browser_client().fetch_link(url)
         link = _parse_tweet_link(url)
         payload = self._get_client().get_tweet_by_id(link.tweet_id)
         results = self._parse_posts(link.username or "unknown", payload)
@@ -842,16 +852,24 @@ class XMonitorManager:
         resolved_x_user_id = str(x_user_id or "").strip()
         resolved_username = normalized
         if not resolved_x_user_id:
-            profile = self._get_client().get_user_profile(normalized)
-            resolved_username = profile.username
-            resolved_x_user_id = profile.user_id
+            if self._use_browser_source():
+                resolved_x_user_id = f"browser:{normalized.lower()}"
+            else:
+                profile = self._get_client().get_user_profile(normalized)
+                resolved_username = profile.username
+                resolved_x_user_id = profile.user_id
         with self._lock:
             self._prune_dead_watch_tasks()
             if len(self._watch_tasks) >= MAX_WATCH_TASKS:
                 raise RuntimeError(f"最多支持 {MAX_WATCH_TASKS} 个 X 监控任务，请先关闭后再启动。")
-            fetcher = lambda since_id: self._fetch_results(
-                resolved_username, resolved_x_user_id, since_id=since_id
-            )
+            if self._use_browser_source():
+                fetcher = lambda since_id: self._get_browser_client().latest(
+                    resolved_username, limit=max(DEFAULT_LIMIT, limit_per_cycle)
+                )
+            else:
+                fetcher = lambda since_id: self._fetch_results(
+                    resolved_username, resolved_x_user_id, since_id=since_id
+                )
             formatter = lambda items, tag: self.format_lines(items, tag)
             task = _XWatchTask(
                 username=resolved_username,
@@ -969,6 +987,38 @@ class XMonitorManager:
             if self._client is None:
                 self._client = XAPIClient()
             return self._client
+
+    def _use_browser_source(self) -> bool:
+        """
+        判断是否启用浏览器公开页面数据源。
+
+        Returns:
+            bool: X_MONITOR_SOURCE 为 browser/playwright/headless 时返回 True。
+
+        Raises:
+            None: 本方法不抛出异常。
+        """
+        source = os.environ.get(SOURCE_ENV, "api").strip().lower()
+        return source in BROWSER_SOURCE_ALIASES and (
+            self._client is None or self._browser_client is not None
+        )
+
+    def _get_browser_client(self) -> object:
+        """
+        获取浏览器模式客户端，必要时延迟初始化。
+
+        Returns:
+            object: 支持 latest/fetch_link 的浏览器客户端。
+
+        Raises:
+            RuntimeError: 当 Playwright 不可用时由客户端初始化路径抛出。
+        """
+        with self._browser_client_lock:
+            if self._browser_client is None:
+                from src.x_browser_monitor import XBrowserClient
+
+                self._browser_client = XBrowserClient()
+            return self._browser_client
 
     def _fetch_results(
         self,

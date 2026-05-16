@@ -13,6 +13,7 @@ from unittest import mock
 from src.x_monitor import (
     DEFAULT_LIMIT,
     NEW_POST_NOTICE_ENV,
+    SOURCE_ENV,
     XAPIClient,
     XMonitorManager,
     XPostResult,
@@ -21,6 +22,7 @@ from src.x_monitor import (
     _parse_tweet_link,
     _XWatchTask,
 )
+from src.x_browser_monitor import BrowserTweetDraft, build_browser_source_payload
 from src.x_monitor_media import (
     XPostImagePayloadBuilder,
     _send_group_msg,
@@ -164,6 +166,53 @@ class FakeXMonitorManager(XMonitorManager):
             url="https://x.com/kana_hanaiwa/status/1",
             image_urls=("https://example.com/1.jpg",),
             source_payload=build_render_payload(text="linked post"),
+        )
+
+
+class FakeBrowserClient:
+    """
+    用于验证浏览器数据源路由的客户端替身。
+    """
+
+    def __init__(self) -> None:
+        """
+        初始化调用记录。
+        """
+        self.latest_calls: list[tuple[str, int]] = []
+        self.fetch_link_calls: list[str] = []
+
+    def latest(self, username: str, limit: int = 5) -> list[XPostResult]:
+        """
+        返回固定浏览器推文结果。
+        """
+        self.latest_calls.append((username, limit))
+        return [
+            XPostResult(
+                username=username.lstrip("@"),
+                post_id="1919610000000000001",
+                text="browser latest",
+                created_label="05-16 10:00",
+                url=f"https://x.com/{username.lstrip('@')}/status/1919610000000000001",
+                source_payload=build_render_payload(
+                    post_id="1919610000000000001", text="browser latest"
+                ),
+            )
+        ][:limit]
+
+    def fetch_link(self, url: str) -> XPostResult:
+        """
+        返回固定浏览器链接结果。
+        """
+        self.fetch_link_calls.append(url)
+        return XPostResult(
+            username="kana_hanaiwa",
+            post_id="1919610000000000001",
+            text="browser linked",
+            created_label="05-16 10:00",
+            url="https://x.com/kana_hanaiwa/status/1919610000000000001",
+            source_payload=build_render_payload(
+                post_id="1919610000000000001", text="browser linked"
+            ),
         )
 
 
@@ -475,6 +524,76 @@ class XMonitorParseTests(unittest.TestCase):
 
         self.assertEqual(client.max_results_calls, [DEFAULT_LIMIT])
         self.assertEqual(len(results), 1)
+
+    def test_browser_source_latest_uses_browser_client_without_api_token(self) -> None:
+        """
+        浏览器模式拉取最新推文时不应初始化 X API 客户端。
+        """
+        browser = FakeBrowserClient()
+        manager = XMonitorManager(browser_client=browser)
+
+        with mock.patch.dict("os.environ", {SOURCE_ENV: "browser"}, clear=True):
+            results = manager.latest("@kana_hanaiwa", limit=1)
+
+        self.assertEqual(browser.latest_calls, [("@kana_hanaiwa", 1)])
+        self.assertEqual(results[0].text, "browser latest")
+
+    def test_browser_source_fetch_link_uses_browser_client(self) -> None:
+        """
+        浏览器模式解析单条链接时应走公开页面客户端。
+        """
+        browser = FakeBrowserClient()
+        manager = XMonitorManager(browser_client=browser)
+        url = "https://x.com/kana_hanaiwa/status/1919610000000000001?s=20"
+
+        with mock.patch.dict("os.environ", {SOURCE_ENV: "playwright"}, clear=True):
+            result = manager.fetch_link(url)
+
+        self.assertEqual(browser.fetch_link_calls, [url])
+        self.assertEqual(result.text, "browser linked")
+
+    def test_browser_source_start_watch_persists_synthetic_user_id(self) -> None:
+        """
+        浏览器模式启动监控时应使用合成用户 ID，不依赖 X API 用户查询。
+        """
+        browser = FakeBrowserClient()
+        manager = XMonitorManager(browser_client=browser)
+
+        with mock.patch.dict("os.environ", {SOURCE_ENV: "browser"}, clear=True):
+            manager.start_watch(
+                username="@kana_hanaiwa",
+                interval=60,
+                limit_per_cycle=2,
+                notify=lambda text: None,
+                persist=False,
+            )
+            tasks = manager.list_watch_tasks()
+            manager.stop_watch("@kana_hanaiwa")
+
+        self.assertEqual(tasks[0]["username"], "kana_hanaiwa")
+        self.assertEqual(tasks[0]["x_user_id"], "browser:kana_hanaiwa")
+
+    def test_browser_source_payload_is_renderer_compatible(self) -> None:
+        """
+        浏览器后端生成的最小 payload 应能被现有推文渲染解析器读取。
+        """
+        payload = build_browser_source_payload(
+            BrowserTweetDraft(
+                username="kana_hanaiwa",
+                post_id="1919610000000000001",
+                text="hello from browser",
+                created_at="2026-05-16T10:00:00.000Z",
+                display_name="Kana Hanaiwa",
+                image_urls=("https://pbs.twimg.com/media/test.jpg",),
+            )
+        )
+
+        tweet = XTweetPayloadParser().parse(payload)[0]
+
+        self.assertEqual(tweet.tweet_id, "1919610000000000001")
+        self.assertEqual(tweet.text, "hello from browser")
+        self.assertEqual(tweet.author.username, "kana_hanaiwa")
+        self.assertEqual(tweet.media[0].best_url, "https://pbs.twimg.com/media/test.jpg")
 
 
 class XMonitorRenderTests(unittest.TestCase):

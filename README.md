@@ -120,6 +120,9 @@ Kimi 兼容说明：`kimi-code:kimi-for-coding` 会默认解析为 Anthropic-com
 | `TICKET_TASK` | 接收 Ticket 更新的群号 |
 | `TICKET_TASK_TIME` | 单个或逗号分隔的多个 HH:MM（例：`02:05,16:05,22:05`） |
 | `TICKET_TASK_PROMPT` | （可选）覆盖 Ticket 更新时给 Agent 的提示 |
+| `X_MONITOR_SOURCE` | X 监控数据源：`api` 使用 X API v2；`browser` 使用 Playwright 读取公开页面，不绕过登录墙、验证码、私密账号或付费限制 |
+| `X_BEARER_TOKEN` | `X_MONITOR_SOURCE=api` 时需要的 X API Bearer Token |
+| `X_MONITOR_BROWSER_TIMEOUT_MS` / `X_MONITOR_BROWSER_WAIT_MS` | `browser` 模式下页面超时与等待渲染时间 |
 
 > `.env` 中所有敏感信息均不会被仓库追踪，请通过环境变量或密钥管理服务注入。
 
