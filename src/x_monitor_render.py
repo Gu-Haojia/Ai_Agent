@@ -635,6 +635,7 @@ def render_tweet_html(
       position: relative;
       font-family: "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei",
         "Noto Sans CJK JP", -apple-system, BlinkMacSystemFont, "Segoe UI",
+        "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji",
         sans-serif;
       font-size: 24px;
       line-height: 1.36;

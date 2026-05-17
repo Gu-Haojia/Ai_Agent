@@ -750,6 +750,8 @@ class XMonitorRenderTests(unittest.TestCase):
         self.assertIn("background: var(--border)", html)
         self.assertNotIn("简中翻译", html)
         self.assertIn('"Noto Sans CJK SC"', html)
+        self.assertIn('"Apple Color Emoji"', html)
+        self.assertIn('"Noto Color Emoji"', html)
         self.assertIn('<span class="mention">@official</span>', html)
         self.assertIn('<span class="hashtag">#话题</span>', html)
 
