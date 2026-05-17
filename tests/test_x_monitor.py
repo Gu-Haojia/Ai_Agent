@@ -866,6 +866,10 @@ class XMonitorTranslationTests(unittest.TestCase):
 
         self.assertEqual(tweet.text, "你好")
         self.assertIsNone(tweet.translation_text)
+        self.assertTrue(tweet.is_translated_text)
+        html = render_tweet_html(tweet, BrowserRenderConfig(width=720))
+        self.assertIn('<div class="text translated-text">你好</div>', html)
+        self.assertIn(".text.translated-text", html)
 
     def test_rendered_tweet_translator_can_render_bilingual_text(self) -> None:
         """
@@ -899,6 +903,7 @@ class XMonitorTranslationTests(unittest.TestCase):
 
         self.assertEqual(tweet.text, "hello")
         self.assertEqual(tweet.translation_text, "你好")
+        self.assertFalse(tweet.is_translated_text)
 
 
 class XMonitorMediaComposeTests(unittest.TestCase):

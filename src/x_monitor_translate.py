@@ -348,9 +348,11 @@ class XRenderedTweetTextTranslator:
         if normalized == XTweetTranslationMode.TRANSLATED:
             tweet.text = translation.strip()
             tweet.translation_text = None
+            tweet.is_translated_text = True
             return
         if normalized == XTweetTranslationMode.BILINGUAL:
             tweet.text = original.strip()
             tweet.translation_text = translation.strip()
+            tweet.is_translated_text = False
             return
         raise AssertionError(f"不支持的翻译模式: {mode}")

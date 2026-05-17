@@ -128,6 +128,7 @@ class XRenderedTweet:
         media (list[XRenderedMedia]): 推文媒体集合。
         references (list[XRenderedReference]): 引用推文集合。
         translation_text (Optional[str]): 对照模式下单独渲染的简体中文译文。
+        is_translated_text (bool): 主正文是否已经替换为简体中文译文。
         raw (dict[str, Any]): 原始推文对象副本。
     """
 
@@ -138,6 +139,7 @@ class XRenderedTweet:
     media: list[XRenderedMedia] = field(default_factory=list)
     references: list[XRenderedReference] = field(default_factory=list)
     translation_text: Optional[str] = None
+    is_translated_text: bool = False
     raw: dict[str, Any] = field(default_factory=dict)
 
     def first_reference(self, reference_type: str) -> Optional[XRenderedReference]:
@@ -629,14 +631,17 @@ def render_tweet_html(
     .mention {{
       color: var(--blue);
     }}
+    .text.translated-text,
     .translation {{
-      margin-top: 14px;
-      padding-top: 12px;
-      position: relative;
       font-family: "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei",
         "Noto Sans CJK JP", -apple-system, BlinkMacSystemFont, "Segoe UI",
         "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji",
         sans-serif;
+    }}
+    .translation {{
+      margin-top: 14px;
+      padding-top: 12px;
+      position: relative;
       font-size: 24px;
       line-height: 1.36;
       white-space: pre-wrap;
@@ -998,7 +1003,7 @@ def _render_tweet(
       {_render_avatar(tweet.author)}
       <div class="body">
         {_render_header(tweet, config)}
-        {_render_text(tweet.text)}
+        {_render_text(tweet.text, translated=tweet.is_translated_text)}
         {_render_translation(tweet.translation_text)}
         {_render_media_stack(tweet.media)}
         {quote}
@@ -1053,12 +1058,13 @@ def _render_avatar(user: XRenderedUser) -> str:
     return f'<img class="avatar" src="{_attr(url)}" alt="">'
 
 
-def _render_text(text: str) -> str:
+def _render_text(text: str, translated: bool = False) -> str:
     """
     渲染正文 HTML。
 
     Args:
         text (str): 推文正文。
+        translated (bool): 是否使用简体中文译文字体栈。
 
     Returns:
         str: HTML 片段。
@@ -1068,7 +1074,8 @@ def _render_text(text: str) -> str:
     """
     if not text:
         return ""
-    return f'<div class="text">{_render_text_entities(text)}</div>'
+    class_name = "text translated-text" if translated else "text"
+    return f'<div class="{class_name}">{_render_text_entities(text)}</div>'
 
 
 def _render_translation(text: Optional[str]) -> str:
