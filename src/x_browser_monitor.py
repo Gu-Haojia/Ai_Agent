@@ -76,6 +76,7 @@ class BrowserTweetDraft:
     created_at: str
     display_name: str
     image_urls: tuple[str, ...]
+    profile_image_url: str = ""
 
     def to_result(self) -> XPostResult:
         """
@@ -128,7 +129,7 @@ def build_browser_source_payload(draft: BrowserTweetDraft) -> dict[str, object]:
                 "id": author_id,
                 "name": draft.display_name or draft.username,
                 "username": draft.username,
-                "profile_image_url": "",
+                "profile_image_url": draft.profile_image_url,
             }
         ]
     }
@@ -283,6 +284,7 @@ class XBrowserClient:
         ).strip()
         display_name = _extract_display_name(article, username)
         image_urls = _extract_image_urls(article)
+        profile_image_url = _extract_profile_image_url(article)
         return BrowserTweetDraft(
             username=username,
             post_id=post_id,
@@ -290,6 +292,7 @@ class XBrowserClient:
             created_at=created_at,
             display_name=display_name,
             image_urls=image_urls,
+            profile_image_url=profile_image_url,
         )
 
     def _raise_page_blocked(self, page: object) -> None:
@@ -363,3 +366,15 @@ def _extract_image_urls(article: object) -> tuple[str, ...]:
         if len(urls) >= 4:
             break
     return tuple(urls)
+
+
+def _extract_profile_image_url(article: object) -> str:
+    """
+    Extract the author's public profile image URL from an article.
+    """
+    images = article.locator('img[src*="profile_images"]')
+    for idx in range(images.count()):
+        src = str(images.nth(idx).get_attribute("src") or "").strip()
+        if src.startswith("http"):
+            return src
+    return ""

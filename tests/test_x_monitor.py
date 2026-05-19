@@ -592,6 +592,9 @@ class XMonitorParseTests(unittest.TestCase):
                 created_at="2026-05-16T10:00:00.000Z",
                 display_name="Kana Hanaiwa",
                 image_urls=("https://pbs.twimg.com/media/test.jpg",),
+                profile_image_url=(
+                    "https://pbs.twimg.com/profile_images/1/avatar_normal.jpg"
+                ),
             )
         )
 
@@ -600,6 +603,14 @@ class XMonitorParseTests(unittest.TestCase):
         self.assertEqual(tweet.tweet_id, "1919610000000000001")
         self.assertEqual(tweet.text, "hello from browser")
         self.assertEqual(tweet.author.username, "kana_hanaiwa")
+        self.assertEqual(
+            tweet.author.profile_image_url,
+            "https://pbs.twimg.com/profile_images/1/avatar_normal.jpg",
+        )
+        self.assertEqual(
+            tweet.author.high_res_profile_image_url,
+            "https://pbs.twimg.com/profile_images/1/avatar_400x400.jpg",
+        )
         self.assertEqual(tweet.media[0].best_url, "https://pbs.twimg.com/media/test.jpg")
 
 
