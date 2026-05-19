@@ -990,8 +990,8 @@ class XMonitorManager:
             )
             self._watch_tasks.append(task)
             task.start()
-            if persist:
-                self._persist_locked()
+        if persist:
+            self._persist_current_tasks()
 
     def stop_watch(self, username: str, group_id: Optional[int] = None) -> int:
         """
@@ -1008,20 +1008,23 @@ class XMonitorManager:
             AssertionError: 当用户名格式非法时抛出。
         """
         _normalize_username(username)
+        stopped_tasks: list[_XWatchTask] = []
         with self._lock:
             self._prune_dead_watch_tasks()
             remaining: list[_XWatchTask] = []
-            stopped = 0
             for task in self._watch_tasks:
                 if task.matches(username, group_id=group_id):
-                    task.stop()
-                    stopped += 1
+                    stopped_tasks.append(task)
                 else:
                     remaining.append(task)
-            if stopped:
+            if stopped_tasks:
                 self._watch_tasks = remaining
-                self._persist_locked()
-            return stopped
+        for task in stopped_tasks:
+            task.stop()
+        stopped = len(stopped_tasks)
+        if stopped:
+            self._persist_current_tasks()
+        return stopped
 
     def restore_tasks(
         self,
@@ -1433,22 +1436,9 @@ class XMonitorManager:
             print(f"[XMonitor] 读取持久化任务失败：{err}", flush=True)
         return []
 
-    def _persist_locked(self) -> None:
-        """
-        在持锁状态下写入当前任务列表。
-
-        Returns:
-            None: 无返回值。
-
-        Raises:
-            None: 写入失败会记录日志。
-        """
-        records = [task.to_state() for task in self._watch_tasks]
-        self._write_records(records)
-
     def _persist_current_tasks(self) -> None:
         """
-        写入当前任务列表快照。
+        安全获取当前任务状态快照并写入持久化文件。
 
         Returns:
             None: 无返回值。
@@ -1456,7 +1446,8 @@ class XMonitorManager:
         Raises:
             None: 写入失败会记录日志。
         """
-        records = [task.to_state() for task in list(self._watch_tasks)]
+        with self._lock:
+            records = [task.to_state() for task in self._watch_tasks]
         self._write_records(records)
 
     def _write_records(self, records: list[dict[str, object]]) -> None:
