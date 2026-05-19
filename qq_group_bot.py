@@ -1973,7 +1973,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
             _send_to_group(f"启动监控失败（接口异常）：{err}")
             return True
         _send_to_group(
-            f"开始监控 @{username.lstrip('@')} 的新推文，轮询间隔 {interval:.0f} 秒。首次轮询只记录现有推文。"
+            f"开始监控 @{username.lstrip('@')} 的新推文，轮询间隔 {interval:.0f} 秒。已记录当前最新推文作为起点。"
         )
         print(
             f"[XMonitor] 启动监控 username='{username}' interval={interval}s group={group_id} user={user_id}",

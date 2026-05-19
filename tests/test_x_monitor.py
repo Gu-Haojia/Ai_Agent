@@ -4,7 +4,9 @@ X 推文监控解析与图文消息拼装单元测试。
 
 from __future__ import annotations
 
+import json
 import os
+import tempfile
 import time
 import unittest
 from threading import Event
@@ -15,6 +17,7 @@ from unittest import mock
 from src.x_monitor import (
     DEFAULT_LIMIT,
     NEW_POST_NOTICE_ENV,
+    RESTORE_MODE_ENV,
     XAPIClient,
     XMonitorManager,
     XPostResult,
@@ -1365,6 +1368,39 @@ class XMonitorWatchTaskTests(unittest.TestCase):
         self.assertEqual(fetch_calls[:1], ["100"])
         self.assertEqual(events, ["101"])
 
+    def test_task_state_contains_since_id_and_updates_callback(self) -> None:
+        """
+        任务状态应包含 since_id，并在水位线前进时触发回调。
+        """
+        changed: list[str] = []
+        task = _XWatchTask(
+            username="kana_hanaiwa",
+            x_user_id="10",
+            interval=60,
+            limit_per_cycle=5,
+            group_id=123,
+            user_id=456,
+            initial_since_id="100",
+            fetcher=lambda since_id: [],
+            formatter=lambda items, tag: "formatted",
+            notify=lambda text: None,
+            on_state_change=lambda: changed.append("changed"),
+        )
+        item = XPostResult(
+            username="kana_hanaiwa",
+            post_id="101",
+            text="new post",
+            created_label="05-05 10:05",
+            url="https://x.com/kana_hanaiwa/status/101",
+            display_name="Kana Hanaiwa",
+        )
+
+        self.assertEqual(task.to_state()["since_id"], "100")
+        task._refresh_seen([item])
+
+        self.assertEqual(task.to_state()["since_id"], "101")
+        self.assertEqual(changed, ["changed"])
+
     def test_start_watch_uses_profile_since_id_without_immediate_timeline(self) -> None:
         """
         新建监控应使用用户资料里的最新推文 ID，并默认不立刻拉 timeline。
@@ -1468,7 +1504,55 @@ class XMonitorWatchTaskTests(unittest.TestCase):
         self.assertEqual(client.profile_by_id_calls, [])
         self.assertEqual(client.post_calls, [])
 
-    def test_start_watch_restore_uses_user_id_profile_since_id(self) -> None:
+    def test_start_watch_persists_initial_since_id(self) -> None:
+        """
+        新建监控写入持久化文件时应包含初始 since_id。
+        """
+
+        class FakeClient:
+            """
+            返回固定用户资料的客户端替身。
+            """
+
+            def get_user_profile(self, username: str) -> SimpleNamespace:
+                """
+                返回带最新推文 ID 的固定用户资料。
+
+                Args:
+                    username (str): X 用户名。
+
+                Returns:
+                    SimpleNamespace: 用户资料。
+
+                Raises:
+                    None
+                """
+                return SimpleNamespace(
+                    user_id="10",
+                    username=username,
+                    most_recent_tweet_id="12345",
+                )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store_path = os.path.join(tmpdir, "x_monitor.json")
+            manager = XMonitorManager(
+                client=FakeClient(),  # type: ignore[arg-type]
+                store_path=store_path,
+            )
+
+            manager.start_watch(
+                "kana_hanaiwa",
+                interval=60,
+                notify=lambda text: None,
+            )
+            with open(store_path, encoding="utf-8") as f:
+                records = json.loads(f.read())
+            for task in list(manager._watch_tasks):
+                task.stop()
+
+        self.assertEqual(records[0]["since_id"], "12345")
+
+    def test_restore_tasks_latest_mode_uses_user_id_profile_since_id(self) -> None:
         """
         恢复已有监控时应按 user id 获取最新推文 ID 初始化 since_id。
         """
@@ -1554,25 +1638,318 @@ class XMonitorWatchTaskTests(unittest.TestCase):
                 self.post_calls.append((user_id, since_id))
                 return {"data": []}
 
-        client = FakeClient()
-        manager = XMonitorManager(client=client)  # type: ignore[arg-type]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store_path = os.path.join(tmpdir, "x_monitor.json")
+            with open(store_path, "w", encoding="utf-8") as f:
+                json.dump(
+                    [
+                        {
+                            "username": "old_name",
+                            "x_user_id": "10",
+                            "interval": 60,
+                            "limit_per_cycle": 5,
+                            "group_id": 123,
+                            "user_id": 456,
+                            "since_id": "100",
+                        }
+                    ],
+                    f,
+                )
+            client = FakeClient()
+            manager = XMonitorManager(
+                client=client,  # type: ignore[arg-type]
+                store_path=store_path,
+            )
 
-        manager.start_watch(
-            "old_name",
-            interval=0.2,
-            notify=lambda text: None,
-            persist=False,
-            x_user_id="10",
-        )
-        time.sleep(0.05)
-        states = [task.to_state() for task in manager._watch_tasks]
-        for task in list(manager._watch_tasks):
-            task.stop()
+            with mock.patch.dict("os.environ", {RESTORE_MODE_ENV: "latest"}):
+                restored = manager.restore_tasks(
+                    lambda group_id, user_id, rec: [lambda text: None]
+                )
+            states = [task.to_state() for task in manager._watch_tasks]
+            for task in list(manager._watch_tasks):
+                task.stop()
 
+        self.assertEqual(restored, 1)
         self.assertEqual(client.profile_calls, [])
         self.assertEqual(client.profile_by_id_calls, ["10"])
         self.assertEqual(client.post_calls, [])
         self.assertEqual(states[0]["username"], "kana_hanaiwa")
+        self.assertEqual(states[0]["since_id"], "67890")
+
+    def test_restore_tasks_timeline_mode_advances_since_id_only(self) -> None:
+        """
+        timeline 恢复模式应只用旧 since_id 推进水位线，不发送停机推文。
+        """
+
+        class FakeClient:
+            """
+            记录 timeline 恢复调用的客户端替身。
+            """
+
+            def __init__(self) -> None:
+                """
+                初始化调用记录。
+
+                Args:
+                    None
+
+                Returns:
+                    None
+
+                Raises:
+                    None
+                """
+                self.profile_by_id_calls: list[str] = []
+                self.post_calls: list[tuple[str, str | None]] = []
+
+            def get_user_profile_by_id(self, user_id: str) -> SimpleNamespace:
+                """
+                记录不应发生的 profile 查询。
+
+                Args:
+                    user_id (str): X 用户 ID。
+
+                Returns:
+                    SimpleNamespace: 用户资料。
+
+                Raises:
+                    AssertionError: 本测试不期望调用该方法。
+                """
+                self.profile_by_id_calls.append(user_id)
+                raise AssertionError("timeline 模式不应查询用户资料")
+
+            def get_user_posts(
+                self,
+                user_id: str,
+                max_results: int = DEFAULT_LIMIT,
+                since_id: str | None = None,
+            ) -> dict[str, object]:
+                """
+                返回停机期间的新推文用于推进 since_id。
+
+                Args:
+                    user_id (str): X 用户 ID。
+                    max_results (int): API 拉取数量。
+                    since_id (str | None): 增量拉取起点。
+
+                Returns:
+                    dict[str, object]: X API 风格响应。
+
+                Raises:
+                    None
+                """
+                self.post_calls.append((user_id, since_id))
+                return {
+                    "data": [
+                        {"id": "101", "text": "old downtime post"},
+                        {"id": "105", "text": "new downtime post"},
+                    ]
+                }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store_path = os.path.join(tmpdir, "x_monitor.json")
+            with open(store_path, "w", encoding="utf-8") as f:
+                json.dump(
+                    [
+                        {
+                            "username": "kana_hanaiwa",
+                            "x_user_id": "10",
+                            "interval": 60,
+                            "limit_per_cycle": 5,
+                            "group_id": 123,
+                            "user_id": 456,
+                            "since_id": "100",
+                        }
+                    ],
+                    f,
+                )
+            client = FakeClient()
+            events: list[str] = []
+            manager = XMonitorManager(
+                client=client,  # type: ignore[arg-type]
+                store_path=store_path,
+            )
+
+            with mock.patch.dict("os.environ", {RESTORE_MODE_ENV: "timeline"}):
+                restored = manager.restore_tasks(
+                    lambda group_id, user_id, rec: [events.append]
+                )
+            states = [task.to_state() for task in manager._watch_tasks]
+            for task in list(manager._watch_tasks):
+                task.stop()
+
+        self.assertEqual(restored, 1)
+        self.assertEqual(client.profile_by_id_calls, [])
+        self.assertEqual(client.post_calls, [("10", "100")])
+        self.assertEqual(states[0]["since_id"], "105")
+        self.assertEqual(events, [])
+
+    def test_restore_tasks_timeline_mode_keeps_empty_since_id(self) -> None:
+        """
+        timeline 恢复模式无新推文时应沿用旧 since_id。
+        """
+
+        class FakeClient:
+            """
+            返回空 timeline 响应的客户端替身。
+            """
+
+            def __init__(self) -> None:
+                """
+                初始化调用记录。
+
+                Args:
+                    None
+
+                Returns:
+                    None
+
+                Raises:
+                    None
+                """
+                self.post_calls: list[tuple[str, str | None]] = []
+
+            def get_user_posts(
+                self,
+                user_id: str,
+                max_results: int = DEFAULT_LIMIT,
+                since_id: str | None = None,
+            ) -> dict[str, object]:
+                """
+                返回空 timeline 响应。
+
+                Args:
+                    user_id (str): X 用户 ID。
+                    max_results (int): API 拉取数量。
+                    since_id (str | None): 增量拉取起点。
+
+                Returns:
+                    dict[str, object]: 空 X API 响应。
+
+                Raises:
+                    None
+                """
+                self.post_calls.append((user_id, since_id))
+                return {"data": []}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store_path = os.path.join(tmpdir, "x_monitor.json")
+            with open(store_path, "w", encoding="utf-8") as f:
+                json.dump(
+                    [
+                        {
+                            "username": "kana_hanaiwa",
+                            "x_user_id": "10",
+                            "interval": 60,
+                            "limit_per_cycle": 5,
+                            "group_id": 123,
+                            "user_id": 456,
+                            "since_id": "100",
+                        }
+                    ],
+                    f,
+                )
+            client = FakeClient()
+            manager = XMonitorManager(
+                client=client,  # type: ignore[arg-type]
+                store_path=store_path,
+            )
+
+            with mock.patch.dict("os.environ", {RESTORE_MODE_ENV: "timeline"}):
+                restored = manager.restore_tasks(
+                    lambda group_id, user_id, rec: [lambda text: None]
+                )
+            states = [task.to_state() for task in manager._watch_tasks]
+            for task in list(manager._watch_tasks):
+                task.stop()
+
+        self.assertEqual(restored, 1)
+        self.assertEqual(client.post_calls, [("10", "100")])
+        self.assertEqual(states[0]["since_id"], "100")
+
+    def test_restore_tasks_timeline_mode_persists_advanced_since_id(self) -> None:
+        """
+        恢复任务时 timeline 模式推进的 since_id 应写回持久化文件。
+        """
+
+        class FakeClient:
+            """
+            为恢复任务返回停机期间新推文的客户端替身。
+            """
+
+            def __init__(self) -> None:
+                """
+                初始化调用记录。
+
+                Args:
+                    None
+
+                Returns:
+                    None
+
+                Raises:
+                    None
+                """
+                self.post_calls: list[tuple[str, str | None]] = []
+
+            def get_user_posts(
+                self,
+                user_id: str,
+                max_results: int = DEFAULT_LIMIT,
+                since_id: str | None = None,
+            ) -> dict[str, object]:
+                """
+                返回停机期间的新推文。
+
+                Args:
+                    user_id (str): X 用户 ID。
+                    max_results (int): API 拉取数量。
+                    since_id (str | None): 增量拉取起点。
+
+                Returns:
+                    dict[str, object]: X API 风格响应。
+
+                Raises:
+                    None
+                """
+                self.post_calls.append((user_id, since_id))
+                return {"data": [{"id": "108", "text": "downtime post"}]}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store_path = os.path.join(tmpdir, "x_monitor.json")
+            with open(store_path, "w", encoding="utf-8") as f:
+                json.dump(
+                    [
+                        {
+                            "username": "kana_hanaiwa",
+                            "x_user_id": "10",
+                            "interval": 60,
+                            "limit_per_cycle": 5,
+                            "group_id": 123,
+                            "user_id": 456,
+                            "since_id": "100",
+                        }
+                    ],
+                    f,
+                )
+            client = FakeClient()
+            manager = XMonitorManager(
+                client=client,  # type: ignore[arg-type]
+                store_path=store_path,
+            )
+
+            with mock.patch.dict("os.environ", {RESTORE_MODE_ENV: "timeline"}):
+                restored = manager.restore_tasks(
+                    lambda group_id, user_id, rec: [lambda text: None]
+                )
+            with open(store_path, encoding="utf-8") as f:
+                records = json.loads(f.read())
+            for task in list(manager._watch_tasks):
+                task.stop()
+
+        self.assertEqual(restored, 1)
+        self.assertEqual(client.post_calls, [("10", "100")])
+        self.assertEqual(records[0]["since_id"], "108")
 
     def test_start_watch_requires_most_recent_tweet_id(self) -> None:
         """

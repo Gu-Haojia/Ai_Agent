@@ -31,6 +31,10 @@ USER_PROFILE_FIELDS = "id,name,username,most_recent_tweet_id"
 USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9_]{1,15}$")
 X_LINK_HOSTS = {"x.com", "twitter.com", "mobile.twitter.com"}
 NEW_POST_NOTICE_ENV = "X_MONITOR_NEW_POST_NOTICE"
+RESTORE_MODE_ENV = "X_MONITOR_RESTORE_MODE"
+RESTORE_MODE_LATEST = "latest"
+RESTORE_MODE_TIMELINE = "timeline"
+RESTORE_MODES = {RESTORE_MODE_LATEST, RESTORE_MODE_TIMELINE}
 
 
 def _env_flag(name: str) -> bool:
@@ -549,6 +553,7 @@ class _XWatchTask:
             Callable[[str, Sequence[XPostResult], str], None]
         ] = None,
         wait_initial_interval: bool = True,
+        on_state_change: Optional[Callable[[], None]] = None,
     ) -> None:
         """
         初始化监控任务。
@@ -567,6 +572,7 @@ class _XWatchTask:
             notify_media (Optional[Callable[[str, Sequence[XPostResult], str], None]]):
                 携带图片的通知回调。
             wait_initial_interval (bool): 是否等待一个轮询间隔后再首次请求。
+            on_state_change (Optional[Callable[[], None]]): 水位线变更回调。
 
         Raises:
             AssertionError: 当任务参数非法时抛出。
@@ -593,6 +599,7 @@ class _XWatchTask:
         self._seen: set[str] = {normalized_since_id}
         self._since_id = normalized_since_id
         self._wait_initial_interval = wait_initial_interval
+        self._on_state_change = on_state_change
 
     def start(self) -> None:
         """
@@ -670,6 +677,7 @@ class _XWatchTask:
             "limit_per_cycle": self._limit,
             "group_id": self._group_id,
             "user_id": self._user_id,
+            "since_id": self._since_id,
         }
 
     def _run(self) -> None:
@@ -714,6 +722,7 @@ class _XWatchTask:
             return
         for item in items:
             self._seen.add(item.post_id)
+        previous_since_id = self._since_id
         newest = max(items, key=lambda item: _post_id_key(item.post_id))
         if self._since_id is None:
             self._since_id = newest.post_id
@@ -721,6 +730,8 @@ class _XWatchTask:
             self._since_id = newest.post_id
         if len(self._seen) > 400:
             self._seen = {item.post_id for item in items}
+        if self._since_id != previous_since_id and self._on_state_change is not None:
+            self._on_state_change()
 
     def _handle_new_items(self, items: Sequence[XPostResult]) -> None:
         """
@@ -791,6 +802,7 @@ class XMonitorManager:
         self._client = client
         self._client_lock = Lock()
         self._lock = Lock()
+        self._persist_lock = Lock()
         self._watch_tasks: list[_XWatchTask] = []
         self._store_path = Path(store_path)
 
@@ -865,7 +877,6 @@ class XMonitorManager:
             Callable[[str, Sequence[XPostResult], str], None]
         ] = None,
         persist: bool = True,
-        x_user_id: Optional[str] = None,
     ) -> None:
         """
         启动账号推文监控。
@@ -880,7 +891,6 @@ class XMonitorManager:
             notify_media (Optional[Callable[[str, Sequence[XPostResult], str], None]]):
                 携带图片的通知回调。
             persist (bool): 是否写入持久化存储。
-            x_user_id (Optional[str]): 已持久化的 X 用户 ID。
 
         Returns:
             None: 无返回值。
@@ -893,36 +903,90 @@ class XMonitorManager:
         assert interval > 0, "interval 必须大于 0"
         assert limit_per_cycle > 0, "limit_per_cycle 必须大于 0"
         assert notify is not None, "notify 回调不能为空"
-        resolved_x_user_id = str(x_user_id or "").strip()
-        if resolved_x_user_id:
-            profile = self._get_client().get_user_profile_by_id(resolved_x_user_id)
-        else:
-            profile = self._get_client().get_user_profile(normalized)
-        resolved_username = profile.username
-        resolved_x_user_id = profile.user_id
+        profile = self._get_client().get_user_profile(normalized)
+        resolved_username = profile.username.strip()
+        resolved_x_user_id = profile.user_id.strip()
         initial_since_id = profile.most_recent_tweet_id.strip()
+        assert resolved_username, "目标用户用户名不能为空"
+        assert resolved_x_user_id, "目标用户 ID 不能为空"
         assert initial_since_id, "目标用户没有可用的最新推文 ID"
         assert initial_since_id.isdigit(), "目标用户最新推文 ID 必须为数字"
+        self._add_watch_task(
+            username=resolved_username,
+            x_user_id=resolved_x_user_id,
+            initial_since_id=initial_since_id,
+            interval=interval,
+            limit_per_cycle=limit_per_cycle,
+            group_id=group_id,
+            user_id=user_id,
+            notify=notify,
+            notify_media=notify_media,
+            persist=persist,
+        )
+
+    def _add_watch_task(
+        self,
+        username: str,
+        x_user_id: str,
+        initial_since_id: str,
+        interval: float,
+        limit_per_cycle: int,
+        group_id: Optional[int],
+        user_id: Optional[int],
+        notify: Callable[[str], None],
+        notify_media: Optional[Callable[[str, Sequence[XPostResult], str], None]],
+        persist: bool,
+    ) -> None:
+        """
+        使用已确认的 since_id 创建并启动监控任务。
+
+        Args:
+            username (str): X 用户名。
+            x_user_id (str): X 用户 ID。
+            initial_since_id (str): 任务启动时的增量拉取起点。
+            interval (float): 轮询间隔秒数。
+            limit_per_cycle (int): 单轮推送上限。
+            group_id (Optional[int]): 触发命令的群号。
+            user_id (Optional[int]): 触发命令的用户号。
+            notify (Callable[[str], None]): 文本通知回调。
+            notify_media (Optional[Callable[[str, Sequence[XPostResult], str], None]]):
+                携带图片的通知回调。
+            persist (bool): 是否在启动后立即写入持久化存储。
+
+        Returns:
+            None: 无返回值。
+
+        Raises:
+            AssertionError: 当任务参数非法时抛出。
+            RuntimeError: 当任务超过上限时抛出。
+        """
+        assert username.strip(), "username 不能为空"
+        assert x_user_id.strip(), "x_user_id 不能为空"
+        assert initial_since_id.strip(), "initial_since_id 不能为空"
+        assert initial_since_id.strip().isdigit(), "initial_since_id 必须为数字"
+        assert interval > 0, "interval 必须大于 0"
+        assert limit_per_cycle > 0, "limit_per_cycle 必须大于 0"
         with self._lock:
             self._prune_dead_watch_tasks()
             if len(self._watch_tasks) >= MAX_WATCH_TASKS:
                 raise RuntimeError(f"最多支持 {MAX_WATCH_TASKS} 个 X 监控任务，请先关闭后再启动。")
             fetcher = lambda since_id: self._fetch_results(
-                resolved_username, resolved_x_user_id, since_id=since_id
+                username.strip(), x_user_id.strip(), since_id=since_id
             )
             formatter = lambda items, tag: self.format_lines(items, tag)
             task = _XWatchTask(
-                username=resolved_username,
-                x_user_id=resolved_x_user_id,
+                username=username,
+                x_user_id=x_user_id,
                 interval=interval,
                 limit_per_cycle=limit_per_cycle,
                 group_id=group_id,
                 user_id=user_id,
-                initial_since_id=initial_since_id,
+                initial_since_id=initial_since_id.strip(),
                 fetcher=fetcher,
                 formatter=formatter,
                 notify=notify,
                 notify_media=notify_media,
+                on_state_change=self._persist_current_tasks,
             )
             self._watch_tasks.append(task)
             task.start()
@@ -986,6 +1050,7 @@ class XMonitorManager:
             try:
                 username = str(record.get("username") or "").strip()
                 x_user_id = str(record.get("x_user_id") or "").strip()
+                persisted_since_id = str(record.get("since_id") or "").strip()
                 interval = float(record.get("interval") or 0)
                 limit_per_cycle = int(record.get("limit_per_cycle") or DEFAULT_LIMIT)
                 group_id = record.get("group_id")
@@ -998,8 +1063,19 @@ class XMonitorManager:
                 notify_cb = callbacks[0]
                 notify_media_cb = callbacks[1] if len(callbacks) >= 2 else None
                 assert callable(notify_cb), "notify 回调不可为空"
-                self.start_watch(
+                (
+                    restored_username,
+                    restored_x_user_id,
+                    restored_since_id,
+                ) = self._restore_start_state(
                     username=username,
+                    x_user_id=x_user_id,
+                    persisted_since_id=persisted_since_id,
+                )
+                self._add_watch_task(
+                    username=restored_username,
+                    x_user_id=restored_x_user_id,
+                    initial_since_id=restored_since_id,
                     interval=interval,
                     limit_per_cycle=limit_per_cycle,
                     group_id=int(group_id) if group_id is not None else None,
@@ -1007,12 +1083,103 @@ class XMonitorManager:
                     notify=notify_cb,  # type: ignore[arg-type]
                     notify_media=notify_media_cb,  # type: ignore[arg-type]
                     persist=False,
-                    x_user_id=x_user_id,
                 )
                 restored += 1
             except Exception as err:
                 print(f"[XMonitor] 恢复任务失败：{record} -> {err}", flush=True)
+        if restored:
+            self._persist_current_tasks()
         return restored
+
+    def _restore_start_state(
+        self, username: str, x_user_id: str, persisted_since_id: str
+    ) -> tuple[str, str, str]:
+        """
+        根据恢复模式计算重启后的用户名、用户 ID 与 since_id。
+
+        Args:
+            username (str): 持久化记录中的 X 用户名。
+            x_user_id (str): 持久化记录中的 X 用户 ID。
+            persisted_since_id (str): 持久化记录中的 since_id。
+
+        Returns:
+            tuple[str, str, str]: 用户名、X 用户 ID、启动 since_id。
+
+        Raises:
+            AssertionError: 当持久化记录字段非法时抛出。
+            RuntimeError: 当 X API 调用失败时抛出。
+        """
+        normalized_username = _normalize_username(username)
+        normalized_x_user_id = x_user_id.strip()
+        assert normalized_x_user_id, "持久化记录缺少 X 用户 ID"
+        mode = self._restore_mode_from_env()
+        if mode == RESTORE_MODE_LATEST:
+            profile = self._get_client().get_user_profile_by_id(normalized_x_user_id)
+            restored_username = profile.username.strip()
+            restored_x_user_id = profile.user_id.strip()
+            restored_since_id = profile.most_recent_tweet_id.strip()
+            assert restored_username, "目标用户用户名不能为空"
+            assert restored_x_user_id, "目标用户 ID 不能为空"
+            assert restored_since_id, "目标用户没有可用的最新推文 ID"
+            assert restored_since_id.isdigit(), "目标用户最新推文 ID 必须为数字"
+            return restored_username, restored_x_user_id, restored_since_id
+        restored_since_id = self._timeline_since_id(
+            username=normalized_username,
+            x_user_id=normalized_x_user_id,
+            since_id=persisted_since_id,
+        )
+        return normalized_username, normalized_x_user_id, restored_since_id
+
+    def _timeline_since_id(
+        self, username: str, x_user_id: str, since_id: str
+    ) -> str:
+        """
+        用旧 since_id 拉一次时间线，只返回推进后的 since_id。
+
+        Args:
+            username (str): X 用户名。
+            x_user_id (str): X 用户 ID。
+            since_id (str): 已持久化的 since_id。
+
+        Returns:
+            str: 推进后的 since_id；没有新推文时返回原值。
+
+        Raises:
+            AssertionError: 当 since_id 非法时抛出。
+            RuntimeError: 当 X API 调用失败时抛出。
+        """
+        normalized_since_id = since_id.strip()
+        assert normalized_since_id, "timeline 恢复模式需要持久化 since_id"
+        assert normalized_since_id.isdigit(), "since_id 必须为数字"
+        results = self._fetch_results(
+            username,
+            x_user_id,
+            since_id=normalized_since_id,
+        )
+        if not results:
+            return normalized_since_id
+        newest = max(results, key=lambda item: _post_id_key(item.post_id))
+        return newest.post_id
+
+    @staticmethod
+    def _restore_mode_from_env() -> str:
+        """
+        读取重启恢复 since_id 的策略。
+
+        Args:
+            None
+
+        Returns:
+            str: 恢复模式，支持 latest 或 timeline。
+
+        Raises:
+            AssertionError: 当环境变量值非法时抛出。
+        """
+        value = os.environ.get(RESTORE_MODE_ENV, RESTORE_MODE_LATEST).strip().lower()
+        assert value in RESTORE_MODES, (
+            f"{RESTORE_MODE_ENV} 仅支持 {RESTORE_MODE_LATEST}/{RESTORE_MODE_TIMELINE}"
+        )
+        return value
 
     def _get_client(self) -> XAPIClient:
         """
@@ -1276,14 +1443,43 @@ class XMonitorManager:
         Raises:
             None: 写入失败会记录日志。
         """
-        try:
-            records = [task.to_state() for task in self._watch_tasks]
-            if not self._store_path.parent.exists():
-                os.makedirs(self._store_path.parent, exist_ok=True)
-            with self._store_path.open("w", encoding="utf-8") as f:
-                json.dump(records, f, ensure_ascii=False, indent=2)
-        except Exception as err:
-            print(f"[XMonitor] 保存持久化任务失败：{err}", flush=True)
+        records = [task.to_state() for task in self._watch_tasks]
+        self._write_records(records)
+
+    def _persist_current_tasks(self) -> None:
+        """
+        写入当前任务列表快照。
+
+        Returns:
+            None: 无返回值。
+
+        Raises:
+            None: 写入失败会记录日志。
+        """
+        records = [task.to_state() for task in list(self._watch_tasks)]
+        self._write_records(records)
+
+    def _write_records(self, records: list[dict[str, object]]) -> None:
+        """
+        将任务记录写入持久化文件。
+
+        Args:
+            records (list[dict[str, object]]): 需要写入的任务状态。
+
+        Returns:
+            None: 无返回值。
+
+        Raises:
+            None: 写入失败会记录日志。
+        """
+        with self._persist_lock:
+            try:
+                if not self._store_path.parent.exists():
+                    os.makedirs(self._store_path.parent, exist_ok=True)
+                with self._store_path.open("w", encoding="utf-8") as f:
+                    json.dump(records, f, ensure_ascii=False, indent=2)
+            except Exception as err:
+                print(f"[XMonitor] 保存持久化任务失败：{err}", flush=True)
 
     @staticmethod
     def format_lines(items: Sequence[XPostResult], tag: str) -> str:
