@@ -674,7 +674,6 @@ class _XWatchTask:
             "username": self._username,
             "x_user_id": self._x_user_id,
             "interval": self._interval,
-            "limit_per_cycle": self._limit,
             "group_id": self._group_id,
             "user_id": self._user_id,
             "since_id": self._since_id,
@@ -1055,10 +1054,9 @@ class XMonitorManager:
                 x_user_id = str(record.get("x_user_id") or "").strip()
                 persisted_since_id = str(record.get("since_id") or "").strip()
                 interval = float(record.get("interval") or 0)
-                limit_per_cycle = int(record.get("limit_per_cycle") or DEFAULT_LIMIT)
                 group_id = record.get("group_id")
                 user_id = record.get("user_id")
-                if not username or not x_user_id or interval <= 0 or limit_per_cycle <= 0:
+                if not username or not x_user_id or interval <= 0:
                     raise AssertionError("持久化记录缺少必要字段")
                 callbacks = list(build_callbacks(group_id, user_id, record))
                 if not callbacks:
@@ -1080,7 +1078,7 @@ class XMonitorManager:
                     x_user_id=restored_x_user_id,
                     initial_since_id=restored_since_id,
                     interval=interval,
-                    limit_per_cycle=limit_per_cycle,
+                    limit_per_cycle=DEFAULT_LIMIT,
                     group_id=int(group_id) if group_id is not None else None,
                     user_id=int(user_id) if user_id is not None else None,
                     notify=notify_cb,  # type: ignore[arg-type]

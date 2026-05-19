@@ -1551,6 +1551,7 @@ class XMonitorWatchTaskTests(unittest.TestCase):
                 task.stop()
 
         self.assertEqual(records[0]["since_id"], "12345")
+        self.assertNotIn("limit_per_cycle", records[0])
 
     def test_restore_tasks_latest_mode_uses_user_id_profile_since_id(self) -> None:
         """
@@ -1647,7 +1648,6 @@ class XMonitorWatchTaskTests(unittest.TestCase):
                             "username": "old_name",
                             "x_user_id": "10",
                             "interval": 60,
-                            "limit_per_cycle": 5,
                             "group_id": 123,
                             "user_id": 456,
                             "since_id": "100",
@@ -1755,7 +1755,6 @@ class XMonitorWatchTaskTests(unittest.TestCase):
                             "username": "kana_hanaiwa",
                             "x_user_id": "10",
                             "interval": 60,
-                            "limit_per_cycle": 5,
                             "group_id": 123,
                             "user_id": 456,
                             "since_id": "100",
@@ -1841,7 +1840,6 @@ class XMonitorWatchTaskTests(unittest.TestCase):
                             "username": "kana_hanaiwa",
                             "x_user_id": "10",
                             "interval": 60,
-                            "limit_per_cycle": 5,
                             "group_id": 123,
                             "user_id": 456,
                             "since_id": "100",
@@ -1924,7 +1922,6 @@ class XMonitorWatchTaskTests(unittest.TestCase):
                             "username": "kana_hanaiwa",
                             "x_user_id": "10",
                             "interval": 60,
-                            "limit_per_cycle": 5,
                             "group_id": 123,
                             "user_id": 456,
                             "since_id": "100",
