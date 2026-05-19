@@ -124,8 +124,28 @@ Kimi 兼容说明：`kimi-code:kimi-for-coding` 会默认解析为 Anthropic-com
 | `X_MONITOR_SOURCE` | X 监控数据源：`api` 使用 X API v2；`browser` 使用 Playwright 读取公开页面，不绕过登录墙、验证码、私密账号或付费限制 |
 | `X_BEARER_TOKEN` | `X_MONITOR_SOURCE=api` 时需要的 X API Bearer Token |
 | `X_MONITOR_BROWSER_TIMEOUT_MS` / `X_MONITOR_BROWSER_WAIT_MS` | `browser` 模式下页面超时与等待渲染时间 |
+| `X_MONITOR_BROWSER_STORAGE_STATE` | `browser` 模式可选的 Playwright 登录态 JSON 路径，例如 `secret/x_storage_state.json` |
 
 > `.env` 中所有敏感信息均不会被仓库追踪，请通过环境变量或密钥管理服务注入。
+
+### X 浏览器登录态
+
+如果公开游客页面只返回旧帖或被登录墙限制，可以在能打开图形浏览器的电脑上导出 X 登录态：
+
+```bash
+python -m pip install playwright
+python -m playwright install chromium
+python scripts/export_x_storage_state.py --output secret/x_storage_state.json
+```
+
+登录完成后把 `secret/x_storage_state.json` 放到部署机器的项目同一路径，并在 `.env` 中设置：
+
+```bash
+X_MONITOR_SOURCE=browser
+X_MONITOR_BROWSER_STORAGE_STATE=secret/x_storage_state.json
+```
+
+`secret/` 已被 `.gitignore` 忽略；这个 JSON 等同登录凭证，不要提交或发到聊天里。
 
 ## 🚀 运行方式
 

@@ -55,6 +55,7 @@ run_qq_bot.bat
 images/
 ticket_data/
 secret/
+.x-login-profile/
 
 # Old files
 old/

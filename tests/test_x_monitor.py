@@ -5,6 +5,7 @@ X 推文监控解析与图文消息拼装单元测试。
 from __future__ import annotations
 
 import os
+import tempfile
 import unittest
 from types import SimpleNamespace
 from typing import Sequence
@@ -22,7 +23,12 @@ from src.x_monitor import (
     _parse_tweet_link,
     _XWatchTask,
 )
-from src.x_browser_monitor import BrowserTweetDraft, build_browser_source_payload
+from src.x_browser_monitor import (
+    BROWSER_STORAGE_STATE_ENV,
+    BrowserTweetDraft,
+    XBrowserClient,
+    build_browser_source_payload,
+)
 from src.x_monitor_media import (
     XPostImagePayloadBuilder,
     _send_group_msg,
@@ -611,7 +617,39 @@ class XMonitorParseTests(unittest.TestCase):
             tweet.author.high_res_profile_image_url,
             "https://pbs.twimg.com/profile_images/1/avatar_400x400.jpg",
         )
-        self.assertEqual(tweet.media[0].best_url, "https://pbs.twimg.com/media/test.jpg")
+        self.assertEqual(
+            tweet.media[0].best_url, "https://pbs.twimg.com/media/test.jpg"
+        )
+
+    def test_browser_client_uses_configured_storage_state_path(self) -> None:
+        """
+        浏览器客户端应将配置的登录态文件传给 Playwright context。
+        """
+        with tempfile.TemporaryDirectory() as temp_dir:
+            state_path = os.path.join(temp_dir, "x_storage_state.json")
+            with open(state_path, "w", encoding="utf-8") as file:
+                file.write("{}")
+
+            with mock.patch.dict(
+                "os.environ", {BROWSER_STORAGE_STATE_ENV: state_path}, clear=True
+            ):
+                options = XBrowserClient()._browser_context_options()
+
+        self.assertEqual(options["storage_state"], state_path)
+
+    def test_browser_client_rejects_missing_storage_state_path(self) -> None:
+        """
+        配置了不存在的登录态文件时应给出清晰错误。
+        """
+        with mock.patch.dict(
+            "os.environ",
+            {BROWSER_STORAGE_STATE_ENV: "/tmp/missing-x-storage-state.json"},
+            clear=True,
+        ):
+            client = XBrowserClient()
+
+        with self.assertRaisesRegex(RuntimeError, "登录态文件不存在"):
+            client._browser_context_options()
 
 
 class XMonitorRenderTests(unittest.TestCase):

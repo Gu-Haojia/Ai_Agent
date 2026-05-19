@@ -24,6 +24,7 @@ BROWSER_BASE_URL_ENV = "X_MONITOR_BROWSER_BASE_URL"
 BROWSER_TIMEOUT_ENV = "X_MONITOR_BROWSER_TIMEOUT_MS"
 BROWSER_WAIT_ENV = "X_MONITOR_BROWSER_WAIT_MS"
 BROWSER_HEADLESS_ENV = "X_MONITOR_BROWSER_HEADLESS"
+BROWSER_STORAGE_STATE_ENV = "X_MONITOR_BROWSER_STORAGE_STATE"
 DEFAULT_BROWSER_BASE_URL = "https://x.com"
 DEFAULT_BROWSER_TIMEOUT_MS = 30000
 DEFAULT_BROWSER_WAIT_MS = 2500
@@ -150,6 +151,7 @@ class XBrowserClient:
         timeout_ms: Optional[int] = None,
         wait_ms: Optional[int] = None,
         headless: Optional[bool] = None,
+        storage_state: Optional[str] = None,
     ) -> None:
         """
         Initialize browser settings.
@@ -165,6 +167,12 @@ class XBrowserClient:
             if headless is not None
             else _env_bool(BROWSER_HEADLESS_ENV, True)
         )
+        configured_storage_state = (
+            storage_state
+            if storage_state is not None
+            else os.environ.get(BROWSER_STORAGE_STATE_ENV, "")
+        )
+        self._storage_state = configured_storage_state.strip()
 
     def latest(self, username: str, limit: int = 5) -> list[XPostResult]:
         """
@@ -202,11 +210,14 @@ class XBrowserClient:
             raise RuntimeError("浏览器模式需要安装 playwright。") from exc
 
         try:
+            context_options = self._browser_context_options()
             with sync_playwright() as playwright:
                 browser = playwright.chromium.launch(headless=self._headless)
-                page = browser.new_page()
-                page.set_default_timeout(self._timeout_ms)
+                context = None
                 try:
+                    context = browser.new_context(**context_options)
+                    page = context.new_page()
+                    page.set_default_timeout(self._timeout_ms)
                     page.goto(
                         url,
                         wait_until="domcontentloaded",
@@ -221,6 +232,8 @@ class XBrowserClient:
                         self._raise_page_blocked(page)
                     return self._extract_tweets(page, fallback_username, limit)
                 finally:
+                    if context is not None:
+                        context.close()
                     browser.close()
         except RuntimeError:
             raise
@@ -307,6 +320,20 @@ class XBrowserClient:
                 "浏览器监控不会绕过这些限制。"
             )
         raise RuntimeError("X 公开页面中没有找到可读取的推文。")
+
+    def _browser_context_options(self) -> dict[str, object]:
+        """
+        Return browser context options, including an optional login state file.
+        """
+        if not self._storage_state:
+            return {}
+        state_path = os.path.abspath(self._storage_state)
+        if not os.path.exists(state_path):
+            raise RuntimeError(
+                f"X 浏览器登录态文件不存在：{state_path}。"
+                f"请先导出登录态，或清空 {BROWSER_STORAGE_STATE_ENV}。"
+            )
+        return {"storage_state": state_path}
 
 
 def _is_valid_username(value: str) -> bool:
