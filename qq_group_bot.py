@@ -185,7 +185,7 @@ from src.x_monitor import (
     XMonitorManager,
     XPostResult,
 )
-from src.x_monitor_media import send_x_message_with_images
+from src.x_monitor_media import compose_x_media_message, send_x_message_with_images
 from src.x_monitor_translate import TRANSLATION_MODE_ENV, XTweetTranslationMode
 from image_storage import GeneratedImage, ImageStorageManager, StoredImage, StoredVideo
 from src.yt_dlp_downloader import YtDlpVideoDownloader
@@ -1262,6 +1262,36 @@ class QQBotHandler(BaseHTTPRequestHandler):
             self._send_no_content()
             return
 
+        if text.startswith("/"):
+            try:
+                argv = shlex.split(text)
+            except ValueError as err:
+                _send_private_msg(
+                    self.bot_cfg.api_base,
+                    user_id,
+                    f"命令格式错误：{err}",
+                    self.bot_cfg.access_token,
+                )
+                self._send_no_content()
+                return
+            cmd = argv[0] if argv else ""
+            if cmd == "/xmonitor":
+                self._handle_x_monitor_private_commands(user_id, argv)
+                self._send_no_content()
+                return
+            if cmd == "/xlink":
+                self._handle_x_link_private_command(user_id, argv)
+                self._send_no_content()
+                return
+            _send_private_msg(
+                self.bot_cfg.api_base,
+                user_id,
+                "私聊无此命令。可用：/cmd、/clear、/xmonitor、/xlink。",
+                self.bot_cfg.access_token,
+            )
+            self._send_no_content()
+            return
+
         try:
             print(
                 f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m "
@@ -2261,6 +2291,184 @@ class QQBotHandler(BaseHTTPRequestHandler):
         )
         return True
 
+    def _handle_x_monitor_private_commands(
+        self, user_id: int, argv: list[str]
+    ) -> bool:
+        """
+        处理私聊 X 推文监控命令。
+
+        Args:
+            user_id (int): 私聊用户号。
+            argv (list[str]): 解析后的命令参数。
+
+        Returns:
+            bool: True 表示已处理。
+
+        Raises:
+            AssertionError: 当 user_id 非法时抛出。
+        """
+        assert user_id > 0, "user_id 必须为正整数"
+        if not argv or argv[0] != "/xmonitor":
+            return False
+        monitor = self._require_x_monitor()
+        context_id = self._private_context_id(user_id)
+
+        def _send_to_private(text: str) -> None:
+            assert text is not None
+            _send_private_msg(
+                self.bot_cfg.api_base, user_id, text, self.bot_cfg.access_token
+            )
+
+        def _send_x_private_images(
+            text: str, items: Sequence[XPostResult], tag: str
+        ) -> None:
+            payload = compose_x_media_message(text, items)
+            _send_private_msg(
+                self.bot_cfg.api_base, user_id, payload, self.bot_cfg.access_token
+            )
+
+        if len(argv) >= 2 and argv[1].lower() == "list":
+            tasks = [
+                rec
+                for rec in monitor.list_watch_tasks()
+                if rec.get("group_id") == context_id
+            ]
+            if not tasks:
+                _send_to_private("当前私聊没有运行中的 X 推文监控任务。")
+                return True
+            lines = ["【当前私聊 X 推文监控任务】"]
+            for idx, rec in enumerate(tasks, 1):
+                username = rec.get("username") or "(未知)"
+                interval = rec.get("interval") or "?"
+                lines.append(f"#{idx}\n·账号: @{username}\n·间隔: {interval}s")
+            _send_to_private("\n-------------------------\n".join(lines))
+            return True
+
+        if len(argv) >= 3 and argv[2].lower() == "test":
+            username = argv[1].strip()
+            if not username:
+                _send_to_private("推特ID不能为空。")
+                return True
+            try:
+                items = monitor.latest(username, limit=1)
+            except RuntimeError as err:
+                _send_to_private(str(err))
+                return True
+            except AssertionError as err:
+                _send_to_private(f"测试拉取失败：{err}")
+                return True
+            except Exception as err:
+                _send_to_private(f"测试拉取失败（接口异常）：{err}")
+                return True
+            if not items:
+                _send_to_private(f"未获取到 @{username.lstrip('@')} 的最新推文。")
+                return True
+            message = monitor.format_lines(items, "NEW")
+            _send_x_private_images(message, items, "NEW")
+            return True
+
+        if len(argv) >= 3 and argv[2].lower() == "off":
+            username = argv[1].strip()
+            if not username:
+                _send_to_private("推特ID不能为空。")
+                return True
+            try:
+                stopped = monitor.stop_watch(username, group_id=context_id)
+            except AssertionError as err:
+                _send_to_private(f"停止监控失败：{err}")
+                return True
+            msg = (
+                f"已停止私聊 @{username.lstrip('@')} 的 X 推文监控任务，共 {stopped} 个。"
+                if stopped
+                else f"当前私聊没有运行中的 @{username.lstrip('@')} X 推文监控任务。"
+            )
+            _send_to_private(msg)
+            return True
+
+        if len(argv) != 2:
+            _send_to_private(
+                "用法: /xmonitor 推特ID；测试：/xmonitor 推特ID test；停止：/xmonitor 推特ID off；列表：/xmonitor list"
+            )
+            return True
+        username = argv[1].strip()
+        if not username:
+            _send_to_private("推特ID不能为空。")
+            return True
+        interval = float(X_MONITOR_FIXED_INTERVAL_SECONDS)
+        try:
+            monitor.start_watch(
+                username=username,
+                interval=interval,
+                limit_per_cycle=X_DEFAULT_LIMIT,
+                group_id=context_id,
+                user_id=user_id,
+                notify=_send_to_private,
+                notify_media=_send_x_private_images,
+            )
+        except RuntimeError as err:
+            _send_to_private(str(err))
+            return True
+        except AssertionError as err:
+            _send_to_private(f"启动监控失败：{err}")
+            return True
+        except Exception as err:
+            _send_to_private(f"启动监控失败（接口异常）：{err}")
+            return True
+        _send_to_private(
+            f"开始在私聊监控 @{username.lstrip('@')} 的新推文，轮询间隔固定 5 分钟。首次轮询只记录现有推文。"
+        )
+        return True
+
+    def _handle_x_link_private_command(self, user_id: int, argv: list[str]) -> bool:
+        """
+        处理私聊单条 X 推文链接渲染命令。
+        """
+        assert user_id > 0, "user_id 必须为正整数"
+        if not argv or argv[0] != "/xlink":
+            return False
+        monitor = self._require_x_monitor()
+        if len(argv) != 2 or not argv[1].strip():
+            _send_private_msg(
+                self.bot_cfg.api_base,
+                user_id,
+                "用法: /xlink 推文链接",
+                self.bot_cfg.access_token,
+            )
+            return True
+        url = argv[1].strip()
+        try:
+            item = monitor.fetch_link(url)
+        except AssertionError as err:
+            _send_private_msg(
+                self.bot_cfg.api_base,
+                user_id,
+                f"解析推文链接失败：{err}",
+                self.bot_cfg.access_token,
+            )
+            return True
+        except RuntimeError as err:
+            _send_private_msg(
+                self.bot_cfg.api_base,
+                user_id,
+                str(err),
+                self.bot_cfg.access_token,
+            )
+            return True
+        except ValueError as err:
+            _send_private_msg(
+                self.bot_cfg.api_base,
+                user_id,
+                f"拉取推文失败：{err}",
+                self.bot_cfg.access_token,
+            )
+            return True
+        message = monitor.format_lines([item], "LINK")
+        payload = compose_x_media_message(message, [item])
+        _send_private_msg(
+            self.bot_cfg.api_base, user_id, payload, self.bot_cfg.access_token
+        )
+        return True
+
     def _handle_commands(self, group_id: int, user_id: int, text: str) -> bool:
         """处理内部命令。
 
@@ -2852,13 +3060,19 @@ def main() -> None:
             tuple: 文本通知与携图通知回调。
 
         Raises:
-            AssertionError: 当 group_id 缺失时抛出。
+            AssertionError: 当推送目标缺失时抛出。
         """
-        assert group_id is not None and int(group_id) > 0, "缺少 group_id，无法恢复监控任务"
+        target_id = int(group_id or 0)
+        private_user_id = int(_user_id or 0)
+        is_private = target_id >= PRIVATE_CONTEXT_OFFSET
+        if is_private:
+            assert private_user_id > 0, "缺少 user_id，无法恢复私聊监控任务"
+        else:
+            assert target_id > 0, "缺少 group_id，无法恢复监控任务"
 
         def _notify(text: str) -> None:
             """
-            向持久化目标群发送文本消息。
+            向持久化目标发送文本消息。
 
             Args:
                 text (str): 要发送的文本。
@@ -2869,13 +3083,21 @@ def main() -> None:
             Raises:
                 RuntimeError: 当 OneBot 发送失败时抛出。
             """
-            _send_group_msg(bot_cfg.api_base, int(group_id), text, bot_cfg.access_token)
+            if is_private:
+                _send_private_msg(
+                    bot_cfg.api_base,
+                    private_user_id,
+                    text,
+                    bot_cfg.access_token,
+                )
+            else:
+                _send_group_msg(bot_cfg.api_base, target_id, text, bot_cfg.access_token)
 
         def _notify_media(
             text: str, items: Sequence[XPostResult], tag: str
         ) -> None:
             """
-            向持久化目标群发送 X 推文图文消息。
+            向持久化目标发送 X 推文图文消息。
 
             Args:
                 text (str): 文本内容。
@@ -2888,13 +3110,22 @@ def main() -> None:
             Raises:
                 RuntimeError: 当 OneBot 发送失败时抛出。
             """
-            send_x_message_with_images(
-                bot_cfg.api_base,
-                int(group_id),
-                bot_cfg.access_token,
-                text,
-                items,
-            )
+            if is_private:
+                payload = compose_x_media_message(text, items)
+                _send_private_msg(
+                    bot_cfg.api_base,
+                    private_user_id,
+                    payload,
+                    bot_cfg.access_token,
+                )
+            else:
+                send_x_message_with_images(
+                    bot_cfg.api_base,
+                    target_id,
+                    bot_cfg.access_token,
+                    text,
+                    items,
+                )
 
         return _notify, _notify_media
 
