@@ -453,7 +453,7 @@ class XAPIClient:
         assert 5 <= max_results <= 100, "max_results 必须在 5 到 100 之间"
         params = _tweet_payload_params()
         params["max_results"] = str(max_results)
-        params["exclude"] = "retweets"
+        params["exclude"] = "retweets,replies"
         if since_id is not None:
             normalized_since_id = since_id.strip()
             assert normalized_since_id, "since_id 不能为空字符串"

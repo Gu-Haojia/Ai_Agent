@@ -451,6 +451,60 @@ class XMonitorParseTests(unittest.TestCase):
         self.assertEqual(profile.username, "kana_hanaiwa")
         self.assertEqual(profile.most_recent_tweet_id, "67890")
 
+    def test_get_user_posts_excludes_retweets_and_replies(self) -> None:
+        """
+        拉取用户时间线时应同时排除转推与回复。
+        """
+
+        class FakeClient(XAPIClient):
+            """
+            记录用户时间线请求的客户端。
+            """
+
+            def __init__(self) -> None:
+                """
+                初始化请求记录。
+
+                Args:
+                    None
+
+                Returns:
+                    None
+
+                Raises:
+                    None
+                """
+                self.calls: list[dict[str, object]] = []
+
+            def _request_json(
+                self, url: str, params: dict[str, str] | None = None
+            ) -> dict[str, object]:
+                """
+                记录请求并返回空时间线响应。
+
+                Args:
+                    url (str): 请求 URL。
+                    params (dict[str, str] | None): 查询参数。
+
+                Returns:
+                    dict[str, object]: 空 X API 响应。
+
+                Raises:
+                    None
+                """
+                self.calls.append({"url": url, "params": params or {}})
+                return {"data": []}
+
+        client = FakeClient()
+        payload = client.get_user_posts("10", max_results=DEFAULT_LIMIT, since_id="99")
+
+        self.assertEqual(payload, {"data": []})
+        self.assertEqual(client.calls[0]["url"], "https://api.x.com/2/users/10/tweets")
+        params = client.calls[0]["params"]
+        self.assertIsInstance(params, dict)
+        self.assertEqual(params["exclude"], "retweets,replies")
+        self.assertEqual(params["since_id"], "99")
+
     def test_fetch_link_builds_single_post_result(self) -> None:
         """
         管理器应按链接拉取单条推文并使用 API 作者信息构造结果。
