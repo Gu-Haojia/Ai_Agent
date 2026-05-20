@@ -342,13 +342,13 @@ def _extract_text_content(message: Any) -> Optional[str]:
 
 def _normalize_blocked_ai_message(message: AIMessage) -> AIMessage:
     """
-    将被安全策略阻断且无文本内容的 AIMessage 归一化为可展示文本块。
+    将非正常结束且无文本内容的 AIMessage 归一化为可展示文本块。
 
     Args:
         message (AIMessage): 模型返回的 AI 消息对象。
 
     Returns:
-        AIMessage: 若命中受限内容空回复场景，则返回带文本块的新消息；
+        AIMessage: 若命中非 STOP 空回复场景，则返回带文本块的新消息；
             否则返回原消息对象。
 
     Raises:
@@ -357,17 +357,19 @@ def _normalize_blocked_ai_message(message: AIMessage) -> AIMessage:
 
     assert isinstance(message, AIMessage), "message 必须为 AIMessage 实例"
     finish_reason = str(message.response_metadata.get("finish_reason") or "").upper()
-    if finish_reason != "PROHIBITED_CONTENT":
+    if finish_reason == "STOP":
         return message
-    content = message.content
-    if not isinstance(content, list) or content:
+    if message.content:
         return message
+    if message.tool_calls or message.additional_kwargs.get("function_call"):
+        return message
+    reason = finish_reason or "UNKNOWN"
     return message.model_copy(
         update={
             "content": [
                 {
                     "type": "text",
-                    "text": "（该请求触发安全策略，未返回内容）",
+                    "text": f"（该请求触发安全策略，未返回内容：{reason}）",
                 }
             ]
         }
