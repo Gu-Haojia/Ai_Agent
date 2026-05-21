@@ -758,13 +758,7 @@ def render_tweet_html(
       margin-top: 12px;
       border: 1px solid var(--border);
       border-radius: 16px;
-      padding: 14px;
-    }}
-    .quote .media,
-    .quote .media-placeholder,
-    .quote .translation-text {{
-      width: 100%;
-      max-width: calc(100% - 12px);
+      padding: 14px 26px 14px 14px;
     }}
     .agent-footer {{
       margin-top: 18px;
