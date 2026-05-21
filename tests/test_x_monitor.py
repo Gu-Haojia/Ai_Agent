@@ -897,9 +897,9 @@ class XMonitorRenderTests(unittest.TestCase):
         self.assertIn("&lt;<span class=\"hashtag\">#いずみんち</span> &amp; next", html)
         self.assertNotIn("&amp;lt;#いずみんち", html)
 
-    def test_render_translation_container_with_divider_and_chinese_font(self) -> None:
+    def test_render_translation_container_with_panel_and_chinese_font(self) -> None:
         """
-        对照模式的简体中文译文应使用分隔线容器和中文字体。
+        对照模式的简体中文译文默认应使用浅色底纹和中文字体。
         """
         payload = build_render_payload(text="hello")
         tweets = XTweetPayloadParser().parse(payload)
@@ -908,15 +908,32 @@ class XMonitorRenderTests(unittest.TestCase):
         html = render_tweet_html(tweets[0], BrowserRenderConfig(width=720))
 
         self.assertIn('<section class="translation" lang="zh-CN">', html)
-        self.assertIn(".translation::before", html)
-        self.assertIn("width: 90%", html)
-        self.assertIn("background: var(--border)", html)
+        self.assertIn("background: #f6f8fa", html)
+        self.assertIn("border: 1px solid #eff3f4", html)
+        self.assertIn("border-radius: 16px", html)
+        self.assertIn("width: 100%", html)
         self.assertNotIn("简中翻译", html)
         self.assertIn('"Noto Sans CJK SC"', html)
         self.assertIn('"Apple Color Emoji"', html)
         self.assertIn('"Noto Color Emoji"', html)
         self.assertIn('<span class="mention">@official</span>', html)
         self.assertIn('<span class="hashtag">#话题</span>', html)
+
+    def test_render_translation_container_can_use_divider_style(self) -> None:
+        """
+        内部变量切换为 divider 时应渲染原有分隔线样式。
+        """
+        payload = build_render_payload(text="hello")
+        tweets = XTweetPayloadParser().parse(payload)
+        tweets[0].translation_text = "你好"
+
+        with mock.patch("src.x_monitor_render.TRANSLATION_BLOCK_STYLE", "divider"):
+            html = render_tweet_html(tweets[0], BrowserRenderConfig(width=720))
+
+        self.assertIn(".translation::before", html)
+        self.assertIn("width: 90%", html)
+        self.assertIn("background: var(--border)", html)
+        self.assertNotIn("background: #f6f8fa", html)
 
 
 class XMonitorTranslationTests(unittest.TestCase):

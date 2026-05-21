@@ -18,6 +18,9 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 RAW_URL_KEEP_MAX_LENGTH = 60
+TRANSLATION_BLOCK_STYLE = "panel"
+TRANSLATION_BLOCK_STYLE_DIVIDER = "divider"
+TRANSLATION_BLOCK_STYLE_PANEL = "panel"
 BARE_LINK_PATTERN = re.compile(
     r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
     r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+"
@@ -507,6 +510,80 @@ def clean_tweet_text(raw_tweet: Mapping[str, Any]) -> str:
     return text.strip()
 
 
+def _translation_block_css() -> str:
+    """
+    返回对照模式译文块样式。
+
+    Returns:
+        str: 译文块 CSS。
+
+    Raises:
+        AssertionError: 当译文块样式配置非法时抛出。
+    """
+    assert TRANSLATION_BLOCK_STYLE in {
+        TRANSLATION_BLOCK_STYLE_DIVIDER,
+        TRANSLATION_BLOCK_STYLE_PANEL,
+    }, "未知译文块样式"
+    if TRANSLATION_BLOCK_STYLE == TRANSLATION_BLOCK_STYLE_DIVIDER:
+        return """
+    .translation {
+      margin-top: 14px;
+      padding-top: 12px;
+      position: relative;
+      font-size: 24px;
+      line-height: 1.36;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .translation::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 90%;
+      height: 1px;
+      background: var(--border);
+    }
+    .compact .translation {
+      margin-top: 10px;
+      padding-top: 10px;
+      font-size: 18px;
+      line-height: 1.35;
+    }
+"""
+    return """
+    .translation {
+      margin-top: 12px;
+      padding-top: 0;
+      font-size: 24px;
+      line-height: 1.36;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .translation::before {
+      content: none;
+    }
+    .translation-text {
+      display: block;
+      width: 100%;
+      box-sizing: border-box;
+      padding: 14px 16px;
+      border-radius: 16px;
+      background: #f6f8fa;
+      border: 1px solid #eff3f4;
+    }
+    .compact .translation {
+      margin-top: 8px;
+      padding-top: 0;
+      font-size: 18px;
+      line-height: 1.35;
+    }
+    .compact .translation-text {
+      padding: 12px 14px;
+    }
+"""
+
+
 def render_tweet_html(
     tweet: XRenderedTweet, config: Optional[BrowserRenderConfig] = None
 ) -> str:
@@ -524,6 +601,7 @@ def render_tweet_html(
         None: 本函数不主动抛出异常。
     """
     resolved_config = config or BrowserRenderConfig()
+    translation_block_css = _translation_block_css()
     body = (
         _render_repost(tweet, resolved_config)
         if tweet.repost
@@ -649,35 +727,12 @@ def render_tweet_html(
         "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji",
         sans-serif;
     }}
-    .translation {{
-      margin-top: 14px;
-      padding-top: 12px;
-      position: relative;
-      font-size: 24px;
-      line-height: 1.36;
-      white-space: pre-wrap;
-      overflow-wrap: anywhere;
-    }}
-    .translation::before {{
-      content: "";
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 90%;
-      height: 1px;
-      background: var(--border);
-    }}
     .compact .text {{
       margin-top: 4px;
       font-size: 18px;
       line-height: 1.35;
     }}
-    .compact .translation {{
-      margin-top: 10px;
-      padding-top: 10px;
-      font-size: 18px;
-      line-height: 1.35;
-    }}
+    {translation_block_css}
     .media-stack {{
       margin-top: 12px;
       display: flex;
