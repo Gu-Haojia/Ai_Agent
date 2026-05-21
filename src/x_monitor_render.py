@@ -740,7 +740,7 @@ def render_tweet_html(
       gap: 10px;
     }}
     .media {{
-      width: 90%;
+      width: 100%;
       height: auto;
       display: block;
       border-radius: 16px;
@@ -748,7 +748,7 @@ def render_tweet_html(
       border: 1px solid var(--soft);
     }}
     .media-placeholder {{
-      width: 90%;
+      width: 100%;
       aspect-ratio: var(--ratio, 1.6);
       border-radius: 16px;
       background: #f7f9f9;
@@ -759,6 +759,12 @@ def render_tweet_html(
       border: 1px solid var(--border);
       border-radius: 16px;
       padding: 14px;
+    }}
+    .quote .media,
+    .quote .media-placeholder,
+    .quote .translation-text {{
+      width: 100%;
+      max-width: calc(100% - 12px);
     }}
     .agent-footer {{
       margin-top: 18px;
