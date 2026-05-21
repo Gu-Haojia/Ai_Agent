@@ -21,6 +21,12 @@ RAW_URL_KEEP_MAX_LENGTH = 60
 TRANSLATION_BLOCK_STYLE = "panel"
 TRANSLATION_BLOCK_STYLE_DIVIDER = "divider"
 TRANSLATION_BLOCK_STYLE_PANEL = "panel"
+MEDIA_MIN_ROW_SHARE = 0.30
+MEDIA_HORIZONTAL_RATIO = 1.2
+MEDIA_VERTICAL_RATIO = 0.9
+MEDIA_MIXED_ROW_PENALTY = 2.0
+MEDIA_HORIZONTAL_PAIR_PENALTY = 2.0
+MEDIA_INVALID_ROW_PENALTY = 1000.0
 BARE_LINK_PATTERN = re.compile(
     r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
     r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+"
@@ -111,6 +117,20 @@ class XRenderedMedia:
             None: 本属性不抛出异常。
         """
         return self.url or self.preview_image_url
+
+
+@dataclass(slots=True)
+class MediaLayoutRow:
+    """
+    表示媒体布局中的一行。
+
+    Attributes:
+        items (list[XRenderedMedia]): 本行媒体列表。
+        ratios (list[float]): 与媒体一一对应的宽高比。
+    """
+
+    items: list[XRenderedMedia]
+    ratios: list[float]
 
 
 @dataclass(slots=True)
@@ -739,6 +759,15 @@ def render_tweet_html(
       flex-direction: column;
       gap: 10px;
     }}
+    .media-row {{
+      display: flex;
+      width: 100%;
+      gap: 10px;
+      align-items: flex-start;
+    }}
+    .media-row-single {{
+      display: block;
+    }}
     .media {{
       width: 100%;
       height: auto;
@@ -746,6 +775,12 @@ def render_tweet_html(
       border-radius: 16px;
       background: #f7f9f9;
       border: 1px solid var(--soft);
+    }}
+    .media-row-pair > .media,
+    .media-row-pair > .media-placeholder {{
+      width: 0;
+      min-width: 0;
+      flex-basis: 0;
     }}
     .media-placeholder {{
       width: 100%;
@@ -1184,21 +1219,169 @@ def _render_media_stack(media: list[XRenderedMedia]) -> str:
         None: 本函数不主动抛出异常。
     """
     items = [
-        _render_media(item)
-        for item in media
-        if item.media_type in {"photo", "video", "animated_gif"}
+        item for item in media if item.media_type in {"photo", "video", "animated_gif"}
     ]
     if not items:
         return ""
-    return '<div class="media-stack">' + "".join(items) + "</div>"
+    rows = _build_media_layout(items)
+    row_html = "".join(_render_media_row(row) for row in rows)
+    return '<div class="media-stack">' + row_html + "</div>"
 
 
-def _render_media(item: XRenderedMedia) -> str:
+def _build_media_layout(media: list[XRenderedMedia]) -> list[MediaLayoutRow]:
+    """
+    根据媒体宽高比构造不裁切的多图布局。
+
+    Args:
+        media (list[XRenderedMedia]): 需要布局的媒体列表。
+
+    Returns:
+        list[MediaLayoutRow]: 按原顺序排列的媒体行。
+
+    Raises:
+        AssertionError: 当媒体数量超过 X 推文限制时抛出。
+    """
+    assert 1 <= len(media) <= 4, "X 推文媒体数量必须在 1 到 4 之间"
+    ratios = [_media_ratio(item) for item in media]
+    candidates = _media_layout_candidates(len(media))
+    best_candidate = min(candidates, key=lambda sizes: _score_media_layout(sizes, ratios))
+    rows: list[MediaLayoutRow] = []
+    start = 0
+    for size in best_candidate:
+        end = start + size
+        rows.append(MediaLayoutRow(items=media[start:end], ratios=ratios[start:end]))
+        start = end
+    assert start == len(media), "媒体布局未覆盖全部媒体"
+    return rows
+
+
+def _media_layout_candidates(count: int) -> list[list[int]]:
+    """
+    返回指定媒体数量的候选分行方案。
+
+    Args:
+        count (int): 媒体数量。
+
+    Returns:
+        list[list[int]]: 每个候选方案由各行媒体数量组成。
+
+    Raises:
+        AssertionError: 当媒体数量不在 1 到 4 之间时抛出。
+    """
+    assert 1 <= count <= 4, "媒体数量必须在 1 到 4 之间"
+    if count == 1:
+        return [[1]]
+    if count == 2:
+        return [[2], [1, 1]]
+    if count == 3:
+        return [[2, 1], [1, 2], [1, 1, 1]]
+    return [[2, 2], [2, 1, 1], [1, 2, 1], [1, 1, 2], [1, 1, 1, 1]]
+
+
+def _score_media_layout(row_sizes: list[int], ratios: list[float]) -> float:
+    """
+    计算媒体布局候选方案的评分。
+
+    Args:
+        row_sizes (list[int]): 候选方案中每行媒体数量。
+        ratios (list[float]): 媒体宽高比列表。
+
+    Returns:
+        float: 布局评分，分数越低越优。
+
+    Raises:
+        AssertionError: 当候选方案无法覆盖全部媒体时抛出。
+    """
+    assert sum(row_sizes) == len(ratios), "候选布局与媒体数量不一致"
+    score = 0.0
+    start = 0
+    for size in row_sizes:
+        row_ratios = ratios[start : start + size]
+        assert len(row_ratios) == size, "候选布局行大小非法"
+        score += _score_media_row(row_ratios)
+        start += size
+    return score
+
+
+def _score_media_row(ratios: list[float]) -> float:
+    """
+    计算单行媒体布局评分。
+
+    Args:
+        ratios (list[float]): 本行媒体宽高比列表。
+
+    Returns:
+        float: 行评分。
+
+    Raises:
+        AssertionError: 当单行媒体数量不是 1 或 2 时抛出。
+    """
+    assert 1 <= len(ratios) <= 2, "单行最多支持 2 张媒体"
+    ratio_sum = sum(ratios)
+    assert ratio_sum > 0, "媒体宽高比总和必须大于 0"
+    score = 1.0 / ratio_sum
+    if len(ratios) == 1:
+        return score
+
+    shares = [ratio / ratio_sum for ratio in ratios]
+    if min(shares) < MEDIA_MIN_ROW_SHARE:
+        score += MEDIA_INVALID_ROW_PENALTY
+    if all(ratio >= MEDIA_HORIZONTAL_RATIO for ratio in ratios):
+        score += MEDIA_HORIZONTAL_PAIR_PENALTY
+    if _is_mixed_orientation_row(ratios):
+        score += MEDIA_MIXED_ROW_PENALTY
+    return score
+
+
+def _is_mixed_orientation_row(ratios: list[float]) -> bool:
+    """
+    判断一行是否混合横图与竖图。
+
+    Args:
+        ratios (list[float]): 本行媒体宽高比列表。
+
+    Returns:
+        bool: 同时包含横图和竖图时为 True。
+
+    Raises:
+        None: 本函数不主动抛出异常。
+    """
+    has_horizontal = any(ratio >= MEDIA_HORIZONTAL_RATIO for ratio in ratios)
+    has_vertical = any(ratio <= MEDIA_VERTICAL_RATIO for ratio in ratios)
+    return has_horizontal and has_vertical
+
+
+def _render_media_row(row: MediaLayoutRow) -> str:
+    """
+    渲染一行媒体 HTML。
+
+    Args:
+        row (MediaLayoutRow): 媒体布局行。
+
+    Returns:
+        str: HTML 片段。
+
+    Raises:
+        AssertionError: 当媒体与宽高比数量不一致时抛出。
+    """
+    assert len(row.items) == len(row.ratios), "媒体与宽高比数量不一致"
+    assert row.items, "媒体行不能为空"
+    pair = len(row.items) > 1
+    class_name = "media-row media-row-pair" if pair else "media-row media-row-single"
+    html_items = [
+        _render_media(item, flex_grow=ratio if pair else None)
+        for item, ratio in zip(row.items, row.ratios)
+    ]
+    return f'<div class="{class_name}">' + "".join(html_items) + "</div>"
+
+
+def _render_media(item: XRenderedMedia, flex_grow: Optional[float] = None) -> str:
     """
     渲染单个媒体 HTML。
 
     Args:
         item (XRenderedMedia): 媒体对象。
+        flex_grow (Optional[float]): 多图同行时使用的 flex-grow 值。
 
     Returns:
         str: HTML 片段。
@@ -1207,10 +1390,36 @@ def _render_media(item: XRenderedMedia) -> str:
         None: 本函数不主动抛出异常。
     """
     url = item.best_url
+    flex_style = _media_flex_style(flex_grow)
     if url and _url_scheme(url) not in {"", "placeholder"}:
-        return f'<img class="media" src="{_attr(url)}" alt="{_attr(item.alt_text or "")}">'
+        return (
+            f'<img class="media" src="{_attr(url)}" '
+            f'alt="{_attr(item.alt_text or "")}"{flex_style}>'
+        )
     ratio = _media_ratio(item)
-    return f'<div class="media-placeholder" style="--ratio:{ratio:.4f}"></div>'
+    styles = [f"--ratio:{ratio:.4f}"]
+    if flex_grow is not None:
+        styles.append(f"flex-grow:{flex_grow:.6f}")
+    return f'<div class="media-placeholder" style="{_attr(";".join(styles))}"></div>'
+
+
+def _media_flex_style(flex_grow: Optional[float]) -> str:
+    """
+    生成媒体元素的 flex-grow 样式属性。
+
+    Args:
+        flex_grow (Optional[float]): flex-grow 值。
+
+    Returns:
+        str: 样式属性文本，缺失时为空字符串。
+
+    Raises:
+        AssertionError: 当 flex_grow 非正数时抛出。
+    """
+    if flex_grow is None:
+        return ""
+    assert flex_grow > 0, "flex_grow 必须大于 0"
+    return f' style="flex-grow:{flex_grow:.6f}"'
 
 
 def _media_ratio(item: XRenderedMedia) -> float:

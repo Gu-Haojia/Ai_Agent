@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 import time
 import unittest
@@ -97,6 +98,44 @@ def build_render_payload(
             ],
         },
     }
+
+
+def set_render_payload_media(
+    payload: dict[str, object], sizes: Sequence[tuple[int, int]]
+) -> None:
+    """
+    替换渲染测试 payload 中的媒体列表。
+
+    Args:
+        payload (dict[str, object]): X API 风格响应。
+        sizes (Sequence[tuple[int, int]]): 媒体宽高列表。
+
+    Returns:
+        None: 直接修改 payload。
+
+    Raises:
+        AssertionError: 当 payload 结构或宽高非法时抛出。
+    """
+    assert sizes, "媒体宽高列表不能为空"
+    assert all(width > 0 and height > 0 for width, height in sizes), "媒体宽高必须为正"
+    data = payload["data"]
+    assert isinstance(data, list) and data, "payload.data 必须为非空列表"
+    first = data[0]
+    assert isinstance(first, dict), "payload.data[0] 必须为对象"
+    media_keys = [f"3_{index + 1}" for index in range(len(sizes))]
+    first["attachments"] = {"media_keys": media_keys}
+    includes = payload["includes"]
+    assert isinstance(includes, dict), "payload.includes 必须为对象"
+    includes["media"] = [
+        {
+            "media_key": media_key,
+            "type": "photo",
+            "url": f"https://example.com/{index + 1}.jpg",
+            "width": width,
+            "height": height,
+        }
+        for index, (media_key, (width, height)) in enumerate(zip(media_keys, sizes))
+    ]
 
 
 class FakeXMonitorManager(XMonitorManager):
@@ -722,6 +761,80 @@ class XMonitorRenderTests(unittest.TestCase):
             html,
         )
         self.assertIn(".agent-footer", html)
+
+    def test_render_media_layout_pairs_two_vertical_images(self) -> None:
+        """
+        两张竖图应同一行等高并按比例分配宽度。
+        """
+        payload = build_render_payload()
+        set_render_payload_media(payload, [(670, 1000), (560, 1000)])
+        tweets = XTweetPayloadParser().parse(payload)
+
+        html = render_tweet_html(tweets[0], BrowserRenderConfig(width=720))
+
+        row_classes = re.findall(r'<div class="(media-row [^"]+)">', html)
+        self.assertEqual(row_classes, ["media-row media-row-pair"])
+        self.assertIn("flex-grow:0.670000", html)
+        self.assertIn("flex-grow:0.560000", html)
+
+    def test_render_media_layout_stacks_two_horizontal_images(self) -> None:
+        """
+        两张横图不应同一行压缩展示。
+        """
+        payload = build_render_payload()
+        set_render_payload_media(payload, [(1600, 1000), (1500, 1000)])
+        tweets = XTweetPayloadParser().parse(payload)
+
+        html = render_tweet_html(tweets[0], BrowserRenderConfig(width=720))
+
+        row_classes = re.findall(r'<div class="(media-row [^"]+)">', html)
+        self.assertEqual(
+            row_classes,
+            ["media-row media-row-single", "media-row media-row-single"],
+        )
+        self.assertNotIn("media-row media-row-pair", html)
+
+    def test_render_media_layout_pairs_four_vertical_images(self) -> None:
+        """
+        四张竖图应排成两行两列。
+        """
+        payload = build_render_payload()
+        set_render_payload_media(
+            payload,
+            [(600, 1000), (600, 1000), (600, 1000), (600, 1000)],
+        )
+        tweets = XTweetPayloadParser().parse(payload)
+
+        html = render_tweet_html(tweets[0], BrowserRenderConfig(width=720))
+
+        row_classes = re.findall(r'<div class="(media-row [^"]+)">', html)
+        self.assertEqual(
+            row_classes,
+            ["media-row media-row-pair", "media-row media-row-pair"],
+        )
+
+    def test_render_media_layout_keeps_order_for_vertical_horizontal_mix(self) -> None:
+        """
+        竖横竖竖顺序应优先渲染为单张、单张、双张。
+        """
+        payload = build_render_payload()
+        set_render_payload_media(
+            payload,
+            [(600, 1000), (1600, 1000), (600, 1000), (600, 1000)],
+        )
+        tweets = XTweetPayloadParser().parse(payload)
+
+        html = render_tweet_html(tweets[0], BrowserRenderConfig(width=720))
+
+        row_classes = re.findall(r'<div class="(media-row [^"]+)">', html)
+        self.assertEqual(
+            row_classes,
+            [
+                "media-row media-row-single",
+                "media-row media-row-single",
+                "media-row media-row-pair",
+            ],
+        )
 
     def test_render_quote_only_expands_one_level(self) -> None:
         """
