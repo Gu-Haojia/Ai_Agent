@@ -1378,49 +1378,6 @@ class XMonitorMediaComposeTests(unittest.TestCase):
         self.assertTrue(payload[0]["data"]["file"].startswith("base64://Zg=="))
         self.assertEqual(payload[0]["data"]["cache"], "0")
 
-    def test_compose_can_include_text_when_enabled(self) -> None:
-        """
-        开启文本选项时，应生成 text + rendered image 消息段。
-        """
-        items = [
-            XPostResult(
-                username="kana_hanaiwa",
-                post_id="1",
-                text="post",
-                created_label="05-05 10:02",
-                url="https://x.com/kana_hanaiwa/status/1",
-                image_urls=("https://example.com/1.jpg",),
-                source_payload=build_render_payload(),
-            )
-        ]
-
-        def fake_render(item: XPostResult) -> tuple[str, str]:
-            """
-            返回固定渲染图。
-
-            Args:
-                item (XPostResult): 推文结果。
-
-            Returns:
-                tuple[str, str]: base64 与 MIME。
-
-            Raises:
-                None: 本函数不抛出异常。
-            """
-            self.assertEqual(item.username, "kana_hanaiwa")
-            return "Zg==", "image/png"
-
-        payload = compose_x_media_message(
-            "hello", items, renderer=fake_render, include_text=True
-        )
-        self.assertIsInstance(payload, list)
-        self.assertEqual(len(payload), 2)
-        self.assertEqual(
-            [segment["type"] for segment in payload],
-            ["text", "image"],
-        )
-        self.assertEqual(payload[0]["data"]["text"], "hello")
-
     def test_legacy_env_uses_original_text_and_media(self) -> None:
         """
         旧版环境变量开启时，应沿用文本 + 原图发送模式。

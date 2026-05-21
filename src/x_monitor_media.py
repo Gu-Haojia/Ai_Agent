@@ -27,7 +27,6 @@ from src.x_monitor_translate import (
 MessagePayload = Sequence[dict[str, dict[str, str]]] | str
 RenderedImageFetcher = Callable[[XPostResult], tuple[str, str]]
 LEGACY_MEDIA_ENV = "X_MONITOR_LEGACY_MEDIA"
-INCLUDE_TEXT_ENV = "X_MONITOR_INCLUDE_TEXT"
 
 
 def _guess_suffix(mime: str) -> str:
@@ -245,7 +244,6 @@ def _compose_rendered_tweet_message(
     text: str,
     items: Sequence[XPostResult],
     renderer: Optional[RenderedImageFetcher] = None,
-    include_text: Optional[bool] = None,
 ) -> MessagePayload:
     """
     生成解析后推文截图消息段。
@@ -254,8 +252,6 @@ def _compose_rendered_tweet_message(
         text (str): 原文本通知内容。
         items (Sequence[XPostResult]): 推文列表。
         renderer (Optional[RenderedImageFetcher]): 可注入图片渲染器。
-        include_text (Optional[bool]): 是否附带原文本，None 时读取环境变量。
-
     Returns:
         MessagePayload: OneBot 消息体。
 
@@ -263,13 +259,7 @@ def _compose_rendered_tweet_message(
         AssertionError: 当推文列表或渲染结果为空时抛出。
     """
     assert items, "推文列表不能为空"
-    should_include_text = (
-        _env_flag(INCLUDE_TEXT_ENV) if include_text is None else include_text
-    )
     segments: list[dict[str, dict[str, str]]] = []
-    if should_include_text:
-        assert text.strip(), "文本不可为空"
-        segments.append({"type": "text", "data": {"text": text}})
     render = renderer or XPostImagePayloadBuilder().render
     ts = int(time.time())
     for idx, item in enumerate(items, 1):
@@ -347,7 +337,6 @@ def compose_x_media_message(
     fetcher: Optional[Callable[[str], tuple[str, str]]] = None,
     max_images: Optional[int] = None,
     renderer: Optional[RenderedImageFetcher] = None,
-    include_text: Optional[bool] = None,
 ) -> MessagePayload:
     """
     生成 X 推文监控 OneBot 消息段列表。
@@ -358,8 +347,6 @@ def compose_x_media_message(
         fetcher (Optional[Callable[[str], tuple[str, str]]]): 旧版原图下载器。
         max_images (Optional[int]): 旧版原图附图数量上限。
         renderer (Optional[RenderedImageFetcher]): 解析后截图渲染器。
-        include_text (Optional[bool]): 是否附带文本，None 时读取环境变量。
-
     Returns:
         MessagePayload: 可直接发送的消息体。
 
@@ -370,9 +357,7 @@ def compose_x_media_message(
         return _compose_legacy_media_message(
             text, items, fetcher=fetcher, max_images=max_images
         )
-    return _compose_rendered_tweet_message(
-        text, items, renderer=renderer, include_text=include_text
-    )
+    return _compose_rendered_tweet_message(text, items, renderer=renderer)
 
 
 def send_x_message_with_images(
@@ -384,7 +369,6 @@ def send_x_message_with_images(
     fetcher: Optional[Callable[[str], tuple[str, str]]] = None,
     max_images: Optional[int] = None,
     renderer: Optional[RenderedImageFetcher] = None,
-    include_text: Optional[bool] = None,
 ) -> None:
     """
     发送携带图片的 X 推文监控消息。
@@ -398,8 +382,6 @@ def send_x_message_with_images(
         fetcher (Optional[Callable[[str], tuple[str, str]]]): 自定义下载器。
         max_images (Optional[int]): 附图上限，None 表示发送全部图片。
         renderer (Optional[RenderedImageFetcher]): 解析后截图渲染器。
-        include_text (Optional[bool]): 是否附带文本，None 时读取环境变量。
-
     Returns:
         None: 无返回值。
 
@@ -412,6 +394,5 @@ def send_x_message_with_images(
         fetcher=fetcher,
         max_images=max_images,
         renderer=renderer,
-        include_text=include_text,
     )
     _send_group_msg(api_base, group_id, payload, access_token)
