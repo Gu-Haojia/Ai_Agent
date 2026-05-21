@@ -241,7 +241,6 @@ class XPostImagePayloadBuilder:
 
 
 def _compose_rendered_tweet_message(
-    text: str,
     items: Sequence[XPostResult],
     renderer: Optional[RenderedImageFetcher] = None,
 ) -> MessagePayload:
@@ -249,7 +248,6 @@ def _compose_rendered_tweet_message(
     生成解析后推文截图消息段。
 
     Args:
-        text (str): 原文本通知内容。
         items (Sequence[XPostResult]): 推文列表。
         renderer (Optional[RenderedImageFetcher]): 可注入图片渲染器。
     Returns:
@@ -357,7 +355,7 @@ def compose_x_media_message(
         return _compose_legacy_media_message(
             text, items, fetcher=fetcher, max_images=max_images
         )
-    return _compose_rendered_tweet_message(text, items, renderer=renderer)
+    return _compose_rendered_tweet_message(items, renderer=renderer)
 
 
 def send_x_message_with_images(
