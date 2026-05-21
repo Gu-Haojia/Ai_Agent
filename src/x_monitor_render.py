@@ -17,6 +17,8 @@ from datetime import datetime
 from typing import Any, Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+RAW_URL_KEEP_MAX_LENGTH = 60
+
 
 @dataclass(slots=True)
 class XRenderedUser:
@@ -727,7 +729,11 @@ def _url_entity_replacement(entity: Mapping[str, Any], quoted_ids: set[str]) -> 
         return ""
     if _is_embedded_quote_url(entity, quoted_ids):
         return ""
-    return str(entity.get("display_url") or entity.get("expanded_url") or "")
+    expanded_url = str(entity.get("expanded_url") or "").strip()
+    display_url = str(entity.get("display_url") or "").strip()
+    if expanded_url and len(expanded_url) <= RAW_URL_KEEP_MAX_LENGTH:
+        return expanded_url
+    return display_url or expanded_url
 
 
 def _is_embedded_quote_url(entity: Mapping[str, Any], quoted_ids: set[str]) -> bool:

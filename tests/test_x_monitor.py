@@ -779,6 +779,47 @@ class XMonitorRenderTests(unittest.TestCase):
         self.assertIn('<span class="mention">@valid_user</span>', html)
         self.assertNotIn('<span class="mention">@example</span>', html)
 
+    def test_parse_payload_keeps_short_expanded_url(self) -> None:
+        """
+        URL entity 的真实链接较短时应保留 expanded_url。
+        """
+        payload = build_render_payload(text="read https://t.co/short")
+        payload["data"][0]["entities"] = {
+            "urls": [
+                {
+                    "url": "https://t.co/short",
+                    "expanded_url": "https://fanbox.cc/@kana/posts/12345",
+                    "display_url": "fanbox.cc/@kana/posts...",
+                }
+            ]
+        }
+
+        tweets = XTweetPayloadParser().parse(payload)
+
+        self.assertIn("https://fanbox.cc/@kana/posts/12345", tweets[0].text)
+        self.assertNotIn("fanbox.cc/@kana/posts...", tweets[0].text)
+
+    def test_parse_payload_uses_display_url_for_long_expanded_url(self) -> None:
+        """
+        URL entity 的真实链接过长时应使用 display_url。
+        """
+        expanded_url = "https://fanbox.cc/@kana/posts/" + "1234567890" * 6
+        payload = build_render_payload(text="read https://t.co/long")
+        payload["data"][0]["entities"] = {
+            "urls": [
+                {
+                    "url": "https://t.co/long",
+                    "expanded_url": expanded_url,
+                    "display_url": "fanbox.cc/@kana/posts...",
+                }
+            ]
+        }
+
+        tweets = XTweetPayloadParser().parse(payload)
+
+        self.assertIn("fanbox.cc/@kana/posts...", tweets[0].text)
+        self.assertNotIn(expanded_url, tweets[0].text)
+
     def test_parse_payload_unescapes_html_entities_before_rendering(self) -> None:
         """
         X API 正文中的 HTML entity 应还原为原始字符。
