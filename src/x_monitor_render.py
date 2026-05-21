@@ -18,6 +18,13 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 RAW_URL_KEEP_MAX_LENGTH = 60
+BARE_LINK_PATTERN = re.compile(
+    r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+"
+    r"(?::\d{1,5})?(?:/[^\s<>'\"]*)?"
+)
+LINK_STOP_CHARS = set(" \t\r\n<>'\"")
+LINK_TRAILING_CHARS = set(",!?;:)]}、。！？；：）】」』")
 
 
 @dataclass(slots=True)
@@ -631,7 +638,8 @@ def render_tweet_html(
       overflow-wrap: anywhere;
     }}
     .hashtag,
-    .mention {{
+    .mention,
+    .link {{
       color: var(--blue);
     }}
     .text.translated-text,
@@ -1198,7 +1206,7 @@ def _format_created_at(created_at: Optional[str], timezone_name: str) -> Optiona
 
 def _render_text_entities(text: str) -> str:
     """
-    渲染正文中的 hashtag 与 mention。
+    渲染正文中的 URL、hashtag 与 mention。
 
     Args:
         text (str): 推文正文。
@@ -1213,6 +1221,12 @@ def _render_text_entities(text: str) -> str:
     index = 0
     length = len(text)
     while index < length:
+        link_end = _find_link_end(text, index)
+        if link_end > index:
+            link = _escape(text[index:link_end])
+            parts.append(f'<span class="link">{link}</span>')
+            index = link_end
+            continue
         if text[index] == "#" and _is_entity_start(text, index, _is_hashtag_char):
             end = _find_entity_end(text, index, _is_hashtag_char)
             if end > index + 1:
@@ -1230,6 +1244,168 @@ def _render_text_entities(text: str) -> str:
         parts.append(_escape(text[index]))
         index += 1
     return "".join(parts)
+
+
+def _find_link_end(text: str, index: int) -> int:
+    """
+    查找当前位置开始的链接结束位置。
+
+    Args:
+        text (str): 推文正文。
+        index (int): 候选链接起始位置。
+
+    Returns:
+        int: 链接结束位置；当前位置不是链接时返回 index。
+
+    Raises:
+        AssertionError: 当 index 越界时抛出。
+    """
+    assert 0 <= index < len(text), "index 必须位于文本范围内"
+    if not _is_link_start_boundary(text, index):
+        return index
+    lowered = text.lower()
+    if lowered.startswith("http://", index):
+        end = _find_scheme_link_end(text, index, len("http://"))
+        return _trim_link_end(text, index, end)
+    if lowered.startswith("https://", index):
+        end = _find_scheme_link_end(text, index, len("https://"))
+        return _trim_link_end(text, index, end)
+    if lowered.startswith("www.", index):
+        match = BARE_LINK_PATTERN.match(text, index)
+        if match is None:
+            return index
+        candidate = text[index : match.end()]
+        if not _is_valid_bare_link(candidate):
+            return index
+        return _trim_link_end(text, index, match.end())
+    match = BARE_LINK_PATTERN.match(text, index)
+    if match is None:
+        return index
+    candidate = text[index : match.end()]
+    if not _is_valid_bare_link(candidate):
+        return index
+    return _trim_link_end(text, index, match.end())
+
+
+def _is_link_start_boundary(text: str, index: int) -> bool:
+    """
+    判断当前位置是否可以作为链接起点。
+
+    Args:
+        text (str): 推文正文。
+        index (int): 候选起始位置。
+
+    Returns:
+        bool: 可以作为链接起点时为 True。
+
+    Raises:
+        AssertionError: 当 index 越界时抛出。
+    """
+    assert 0 <= index < len(text), "index 必须位于文本范围内"
+    if index == 0:
+        return True
+    previous = text[index - 1]
+    if previous.isspace() or previous in "([{\"'「『【<":
+        return True
+    return not _is_ascii_link_inner_char(previous)
+
+
+def _find_scheme_link_end(text: str, index: int, scheme_length: int) -> int:
+    """
+    查找带协议链接的原始结束位置。
+
+    Args:
+        text (str): 推文正文。
+        index (int): 链接起始位置。
+        scheme_length (int): 协议长度。
+
+    Returns:
+        int: 原始结束位置；协议后没有内容时返回 index。
+
+    Raises:
+        AssertionError: 当 index 或 scheme_length 非法时抛出。
+    """
+    assert 0 <= index < len(text), "index 必须位于文本范围内"
+    assert scheme_length > 0, "scheme_length 必须大于 0"
+    end = index
+    while end < len(text) and text[end] not in LINK_STOP_CHARS:
+        end += 1
+    if end <= index + scheme_length:
+        return index
+    return end
+
+
+def _trim_link_end(text: str, index: int, end: int) -> int:
+    """
+    去掉链接末尾不属于链接本体的标点。
+
+    Args:
+        text (str): 推文正文。
+        index (int): 链接起始位置。
+        end (int): 链接候选结束位置。
+
+    Returns:
+        int: 修剪后的结束位置。
+
+    Raises:
+        AssertionError: 当索引关系非法时抛出。
+    """
+    assert 0 <= index <= end <= len(text), "链接索引范围非法"
+    while end > index:
+        tail = text[end - 1]
+        if tail == "." and text[max(index, end - 3) : end] != "...":
+            end -= 1
+            continue
+        if tail in LINK_TRAILING_CHARS:
+            end -= 1
+            continue
+        break
+    return end
+
+
+def _is_valid_bare_link(value: str) -> bool:
+    """
+    判断裸域名链接是否具备有效顶级域。
+
+    Args:
+        value (str): 裸域名链接候选文本。
+
+    Returns:
+        bool: 顶级域由两个以上字母组成时为 True。
+
+    Raises:
+        None: 本函数不主动抛出异常。
+    """
+    host = value.split("/", 1)[0].split(":", 1)[0]
+    labels = host.split(".")
+    if len(labels) < 2:
+        return False
+    tld = labels[-1]
+    return len(tld) >= 2 and tld.isalpha()
+
+
+def _is_ascii_link_inner_char(char: str) -> bool:
+    """
+    判断字符是否属于 ASCII 链接内部字符。
+
+    Args:
+        char (str): 单个字符。
+
+    Returns:
+        bool: 属于 ASCII 链接内部字符时为 True。
+
+    Raises:
+        None: 本函数不主动抛出异常。
+    """
+    if char in {"@", ".", "-", "_"}:
+        return True
+    if "0" <= char <= "9":
+        return True
+    if "A" <= char <= "Z":
+        return True
+    if "a" <= char <= "z":
+        return True
+    return False
 
 
 def _is_entity_start(

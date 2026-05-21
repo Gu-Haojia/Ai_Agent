@@ -778,6 +778,37 @@ class XMonitorRenderTests(unittest.TestCase):
         self.assertIn("user@example.com", html)
         self.assertIn('<span class="mention">@valid_user</span>', html)
         self.assertNotIn('<span class="mention">@example</span>', html)
+        self.assertNotIn('<span class="link">example.com</span>', html)
+
+    def test_render_text_entities_marks_urls(self) -> None:
+        """
+        正文中的链接应整体渲染为蓝色链接文本。
+        """
+        payload = build_render_payload(
+            text=(
+                "detail http://livepocket.jp/e/c3pwb "
+                "fanbox.cc/@kana/posts... "
+                "www.example.com/a?b=1&c=2 @valid_user"
+            )
+        )
+        tweets = XTweetPayloadParser().parse(payload)
+
+        html = render_tweet_html(tweets[0], BrowserRenderConfig(width=720))
+
+        self.assertIn(
+            '<span class="link">http://livepocket.jp/e/c3pwb</span>',
+            html,
+        )
+        self.assertIn(
+            '<span class="link">fanbox.cc/@kana/posts...</span>',
+            html,
+        )
+        self.assertIn(
+            '<span class="link">www.example.com/a?b=1&amp;c=2</span>',
+            html,
+        )
+        self.assertIn('<span class="mention">@valid_user</span>', html)
+        self.assertNotIn('<span class="mention">@kana</span>', html)
 
     def test_parse_payload_keeps_short_expanded_url(self) -> None:
         """
