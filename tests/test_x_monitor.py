@@ -31,6 +31,7 @@ from src.x_monitor_media import (
     XPostImagePayloadBuilder,
     _send_group_msg,
     compose_x_media_message,
+    send_x_message_with_images,
 )
 from src.x_monitor_render import (
     BrowserRenderConfig,
@@ -1378,6 +1379,64 @@ class XMonitorMediaComposeTests(unittest.TestCase):
         self.assertTrue(payload[0]["data"]["file"].startswith("base64://Zg=="))
         self.assertEqual(payload[0]["data"]["cache"], "0")
 
+    def test_send_renders_each_tweet_as_separate_message(self) -> None:
+        """
+        默认截图模式应按单条推文分别渲染并发送。
+        """
+        items = [
+            XPostResult(
+                username="kana_hanaiwa",
+                post_id="1",
+                text="first",
+                created_label="05-05 10:02",
+                url="https://x.com/kana_hanaiwa/status/1",
+                source_payload=build_render_payload(post_id="1", text="first"),
+            ),
+            XPostResult(
+                username="kana_hanaiwa",
+                post_id="2",
+                text="second",
+                created_label="05-05 10:03",
+                url="https://x.com/kana_hanaiwa/status/2",
+                source_payload=build_render_payload(post_id="2", text="second"),
+            ),
+        ]
+        rendered: list[str] = []
+
+        def fake_render(item: XPostResult) -> tuple[str, str]:
+            """
+            记录渲染顺序并返回固定截图。
+
+            Args:
+                item (XPostResult): 推文结果。
+
+            Returns:
+                tuple[str, str]: base64 与 MIME。
+
+            Raises:
+                None: 本函数不主动抛出异常。
+            """
+            rendered.append(item.post_id)
+            return f"b64-{item.post_id}", "image/png"
+
+        with mock.patch.dict("os.environ", {"X_MONITOR_LEGACY_MEDIA": ""}):
+            with mock.patch("src.x_monitor_media._send_group_msg") as send_msg:
+                send_x_message_with_images(
+                    "http://onebot",
+                    123,
+                    "token",
+                    "hello",
+                    items,
+                    renderer=fake_render,
+                )
+
+        self.assertEqual(rendered, ["1", "2"])
+        self.assertEqual(send_msg.call_count, 2)
+        first_payload = send_msg.call_args_list[0].args[2]
+        second_payload = send_msg.call_args_list[1].args[2]
+        self.assertEqual(first_payload[0]["data"]["file"], "base64://b64-1")
+        self.assertEqual(second_payload[0]["data"]["file"], "base64://b64-2")
+
     def test_legacy_env_uses_original_text_and_media(self) -> None:
         """
         旧版环境变量开启时，应沿用文本 + 原图发送模式。
@@ -1427,6 +1486,57 @@ class XMonitorMediaComposeTests(unittest.TestCase):
                 "https://example.com/2.jpg",
             ],
         )
+
+    def test_send_legacy_env_keeps_single_message(self) -> None:
+        """
+        旧版环境变量开启时，发送路径仍应合并为一次消息。
+        """
+        items = [
+            XPostResult(
+                username="kana_hanaiwa",
+                post_id="1",
+                text="multi",
+                created_label="05-05 10:02",
+                url="https://x.com/kana_hanaiwa/status/1",
+                image_urls=(
+                    "https://example.com/1.jpg",
+                    "https://example.com/2.jpg",
+                ),
+                source_payload=build_render_payload(),
+            )
+        ]
+
+        def fake_fetch(url: str) -> tuple[str, str]:
+            """
+            返回固定原图内容。
+
+            Args:
+                url (str): 图片 URL。
+
+            Returns:
+                tuple[str, str]: base64 与 MIME。
+
+            Raises:
+                None: 本函数不主动抛出异常。
+            """
+            return f"b64-{url.rsplit('/', 1)[-1]}", "image/jpeg"
+
+        with mock.patch.dict("os.environ", {"X_MONITOR_LEGACY_MEDIA": "1"}):
+            with mock.patch("src.x_monitor_media._send_group_msg") as send_msg:
+                send_x_message_with_images(
+                    "http://onebot",
+                    123,
+                    "token",
+                    "hello",
+                    items,
+                    fetcher=fake_fetch,
+                )
+
+        self.assertEqual(send_msg.call_count, 1)
+        payload = send_msg.call_args.args[2]
+        self.assertEqual(payload[0]["type"], "text")
+        self.assertEqual(payload[0]["data"]["text"], "hello")
+        self.assertEqual(len(payload), 3)
 
 
 class XMonitorWatchTaskTests(unittest.TestCase):

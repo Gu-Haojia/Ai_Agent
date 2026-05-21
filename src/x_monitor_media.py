@@ -386,11 +386,18 @@ def send_x_message_with_images(
     Raises:
         RuntimeError: 当 OneBot 发送失败时抛出。
     """
-    payload = compose_x_media_message(
-        text,
-        items,
-        fetcher=fetcher,
-        max_images=max_images,
-        renderer=renderer,
-    )
-    _send_group_msg(api_base, group_id, payload, access_token)
+    if _env_flag(LEGACY_MEDIA_ENV):
+        payload = compose_x_media_message(
+            text,
+            items,
+            fetcher=fetcher,
+            max_images=max_images,
+            renderer=renderer,
+        )
+        _send_group_msg(api_base, group_id, payload, access_token)
+        return
+
+    assert items, "推文列表不能为空"
+    for item in items:
+        payload = _compose_rendered_tweet_message([item], renderer=renderer)
+        _send_group_msg(api_base, group_id, payload, access_token)
