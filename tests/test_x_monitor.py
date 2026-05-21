@@ -820,6 +820,40 @@ class XMonitorRenderTests(unittest.TestCase):
         self.assertIn("fanbox.cc/@kana/posts...", tweets[0].text)
         self.assertNotIn(expanded_url, tweets[0].text)
 
+    def test_parse_payload_uses_note_tweet_url_entities(self) -> None:
+        """
+        长文正文来自 note_tweet 时应同步使用 note_tweet 的 URL entity。
+        """
+        payload = build_render_payload(text="short body https://t.co/photo")
+        payload["data"][0]["entities"] = {
+            "urls": [
+                {
+                    "url": "https://t.co/photo",
+                    "expanded_url": "https://x.com/kana/status/1/photo/1",
+                    "display_url": "pic.x.com/photo",
+                    "media_key": "3_1",
+                }
+            ]
+        }
+        payload["data"][0]["note_tweet"] = {
+            "text": "event detail\nhttps://t.co/live",
+            "entities": {
+                "urls": [
+                    {
+                        "url": "https://t.co/live",
+                        "expanded_url": "http://livepocket.jp/e/c3pwb",
+                        "display_url": "livepocket.jp/e/c3pwb",
+                    }
+                ]
+            },
+        }
+
+        tweets = XTweetPayloadParser().parse(payload)
+
+        self.assertIn("http://livepocket.jp/e/c3pwb", tweets[0].text)
+        self.assertNotIn("https://t.co/live", tweets[0].text)
+        self.assertNotIn("pic.x.com/photo", tweets[0].text)
+
     def test_parse_payload_unescapes_html_entities_before_rendering(self) -> None:
         """
         X API 正文中的 HTML entity 应还原为原始字符。
