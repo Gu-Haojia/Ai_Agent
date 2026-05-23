@@ -589,7 +589,7 @@ def _translation_block_css() -> str:
       box-sizing: border-box;
       padding: 14px 16px;
       border-radius: 16px;
-      background: #f6f8fa;
+      background: #eef6fb;
       border: 1px solid #eff3f4;
     }
     .compact .translation {

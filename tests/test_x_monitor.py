@@ -1022,7 +1022,7 @@ class XMonitorRenderTests(unittest.TestCase):
         html = render_tweet_html(tweets[0], BrowserRenderConfig(width=720))
 
         self.assertIn('<section class="translation" lang="zh-CN">', html)
-        self.assertIn("background: #f6f8fa", html)
+        self.assertIn("background: #eef6fb", html)
         self.assertIn("border: 1px solid #eff3f4", html)
         self.assertIn("border-radius: 16px", html)
         self.assertIn("width: 100%", html)
