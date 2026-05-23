@@ -931,7 +931,8 @@ class XMonitorRenderTests(unittest.TestCase):
         payload = build_render_payload(
             text=(
                 "Q1.PLv上げ作業よりも周回優先？ "
-                "fanbox.cc/@kana/posts... x.com/kana_hanaiwa/status/1"
+                "fanbox.cc/@kana/posts... x.com/kana_hanaiwa/status/1 "
+                "event.icu/detail"
             )
         )
         tweets = XTweetPayloadParser().parse(payload)
@@ -946,6 +947,10 @@ class XMonitorRenderTests(unittest.TestCase):
         )
         self.assertIn(
             '<span class="link">x.com/kana_hanaiwa/status/1</span>',
+            html,
+        )
+        self.assertIn(
+            '<span class="link">event.icu/detail</span>',
             html,
         )
 

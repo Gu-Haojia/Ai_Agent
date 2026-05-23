@@ -33,26 +33,57 @@ BARE_LINK_PATTERN = re.compile(
     r"(?::\d{1,5})?(?:/[^\s<>'\"]*)?"
 )
 BARE_LINK_TLDS = {
+    "ac",
+    "ai",
+    "am",
     "app",
     "art",
     "be",
+    "biz",
     "cc",
+    "cloud",
+    "club",
     "co",
     "com",
     "dev",
+    "events",
+    "fan",
     "fm",
+    "fun",
     "gg",
+    "gl",
+    "icu",
+    "id",
     "info",
     "io",
     "jp",
+    "la",
+    "ly",
     "link",
     "live",
     "me",
+    "media",
+    "moe",
     "net",
+    "news",
+    "online",
     "org",
+    "page",
+    "pm",
+    "pro",
+    "shop",
     "site",
+    "social",
+    "store",
+    "studio",
+    "to",
+    "tokyo",
     "tv",
+    "work",
+    "works",
+    "world",
     "xyz",
+    "zone",
 }
 LINK_STOP_CHARS = set(" \t\r\n<>'\"")
 LINK_TRAILING_CHARS = set(",!?;:)]}、。！？；：）】」』")
@@ -1658,7 +1689,7 @@ def _is_valid_bare_link(value: str, allow_unknown_tld: bool = False) -> bool:
         allow_unknown_tld (bool): 是否允许不在白名单内的顶级域。
 
     Returns:
-        bool: 顶级域由两个以上字母组成时为 True。
+        bool: 顶级域符合裸链接规则时为 True。
 
     Raises:
         None: 本函数不主动抛出异常。
