@@ -924,6 +924,31 @@ class XMonitorRenderTests(unittest.TestCase):
         self.assertIn('<span class="mention">@valid_user</span>', html)
         self.assertNotIn('<span class="mention">@kana</span>', html)
 
+    def test_render_text_entities_does_not_mark_plv_question_as_url(self) -> None:
+        """
+        类似 Q1.PLv 的问题编号和缩写组合不应被识别为裸链接。
+        """
+        payload = build_render_payload(
+            text=(
+                "Q1.PLv上げ作業よりも周回優先？ "
+                "fanbox.cc/@kana/posts... x.com/kana_hanaiwa/status/1"
+            )
+        )
+        tweets = XTweetPayloadParser().parse(payload)
+
+        html = render_tweet_html(tweets[0], BrowserRenderConfig(width=720))
+
+        self.assertIn("Q1.PLv上げ作業", html)
+        self.assertNotIn('<span class="link">Q1.PLv</span>', html)
+        self.assertIn(
+            '<span class="link">fanbox.cc/@kana/posts...</span>',
+            html,
+        )
+        self.assertIn(
+            '<span class="link">x.com/kana_hanaiwa/status/1</span>',
+            html,
+        )
+
     def test_parse_payload_keeps_short_expanded_url(self) -> None:
         """
         URL entity 的真实链接较短时应保留 expanded_url。

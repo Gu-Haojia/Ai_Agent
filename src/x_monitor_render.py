@@ -32,6 +32,28 @@ BARE_LINK_PATTERN = re.compile(
     r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+"
     r"(?::\d{1,5})?(?:/[^\s<>'\"]*)?"
 )
+BARE_LINK_TLDS = {
+    "app",
+    "art",
+    "be",
+    "cc",
+    "co",
+    "com",
+    "dev",
+    "fm",
+    "gg",
+    "info",
+    "io",
+    "jp",
+    "link",
+    "live",
+    "me",
+    "net",
+    "org",
+    "site",
+    "tv",
+    "xyz",
+}
 LINK_STOP_CHARS = set(" \t\r\n<>'\"")
 LINK_TRAILING_CHARS = set(",!?;:)]}、。！？；：）】」』")
 
@@ -1539,7 +1561,7 @@ def _find_link_end(text: str, index: int) -> int:
         if match is None:
             return index
         candidate = text[index : match.end()]
-        if not _is_valid_bare_link(candidate):
+        if not _is_valid_bare_link(candidate, allow_unknown_tld=True):
             return index
         return _trim_link_end(text, index, match.end())
     match = BARE_LINK_PATTERN.match(text, index)
@@ -1627,12 +1649,13 @@ def _trim_link_end(text: str, index: int, end: int) -> int:
     return end
 
 
-def _is_valid_bare_link(value: str) -> bool:
+def _is_valid_bare_link(value: str, allow_unknown_tld: bool = False) -> bool:
     """
     判断裸域名链接是否具备有效顶级域。
 
     Args:
         value (str): 裸域名链接候选文本。
+        allow_unknown_tld (bool): 是否允许不在白名单内的顶级域。
 
     Returns:
         bool: 顶级域由两个以上字母组成时为 True。
@@ -1645,7 +1668,11 @@ def _is_valid_bare_link(value: str) -> bool:
     if len(labels) < 2:
         return False
     tld = labels[-1]
-    return len(tld) >= 2 and tld.isalpha()
+    if len(tld) < 2 or not tld.isalpha():
+        return False
+    if allow_unknown_tld:
+        return True
+    return tld.lower() in BARE_LINK_TLDS
 
 
 def _is_ascii_link_inner_char(char: str) -> bool:
