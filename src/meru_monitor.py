@@ -12,7 +12,7 @@ import os
 import time
 import uuid
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from threading import Event, Lock, Thread
 from pathlib import Path
@@ -139,6 +139,7 @@ class MeruSearchResult:
         created_label (str): 创建时间字符串。
         url (str): 商品链接。
         image_urls (tuple[str, ...]): 关联图片 URL。
+        previous_price (Optional[int]): 降价提醒中的上一轮价格，非降价事件为 None。
     """
 
     keyword: str
@@ -148,6 +149,7 @@ class MeruSearchResult:
     created_label: str
     url: str
     image_urls: tuple[str, ...] = ()
+    previous_price: Optional[int] = None
 
     def to_line(self, prefix: str = "") -> str:
         """
@@ -361,6 +363,7 @@ class _MeruWatchTask:
         self._stop_event = Event()
         self._thread = Thread(target=self._run, name="meru-watch", daemon=True)
         self._seen: set[str] = set()
+        self._last_prices: dict[str, int] = {}
         self._first_cycle = True
 
     def start(self) -> None:
@@ -417,23 +420,112 @@ class _MeruWatchTask:
             try:
                 results = list(self._fetcher())
                 if self._first_cycle:
-                    for item in results:
-                        self._seen.add(item.item_id)
+                    self._record_current_items(results)
                     self._first_cycle = False
                 else:
+                    price_drop_items = self._collect_price_drop_items(results)
                     new_items = [
                         item for item in results if item.item_id not in self._seen
                     ]
+                    if price_drop_items:
+                        self._handle_price_drop_items(price_drop_items)
                     if new_items:
                         self._handle_new_items(new_items)
-                    for item in results:
-                        self._seen.add(item.item_id)
+                    self._record_current_items(results)
                     # 控制 seen 长度，避免无限增长
                     if len(self._seen) > 400:
                         self._seen = set(item.item_id for item in results)
+                        self._last_prices = {
+                            item.item_id: item.price
+                            for item in results
+                            if item.price is not None
+                        }
             except Exception as err:
                 print(f"[MeruWatch] 监控轮询异常: {err}", flush=True)
             self._stop_event.wait(self._interval)
+
+    def _record_current_items(self, items: Sequence[MeruSearchResult]) -> None:
+        """
+        记录当前轮询看到的商品与价格。
+
+        Args:
+            items (Sequence[MeruSearchResult]): 当前轮询结果。
+
+        Returns:
+            None: 无返回值。
+        """
+        for item in items:
+            self._seen.add(item.item_id)
+            # 仅记录明确价格，避免未知价格覆盖可用于降价判断的旧价格。
+            if item.price is not None:
+                self._last_prices[item.item_id] = item.price
+
+    def _collect_price_drop_items(
+        self, items: Sequence[MeruSearchResult]
+    ) -> list[MeruSearchResult]:
+        """
+        从当前轮询结果中提取已知商品的降价事件。
+
+        Args:
+            items (Sequence[MeruSearchResult]): 当前轮询结果。
+
+        Returns:
+            list[MeruSearchResult]: 携带上一轮价格的降价商品列表。
+        """
+        drops: list[MeruSearchResult] = []
+        for item in items:
+            if item.item_id not in self._seen or item.price is None:
+                continue
+            previous_price = self._last_prices.get(item.item_id)
+            if previous_price is not None and item.price < previous_price:
+                drops.append(replace(item, previous_price=previous_price))
+        return drops
+
+    def _handle_price_drop_items(self, items: Sequence[MeruSearchResult]) -> None:
+        """
+        处理已存在商品的降价通知。
+
+        Args:
+            items (Sequence[MeruSearchResult]): 降价商品列表。
+
+        Returns:
+            None: 无返回值。
+        """
+        subset = list(items)[: self._limit]
+        threshold_items: list[MeruSearchResult] = []
+        if self._price_threshold is not None:
+            threshold_items = [
+                item
+                for item in subset
+                if item.price is not None and item.price <= self._price_threshold
+            ]
+
+        threshold_ids = {item.item_id for item in threshold_items}
+        remaining = [
+            item for item in subset if item.item_id not in threshold_ids
+        ]
+
+        # 降价后低于阈值时复用价格通道，从而保留现有 @ 提醒与带图发送逻辑。
+        if threshold_items:
+            tag = f"PRICE_DROP<= {self._price_threshold}"
+            price_msg = self._formatter(threshold_items, tag)
+            self._dispatch(price_msg, threshold_items, tag, price_channel=True)
+            print(
+                f"[MeruWatch] 触发降价提醒 {len(threshold_items)} 条，阈值={self._price_threshold}",
+                flush=True,
+            )
+
+        if self._price_only:
+            return
+
+        if remaining:
+            tag = "PRICE_DROP"
+            message = self._formatter(remaining, tag)
+            self._dispatch(message, remaining, tag, price_channel=False)
+            print(
+                f"[MeruWatch] 发现商品降价 {len(remaining)}/{len(items)} 条，关键词={self._keyword}",
+                flush=True,
+            )
 
     def _handle_new_items(self, items: Sequence[MeruSearchResult]) -> None:
         """
@@ -823,6 +915,8 @@ class MeruMonitorManager:
             return ""
         if tag == "SEARCH":
             return MeruMonitorManager._format_search(items, tag)
+        if tag.startswith("PRICE_DROP"):
+            return MeruMonitorManager._format_price_drop_watch(items, tag)
         if tag.startswith("PRICE<="):
             return MeruMonitorManager._format_price_watch(items, tag)
         return MeruMonitorManager._format_new_watch(items, tag)
@@ -902,6 +996,52 @@ class MeruMonitorManager:
                     f"#{idx}",
                     f"{item.name or '(无标题)'}",
                     f"价格：{price_part}",
+                    f"时间：{created}",
+                    f"链接：{item.url}",
+                ]
+            )
+        return "\n".join(lines)
+
+    @staticmethod
+    def _format_price_drop_watch(
+        items: Sequence[MeruSearchResult], tag: str
+    ) -> str:
+        """
+        降价提醒格式化。
+
+        Args:
+            items (Sequence[MeruSearchResult]): 需要格式化的降价商品列表。
+            tag (str): 价格降价标签。
+
+        Returns:
+            str: 格式化后的降价提醒文本。
+        """
+        keyword = items[0].keyword
+        threshold = ""
+        if tag.startswith("PRICE_DROP<="):
+            threshold = tag.replace("PRICE_DROP<=", "").strip()
+        header = f"[PRICE DROP] | [{keyword}]"
+        if threshold:
+            header = f"{header} | [低于{threshold}]"
+        lines = [
+            header,
+            "检测到商品降价！",
+            "=========================",
+        ]
+        for idx, item in enumerate(items, 1):
+            price_part = f"¥{item.price}" if item.price is not None else "价格未知"
+            previous_part = (
+                f"¥{item.previous_price}"
+                if item.previous_price is not None
+                else "未知"
+            )
+            created = item.created_label or "未知"
+            lines.extend(
+                [
+                    f"#{idx}",
+                    f"{item.name or '(无标题)'}",
+                    f"价格：{price_part}",
+                    f"原价：{previous_part}",
                     f"时间：{created}",
                     f"链接：{item.url}",
                 ]
