@@ -198,11 +198,17 @@ def test_context_compression_config_uses_conservative_defaults(
     assert config.keep_recent_text_tokens == 20000
     assert config.min_keep_recent_turns == 5
     assert config.max_summary_text_tokens == 3500
+    assert config.print_summary is False
 
 
-def test_context_compressor_keeps_group_chat_context_and_tool_summary() -> None:
+def test_context_compressor_keeps_group_chat_context_and_tool_summary(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     """
     验证群聊压缩会保留完整轮次、工具要点并去掉图片 base64。
+
+    Args:
+        capsys (pytest.CaptureFixture[str]): 控制台输出捕获工具。
 
     Returns:
         None: 无返回值。
@@ -230,6 +236,14 @@ def test_context_compressor_keeps_group_chat_context_and_tool_summary() -> None:
         }
     )
 
+    output = capsys.readouterr().out
+    assert "[ContextCompression] 已压缩群聊上下文" in output
+    assert "total_tokens_before=" in output
+    assert "removed_messages=" in output
+    assert "kept_turns=" in output
+    assert "summary_tokens=" in output
+    assert "摘要正文" not in output
+    assert "群友在聊演唱会抽选" not in output
     assert update["compression_round"] == 1
     assert "工具调用要点" in update["group_context_summary"]
     assert "google_flights_search" in update["group_context_summary"]
@@ -248,6 +262,47 @@ def test_context_compressor_keeps_group_chat_context_and_tool_summary() -> None:
     for message in remaining:
         if isinstance(message, ToolMessage):
             assert message.tool_call_id == "call-flight-1"
+
+
+def test_context_compressor_prints_summary_when_enabled(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """
+    验证打开内嵌开关时会在控制台输出摘要正文。
+
+    Args:
+        capsys (pytest.CaptureFixture[str]): 控制台输出捕获工具。
+
+    Returns:
+        None: 无返回值。
+
+    Raises:
+        None: 测试用例不主动抛出异常。
+    """
+    compressor = ContextCompressor(
+        ContextCompressionConfig(
+            trigger_text_tokens=260,
+            keep_recent_text_tokens=180,
+            min_keep_recent_turns=4,
+            max_summary_text_tokens=400,
+            print_summary=True,
+        ),
+        RecordingSummaryModel(),
+    )
+
+    update = compressor.compress(
+        {
+            "messages": _business_messages(),
+            "group_context_summary": "当前话题：上一轮大家刚开始聊演唱会抽选。",
+            "compression_round": 0,
+        }
+    )
+
+    output = capsys.readouterr().out
+    assert update["compression_round"] == 1
+    assert "[ContextCompression] 已压缩群聊上下文" in output
+    assert "[ContextCompression] 摘要正文:" in output
+    assert "群友在聊演唱会抽选" in output
 
 
 def test_context_compressor_skips_when_below_threshold() -> None:

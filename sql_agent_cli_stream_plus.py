@@ -564,6 +564,7 @@ class ContextCompressionConfig:
         keep_recent_text_tokens (int): 压缩后尽量保留的最近原文 token 数。
         min_keep_recent_turns (int): 无论 token 数如何都保留的最近完整轮次数。
         max_summary_text_tokens (int): 群聊摘要允许的最大文本 token 数。
+        print_summary (bool): 是否在控制台输出压缩摘要正文。
 
     Returns:
         None: dataclass 初始化不返回额外值。
@@ -576,6 +577,7 @@ class ContextCompressionConfig:
     keep_recent_text_tokens: int = 20000
     min_keep_recent_turns: int = 5
     max_summary_text_tokens: int = 3500
+    print_summary: bool = False
 
     def __post_init__(self) -> None:
         """
@@ -591,6 +593,7 @@ class ContextCompressionConfig:
         assert self.keep_recent_text_tokens > 0, "保留阈值必须为正整数"
         assert self.min_keep_recent_turns > 0, "最小保留轮数必须为正整数"
         assert self.max_summary_text_tokens > 0, "摘要 token 上限必须为正整数"
+        assert isinstance(self.print_summary, bool), "摘要输出开关必须为布尔值"
         assert (
             self.keep_recent_text_tokens < self.trigger_text_tokens
         ), "保留阈值必须小于触发阈值"
@@ -774,6 +777,7 @@ class ContextCompressor:
         ]
         assert compressed_messages, "被压缩消息不能为空"
         new_summary = self.summarize(summary, compressed_messages)
+        summary_tokens = self.count_text_tokens(new_summary)
         last_message_id = str(getattr(compressed_messages[-1], "id", "") or "").strip()
         assert last_message_id, "被压缩消息缺少 ID"
         removals: list[RemoveMessage] = []
@@ -784,12 +788,69 @@ class ContextCompressor:
 
         old_round = state.get("compression_round") or 0
         assert isinstance(old_round, int) and old_round >= 0, "compression_round 非法"
+        new_round = old_round + 1
+        self.emit_compression_log(
+            round_number=new_round,
+            total_tokens_before=total_tokens,
+            removed_messages=len(compressed_messages),
+            kept_turns=len(turns) - keep_start,
+            summary_tokens=summary_tokens,
+            summary=new_summary,
+        )
         return {
             "group_context_summary": new_summary,
             "messages": removals,
             "compressed_until_message_id": last_message_id,
-            "compression_round": old_round + 1,
+            "compression_round": new_round,
         }
+
+    def emit_compression_log(
+        self,
+        round_number: int,
+        total_tokens_before: int,
+        removed_messages: int,
+        kept_turns: int,
+        summary_tokens: int,
+        summary: str,
+    ) -> None:
+        """
+        输出上下文压缩完成后的控制台日志。
+
+        Args:
+            round_number (int): 本次压缩后的累计轮次。
+            total_tokens_before (int): 压缩触发前的文本 token 总数。
+            removed_messages (int): 本次被移出原文上下文的消息数。
+            kept_turns (int): 压缩后保留的最近完整轮次数。
+            summary_tokens (int): 新摘要的文本 token 数。
+            summary (str): 新生成的群聊上下文摘要。
+
+        Returns:
+            None: 无返回值。
+
+        Raises:
+            AssertionError: 当日志字段类型或取值非法时抛出。
+        """
+        assert round_number > 0, "压缩轮次必须为正整数"
+        assert total_tokens_before > 0, "压缩前 token 数必须为正整数"
+        assert removed_messages > 0, "移除消息数必须为正整数"
+        assert kept_turns > 0, "保留轮次数必须为正整数"
+        assert summary_tokens > 0, "摘要 token 数必须为正整数"
+        assert isinstance(summary, str), "summary 必须是字符串"
+        print(
+            "[ContextCompression] 已压缩群聊上下文: "
+            f"round={round_number}, "
+            f"total_tokens_before={total_tokens_before}, "
+            f"removed_messages={removed_messages}, "
+            f"kept_turns={kept_turns}, "
+            f"summary_tokens={summary_tokens}",
+            flush=True,
+        )
+        if self._config.print_summary:
+            print(
+                "[ContextCompression] 摘要正文:\n"
+                f"{_sanitize_context_text(summary).strip()}",
+                flush=True,
+            )
 
     def split_turns(self, messages: Sequence[Any]) -> list[ContextTurn]:
         """
