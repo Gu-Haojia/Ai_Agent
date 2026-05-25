@@ -172,6 +172,49 @@ def _business_messages() -> list:
     return add_messages([], raw_messages)
 
 
+def _heavy_tool_turn(prefix: str, tool_count: int = 8) -> list:
+    """
+    构造一轮包含多条 ToolMessage 的重工具调用轮次。
+
+    Args:
+        prefix (str): 用于区分消息和 tool_call_id 的前缀。
+        tool_count (int): 本轮工具结果数量。
+
+    Returns:
+        list: 未合并的 LangChain 消息列表。
+
+    Raises:
+        AssertionError: 当前缀为空或工具数量非法时抛出。
+    """
+    assert prefix.strip(), "prefix 不能为空"
+    assert tool_count > 0, "tool_count 必须为正整数"
+    tool_calls = [
+        {
+            "name": "tavily_search",
+            "args": {"query": f"{prefix} query {index}"},
+            "id": f"{prefix}-call-{index}",
+            "type": "tool_call",
+        }
+        for index in range(tool_count)
+    ]
+    tool_messages = [
+        ToolMessage(
+            name="tavily_search",
+            tool_call_id=f"{prefix}-call-{index}",
+            content=(f"{prefix} 工具结果 {index} " + "长文本 ") * 200,
+        )
+        for index in range(tool_count)
+    ]
+    return [
+        HumanMessage(
+            content=f"Group_id: [10001]; User_id: [9001]; Msg:\n[{prefix} 重工具轮]"
+        ),
+        AIMessage(content="", tool_calls=tool_calls),
+        *tool_messages,
+        AIMessage(content=f"{prefix} 工具结果整理完毕。"),
+    ]
+
+
 def test_context_compression_config_uses_conservative_defaults(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -189,7 +232,7 @@ def test_context_compression_config_uses_conservative_defaults(
     """
     monkeypatch.delenv("CONTEXT_COMPRESS_TRIGGER_TEXT_TOKENS", raising=False)
     monkeypatch.delenv("CONTEXT_KEEP_RECENT_TEXT_TOKENS", raising=False)
-    monkeypatch.delenv("CONTEXT_MIN_KEEP_RECENT_TURNS", raising=False)
+    monkeypatch.delenv("CONTEXT_MIN_KEEP_RECENT_MESSAGES", raising=False)
     monkeypatch.delenv("CONTEXT_MAX_SUMMARY_TEXT_TOKENS", raising=False)
     monkeypatch.delenv("CONTEXT_MIN_COMPRESSIBLE_TEXT_TOKENS", raising=False)
 
@@ -197,7 +240,7 @@ def test_context_compression_config_uses_conservative_defaults(
 
     assert config.trigger_text_tokens == 35000
     assert config.keep_recent_text_tokens == 20000
-    assert config.min_keep_recent_turns == 5
+    assert config.min_keep_recent_messages == 10
     assert config.max_summary_text_tokens == 3500
     assert config.min_compressible_text_tokens == 8000
     assert config.print_summary is False
@@ -223,7 +266,7 @@ def test_context_compressor_keeps_group_chat_context_and_tool_summary(
         ContextCompressionConfig(
             trigger_text_tokens=260,
             keep_recent_text_tokens=180,
-            min_keep_recent_turns=4,
+            min_keep_recent_messages=8,
             max_summary_text_tokens=400,
             min_compressible_text_tokens=1,
         ),
@@ -244,6 +287,7 @@ def test_context_compressor_keeps_group_chat_context_and_tool_summary(
     assert "total_tokens_before=" in output
     assert "compressible_tokens=" in output
     assert "removed_messages=" in output
+    assert "kept_messages=" in output
     assert "kept_turns=" in output
     assert "summary_tokens=" in output
     assert "摘要正文" not in output
@@ -287,7 +331,7 @@ def test_context_compressor_prints_summary_when_enabled(
         ContextCompressionConfig(
             trigger_text_tokens=260,
             keep_recent_text_tokens=180,
-            min_keep_recent_turns=4,
+            min_keep_recent_messages=8,
             max_summary_text_tokens=400,
             min_compressible_text_tokens=1,
             print_summary=True,
@@ -330,7 +374,7 @@ def test_context_compressor_skips_when_compressible_area_is_too_small(
         ContextCompressionConfig(
             trigger_text_tokens=260,
             keep_recent_text_tokens=180,
-            min_keep_recent_turns=4,
+            min_keep_recent_messages=8,
             max_summary_text_tokens=400,
             min_compressible_text_tokens=10000,
         ),
@@ -350,6 +394,55 @@ def test_context_compressor_skips_when_compressible_area_is_too_small(
     assert "[ContextCompression]" not in capsys.readouterr().out
 
 
+def test_context_compressor_keeps_recent_messages_with_complete_turns() -> None:
+    """
+    验证按最近消息数保留时会向上取整到完整轮次。
+
+    Returns:
+        None: 无返回值。
+
+    Raises:
+        None: 测试用例不主动抛出异常。
+    """
+    compressor = ContextCompressor(
+        ContextCompressionConfig(
+            trigger_text_tokens=1000,
+            keep_recent_text_tokens=100,
+            min_keep_recent_messages=10,
+            max_summary_text_tokens=400,
+            min_compressible_text_tokens=1,
+        ),
+        RecordingSummaryModel(),
+    )
+    messages = add_messages(
+        [],
+        [
+            *_heavy_tool_turn("old", tool_count=8),
+            *_heavy_tool_turn("new", tool_count=8),
+            HumanMessage(
+                content="Group_id: [10001]; User_id: [9002]; Msg:\n[下一轮消息]"
+            ),
+        ],
+    )
+
+    update = compressor.compress({"messages": messages, "compression_round": 0})
+
+    assert update["compression_round"] == 1
+    remaining = add_messages(messages, update["messages"])
+    remaining_text = "\n".join(str(message.content) for message in remaining)
+    assert "old 重工具轮" not in remaining_text
+    assert "new 重工具轮" in remaining_text
+    assert "下一轮消息" in remaining_text
+    assert any(
+        isinstance(message, ToolMessage) and str(message.tool_call_id).startswith("new-")
+        for message in remaining
+    )
+    assert not any(
+        isinstance(message, ToolMessage) and str(message.tool_call_id).startswith("old-")
+        for message in remaining
+    )
+
+
 def test_context_compressor_skips_when_below_threshold() -> None:
     """
     验证低于阈值时不会压缩。
@@ -364,7 +457,7 @@ def test_context_compressor_skips_when_below_threshold() -> None:
         ContextCompressionConfig(
             trigger_text_tokens=10000,
             keep_recent_text_tokens=8000,
-            min_keep_recent_turns=4,
+            min_keep_recent_messages=8,
             max_summary_text_tokens=400,
         ),
         RecordingSummaryModel(),
@@ -398,7 +491,7 @@ def test_agent_persists_group_context_summary_in_thread_state(
     monkeypatch.setenv("CONTEXT_SUMMARY_MODEL", "fake:summary")
     monkeypatch.setenv("CONTEXT_COMPRESS_TRIGGER_TEXT_TOKENS", "220")
     monkeypatch.setenv("CONTEXT_KEEP_RECENT_TEXT_TOKENS", "120")
-    monkeypatch.setenv("CONTEXT_MIN_KEEP_RECENT_TURNS", "2")
+    monkeypatch.setenv("CONTEXT_MIN_KEEP_RECENT_MESSAGES", "4")
     monkeypatch.setenv("CONTEXT_MAX_SUMMARY_TEXT_TOKENS", "500")
     monkeypatch.setenv("CONTEXT_MIN_COMPRESSIBLE_TEXT_TOKENS", "1")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
