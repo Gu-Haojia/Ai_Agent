@@ -35,7 +35,13 @@ from langgraph.store.memory import InMemoryStore
 from langgraph.graph import START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
-from langchain_core.messages import AIMessage, ToolMessage, HumanMessage, SystemMessage
+from langchain_core.messages import (
+    AIMessage,
+    ToolMessage,
+    HumanMessage,
+    SystemMessage,
+    RemoveMessage,
+)
 from image_storage import GeneratedImage, ImageStorageManager
 from src.playwright_browser_toolkit_runner import (
     PLAYWRIGHT_BROWSER_TOOL_NAMES,
@@ -202,11 +208,19 @@ def _ensure_gemini_env_once() -> None:
 _BASE64_DATA_URL_PATTERN = re.compile(
     r"(data:[^;]+;base64,)[0-9A-Za-z+/=_-]+", re.IGNORECASE
 )
+_BASE64_SCHEME_PATTERN = re.compile(
+    r"(base64://)[0-9A-Za-z+/=_-]+", re.IGNORECASE
+)
 _LATEX_MATH_PATTERN: re.Pattern[str] = re.compile(
     r"(?<!\\)\$\$(?P<block>.+?)(?<!\\)\$\$|(?<!\\)\$(?P<inline>.+?)(?<!\\)\$",
     re.DOTALL,
 )
 _LATEX_TO_UNICODE_CONVERTER = LatexNodes2Text()
+CONTEXT_TRIGGER_TEXT_TOKENS_ENV: str = "CONTEXT_COMPRESS_TRIGGER_TEXT_TOKENS"
+CONTEXT_KEEP_TEXT_TOKENS_ENV: str = "CONTEXT_KEEP_RECENT_TEXT_TOKENS"
+CONTEXT_MIN_TURNS_ENV: str = "CONTEXT_MIN_KEEP_RECENT_TURNS"
+CONTEXT_MAX_SUMMARY_TOKENS_ENV: str = "CONTEXT_MAX_SUMMARY_TEXT_TOKENS"
+CONTEXT_SUMMARY_MODEL_ENV: str = "CONTEXT_SUMMARY_MODEL"
 
 
 def _convert_latex_to_unicode(text: str) -> str:
@@ -296,6 +310,32 @@ def _sanitize_for_logging(payload: object) -> str:
         return f"{match.group(1)}[BASE64...]"
 
     sanitized = _BASE64_DATA_URL_PATTERN.sub(_replace, text)
+    sanitized = _BASE64_SCHEME_PATTERN.sub(
+        lambda match: f"{match.group(1)}[BASE64...]", sanitized
+    )
+    return sanitized
+
+
+def _sanitize_context_text(text: str) -> str:
+    """
+    将上下文统计与摘要提示中的大体积二进制文本替换为占位符。
+
+    Args:
+        text (str): 待清洗的文本。
+
+    Returns:
+        str: 已替换 base64 数据的文本。
+
+    Raises:
+        AssertionError: 当 text 不是字符串时抛出。
+    """
+    assert isinstance(text, str), "text 必须是字符串"
+    sanitized = _BASE64_DATA_URL_PATTERN.sub(
+        lambda match: f"{match.group(1)}[BASE64_OMITTED]", text
+    )
+    sanitized = _BASE64_SCHEME_PATTERN.sub(
+        lambda match: f"{match.group(1)}[BASE64_OMITTED]", sanitized
+    )
     return sanitized
 
 
@@ -352,6 +392,8 @@ def _extract_text_content(message: Any) -> Optional[str]:
             return _apply_format(text)
 
     content = getattr(message, "content", None)
+    if isinstance(content, str) and content:
+        return _apply_format(content)
     if isinstance(content, Sequence) and not isinstance(
         content, (str, bytes, bytearray)
     ):
@@ -416,8 +458,11 @@ def _extract_text_for_token_count(message: Any) -> str:
 
     text = _extract_text_content(message)
     if text is not None and text != "":
-        return text
-    return _apply_format(str(message))
+        return _sanitize_context_text(text)
+    content = getattr(message, "content", None)
+    if isinstance(content, str) and content.strip():
+        return _sanitize_context_text(_apply_format(content))
+    return _sanitize_context_text(_apply_format(str(message)))
 
 
 def _infer_model_provider(model_name: str) -> str:
@@ -475,26 +520,20 @@ def _ensure_model_env_once(model_name: str) -> None:
 
 
 def _cap_messages(prev: list | None, new: list | object) -> list:
-    """基于内置 `add_messages` 的长度控制合并器：仅保留最近 n 条。
+    """基于内置 `add_messages` 的消息合并器。
 
     先使用 `add_messages(prev, new)` 完成标准的消息合并（与内置追加行为一致），
-    再对结果做截断，返回最后 n 条，避免改变既有消息规范化与合并语义。
-    同时会将新增消息内容追加到日志文件中，便于后续排查与回放。
+    再将新增消息内容追加到日志文件中，便于后续排查与回放。
+    上下文截断与摘要由独立的 ``ContextCompressor`` 节点负责，避免在 reducer
+    阶段丢失待压缩的旧消息。
 
     Args:
         prev (list|None): 既有消息列表。
         new (list|object): 新增消息（单条或列表）。
 
     Returns:
-        list: 合并后保留最后 n 条的消息列表。
+        list: 合并后的消息列表。
     """
-    """
-    #暂时不使用
-    LENGTH_LIMIT = int(os.environ.get("MESSAGE_LENGTH_LIMIT", 20))
-    if not isinstance(LENGTH_LIMIT, int) or LENGTH_LIMIT < 10:
-        LENGTH_LIMIT = 20
-    """
-    LENGTH_LIMIT = 20
     combined = add_messages(prev or [], new)
 
     log_dir = Path(os.environ.get("AGENT_MESSAGE_LOG_DIR", "logs")).expanduser()
@@ -511,23 +550,552 @@ def _cap_messages(prev: list | None, new: list | object) -> list:
     except Exception as err:
         sys.stderr.write(f"[CapMessages] 记录消息失败: {err}\n")
 
-    if len(combined) < LENGTH_LIMIT:
-        # print(f"\n\n[Debug] Merged messages: {combined}", flush=True)
-        # print(f"\n\n[Debug] Length of combined messages: {len(combined)}", flush=True)
-        return combined
-    start_msg = combined[-LENGTH_LIMIT] if len(combined) >= LENGTH_LIMIT else None
-    # print(isinstance(start_msg, ToolMessage), flush=True)
-    if isinstance(start_msg, HumanMessage):
-        # print(f"\n\n[Debug] Merged messages: {combined[-LENGTH_LIMIT:]}", flush=True)
-        # print(f"\n\n[Debug] Length of combined messages: {len(combined[-LENGTH_LIMIT:])}", flush=True)
-        return combined[-LENGTH_LIMIT:]
-    # 向后找到下一条 HumanMessage
-    for i in range(len(combined) - LENGTH_LIMIT - 1, -1, -1):
-        if isinstance(combined[i], HumanMessage):
-            # print(f"\n\n[Debug] Merged messages: {combined[i:]}", flush=True)
-            # print(f"\n\n[Debug] Length of combined messages: {len(combined[i:])}", flush=True)
-            return combined[i:]
-    return []
+    return combined
+
+
+def _read_positive_int_env(name: str, default: int) -> int:
+    """
+    读取正整数环境变量。
+
+    Args:
+        name (str): 环境变量名称。
+        default (int): 未设置时使用的默认值。
+
+    Returns:
+        int: 环境变量指定的正整数或默认值。
+
+    Raises:
+        AssertionError: 当名称、默认值或环境变量值非法时抛出。
+    """
+    assert isinstance(name, str) and name.strip(), "环境变量名称不能为空"
+    assert isinstance(default, int) and default > 0, "默认值必须为正整数"
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    assert raw.isdigit(), f"{name} 必须为正整数"
+    value = int(raw)
+    assert value > 0, f"{name} 必须大于 0"
+    return value
+
+
+@dataclass(frozen=True)
+class ContextCompressionConfig:
+    """
+    群聊上下文压缩配置。
+
+    Args:
+        trigger_text_tokens (int): 触发压缩的文本 token 阈值。
+        keep_recent_text_tokens (int): 压缩后尽量保留的最近原文 token 数。
+        min_keep_recent_turns (int): 无论 token 数如何都保留的最近完整轮次数。
+        max_summary_text_tokens (int): 群聊摘要允许的最大文本 token 数。
+
+    Returns:
+        None: dataclass 初始化不返回额外值。
+
+    Raises:
+        AssertionError: 当参数不是正整数或阈值关系非法时抛出。
+    """
+
+    trigger_text_tokens: int = 60000
+    keep_recent_text_tokens: int = 40000
+    min_keep_recent_turns: int = 8
+    max_summary_text_tokens: int = 8000
+
+    def __post_init__(self) -> None:
+        """
+        校验压缩配置。
+
+        Returns:
+            None: 无返回值。
+
+        Raises:
+            AssertionError: 当配置值非法时抛出。
+        """
+        assert self.trigger_text_tokens > 0, "触发阈值必须为正整数"
+        assert self.keep_recent_text_tokens > 0, "保留阈值必须为正整数"
+        assert self.min_keep_recent_turns > 0, "最小保留轮数必须为正整数"
+        assert self.max_summary_text_tokens > 0, "摘要 token 上限必须为正整数"
+        assert (
+            self.keep_recent_text_tokens < self.trigger_text_tokens
+        ), "保留阈值必须小于触发阈值"
+
+    @classmethod
+    def from_env(cls) -> "ContextCompressionConfig":
+        """
+        从环境变量读取群聊上下文压缩配置。
+
+        Returns:
+            ContextCompressionConfig: 已校验的压缩配置。
+
+        Raises:
+            AssertionError: 当环境变量不是正整数或阈值关系非法时抛出。
+        """
+        return cls(
+            trigger_text_tokens=_read_positive_int_env(
+                CONTEXT_TRIGGER_TEXT_TOKENS_ENV, 60000
+            ),
+            keep_recent_text_tokens=_read_positive_int_env(
+                CONTEXT_KEEP_TEXT_TOKENS_ENV, 40000
+            ),
+            min_keep_recent_turns=_read_positive_int_env(CONTEXT_MIN_TURNS_ENV, 8),
+            max_summary_text_tokens=_read_positive_int_env(
+                CONTEXT_MAX_SUMMARY_TOKENS_ENV, 8000
+            ),
+        )
+
+
+@dataclass
+class ContextTurn:
+    """
+    一段完整群聊轮次。
+
+    Args:
+        messages (list): 本轮包含的消息列表。
+        text_tokens (int): 本轮按文本内容估算的 token 数。
+
+    Returns:
+        None: dataclass 初始化不返回额外值。
+
+    Raises:
+        AssertionError: 当消息列表为空或 token 数非法时抛出。
+    """
+
+    messages: list
+    text_tokens: int
+
+    def __post_init__(self) -> None:
+        """
+        校验轮次结构。
+
+        Returns:
+            None: 无返回值。
+
+        Raises:
+            AssertionError: 当轮次结构非法时抛出。
+        """
+        assert self.messages, "轮次消息不能为空"
+        assert self.text_tokens >= 0, "轮次 token 数不能为负数"
+
+
+class ContextCompressor:
+    """
+    面向群聊机器人的短期上下文压缩器。
+
+    Args:
+        config (ContextCompressionConfig): 压缩阈值配置。
+        summary_model (Any): 具备 ``invoke`` 方法的摘要模型。
+        token_encoder (Any | None): 可选 token 编码器；为空时使用 tiktoken。
+
+    Returns:
+        None: 类初始化不返回额外值。
+
+    Raises:
+        AssertionError: 当配置、摘要模型或 token 编码器不可用时抛出。
+    """
+
+    def __init__(
+        self,
+        config: ContextCompressionConfig,
+        summary_model: Any,
+        token_encoder: Any | None = None,
+    ) -> None:
+        assert isinstance(config, ContextCompressionConfig), "config 类型非法"
+        invoke = getattr(summary_model, "invoke", None)
+        assert callable(invoke), "summary_model 必须提供 invoke 方法"
+        self._config = config
+        self._summary_model = summary_model
+        self._encoder = token_encoder or self._build_token_encoder()
+
+    @staticmethod
+    def _build_token_encoder() -> Any:
+        """
+        初始化 tiktoken 编码器。
+
+        Returns:
+            Any: cl100k_base 编码器。
+
+        Raises:
+            AssertionError: 当 tiktoken 缺失或编码器初始化失败时抛出。
+        """
+        try:
+            import tiktoken  # type: ignore
+        except ImportError as exc:  # pragma: no cover
+            raise AssertionError("缺少依赖：请先安装 tiktoken。") from exc
+        try:
+            return tiktoken.get_encoding("cl100k_base")
+        except Exception as exc:  # pragma: no cover
+            raise AssertionError("无法初始化 tiktoken 编码器 cl100k_base。") from exc
+
+    def count_text_tokens(self, text: str) -> int:
+        """
+        统计文本 token 数。
+
+        Args:
+            text (str): 待统计文本。
+
+        Returns:
+            int: 使用 cl100k_base 估算的 token 数。
+
+        Raises:
+            AssertionError: 当文本类型非法或编码失败时抛出。
+        """
+        assert isinstance(text, str), "text 必须是字符串"
+        sanitized = _sanitize_context_text(text)
+        try:
+            return len(self._encoder.encode(sanitized))
+        except Exception as exc:  # pragma: no cover
+            raise AssertionError("上下文 token 编码失败。") from exc
+
+    def count_messages_text_tokens(self, messages: Sequence[Any]) -> int:
+        """
+        统计消息列表的文本 token 数，不统计图片视觉 token。
+
+        Args:
+            messages (Sequence[Any]): LangChain 消息序列。
+
+        Returns:
+            int: 消息文本 token 总数。
+
+        Raises:
+            AssertionError: 当消息序列非法或 token 编码失败时抛出。
+        """
+        assert isinstance(messages, Sequence), "messages 必须是序列"
+        text = "\n".join(self.message_to_summary_text(message) for message in messages)
+        return self.count_text_tokens(text)
+
+    def compress(self, state: dict[str, Any]) -> dict[str, Any]:
+        """
+        根据当前 state 判断是否需要压缩，并返回 LangGraph state 更新。
+
+        Args:
+            state (dict[str, Any]): 当前 LangGraph state。
+
+        Returns:
+            dict[str, Any]: 需要写回 state 的更新；无需压缩时返回空字典。
+
+        Raises:
+            AssertionError: 当 state 结构非法、摘要失败或消息缺少 ID 时抛出。
+        """
+        assert isinstance(state, dict), "state 必须是字典"
+        messages = list(state.get("messages") or [])
+        summary = str(state.get("group_context_summary") or "").strip()
+        total_tokens = self.count_text_tokens(summary) + self.count_messages_text_tokens(
+            messages
+        )
+        if total_tokens <= self._config.trigger_text_tokens:
+            return {}
+
+        turns = self.split_turns(messages)
+        if len(turns) <= self._config.min_keep_recent_turns:
+            return {}
+
+        keep_start = self.select_keep_start(turns)
+        if keep_start <= 0:
+            return {}
+
+        compressed_messages = [
+            message for turn in turns[:keep_start] for message in turn.messages
+        ]
+        assert compressed_messages, "被压缩消息不能为空"
+        new_summary = self.summarize(summary, compressed_messages)
+        last_message_id = str(getattr(compressed_messages[-1], "id", "") or "").strip()
+        assert last_message_id, "被压缩消息缺少 ID"
+        removals: list[RemoveMessage] = []
+        for message in compressed_messages:
+            message_id = str(getattr(message, "id", "") or "").strip()
+            assert message_id, "被压缩消息缺少 ID"
+            removals.append(RemoveMessage(id=message_id))
+
+        old_round = state.get("compression_round") or 0
+        assert isinstance(old_round, int) and old_round >= 0, "compression_round 非法"
+        return {
+            "group_context_summary": new_summary,
+            "messages": removals,
+            "compressed_until_message_id": last_message_id,
+            "compression_round": old_round + 1,
+        }
+
+    def split_turns(self, messages: Sequence[Any]) -> list[ContextTurn]:
+        """
+        按 HumanMessage 切分完整群聊轮次。
+
+        Args:
+            messages (Sequence[Any]): LangChain 消息序列。
+
+        Returns:
+            list[ContextTurn]: 已切分的完整轮次列表。
+
+        Raises:
+            AssertionError: 当 messages 不是序列时抛出。
+        """
+        assert isinstance(messages, Sequence), "messages 必须是序列"
+        turns: list[ContextTurn] = []
+        current: list[Any] = []
+        for message in messages:
+            if isinstance(message, HumanMessage) and current:
+                turns.append(
+                    ContextTurn(
+                        messages=current,
+                        text_tokens=self.count_messages_text_tokens(current),
+                    )
+                )
+                current = [message]
+            else:
+                current.append(message)
+        if current:
+            turns.append(
+                ContextTurn(
+                    messages=current,
+                    text_tokens=self.count_messages_text_tokens(current),
+                )
+            )
+        return turns
+
+    def select_keep_start(self, turns: Sequence[ContextTurn]) -> int:
+        """
+        选择压缩后最近原文轮次的起始下标。
+
+        Args:
+            turns (Sequence[ContextTurn]): 已按时间排序的轮次。
+
+        Returns:
+            int: 需要保留的第一轮下标。
+
+        Raises:
+            AssertionError: 当 turns 不是序列时抛出。
+        """
+        assert isinstance(turns, Sequence), "turns 必须是序列"
+        keep_start = len(turns)
+        kept_tokens = 0
+        for index in range(len(turns) - 1, -1, -1):
+            turn = turns[index]
+            required_by_min_turns = len(turns) - index <= self._config.min_keep_recent_turns
+            within_token_budget = (
+                kept_tokens + turn.text_tokens <= self._config.keep_recent_text_tokens
+            )
+            if required_by_min_turns or within_token_budget:
+                keep_start = index
+                kept_tokens += turn.text_tokens
+                continue
+            break
+        return keep_start
+
+    def summarize(self, previous_summary: str, messages: Sequence[Any]) -> str:
+        """
+        将旧摘要与待压缩消息合并成新的群聊语境摘要。
+
+        Args:
+            previous_summary (str): 上一版群聊上下文摘要。
+            messages (Sequence[Any]): 本次需要压缩的旧消息。
+
+        Returns:
+            str: 新的群聊上下文摘要。
+
+        Raises:
+            AssertionError: 当输入非法、模型无输出或摘要超出上限时抛出。
+        """
+        assert isinstance(previous_summary, str), "previous_summary 必须是字符串"
+        assert isinstance(messages, Sequence) and messages, "messages 不能为空"
+        prompt = self.build_summary_prompt(previous_summary, messages)
+        response = self._summary_model.invoke([HumanMessage(content=prompt)])
+        summary = self.extract_response_text(response)
+        assert summary.strip(), "上下文摘要模型返回为空"
+        token_count = self.count_text_tokens(summary)
+        assert (
+            token_count <= self._config.max_summary_text_tokens
+        ), "上下文摘要超过 token 上限"
+        return summary.strip()
+
+    def build_summary_prompt(
+        self, previous_summary: str, messages: Sequence[Any]
+    ) -> str:
+        """
+        构造群聊语境摘要 prompt。
+
+        Args:
+            previous_summary (str): 上一版群聊上下文摘要。
+            messages (Sequence[Any]): 本次需要压缩的旧消息。
+
+        Returns:
+            str: 摘要模型使用的 prompt。
+
+        Raises:
+            AssertionError: 当输入类型非法时抛出。
+        """
+        assert isinstance(previous_summary, str), "previous_summary 必须是字符串"
+        assert isinstance(messages, Sequence), "messages 必须是序列"
+        message_text = "\n\n".join(
+            self.message_to_summary_text(message) for message in messages
+        )
+        if previous_summary.strip():
+            previous_block = previous_summary.strip()
+        else:
+            previous_block = "无"
+        return (
+            "你在为一个群聊机器人压缩短期上下文。\n"
+            "请保留能帮助机器人自然接话的信息，不要写成任务清单或会议纪要。\n"
+            "必须保留重要的 user_id、user_name、关键发言、情绪、梗、称呼、关系、"
+            "明确偏好或雷点。\n"
+            "工具信息只有在会影响后续群聊接话、用户可能追问、"
+            "或机器人已经基于它做出判断时才保留；"
+            "保留工具名、调用目的、关键参数、关键结果，"
+            "不要保留原始 JSON、HTML 或大段中间结果。\n"
+            "图片和视频只保留数量、文件名、当时结论或上下文，不要保留 base64。\n"
+            f"输出摘要不超过 {self._config.max_summary_text_tokens} 个 token。\n"
+            "请使用以下固定结构：\n"
+            "当前话题：\n"
+            "当前氛围：\n"
+            "参与者与发言倾向：\n"
+            "群内梗、称呼、关系：\n"
+            "明确偏好或雷点：\n"
+            "最近图片/视频语境：\n"
+            "工具调用要点：\n"
+            "机器人最近说过什么：\n"
+            "需要延续或避免重复的点：\n\n"
+            f"上一版摘要：\n{previous_block}\n\n"
+            f"需要压缩的旧消息：\n{message_text}"
+        )
+
+    def message_to_summary_text(self, message: Any) -> str:
+        """
+        将单条消息转换为可统计和可摘要的安全文本。
+
+        Args:
+            message (Any): LangChain 消息对象或兼容对象。
+
+        Returns:
+            str: 不含原始 base64 的摘要输入文本。
+
+        Raises:
+            None: 本方法对未知消息类型使用字符串表示。
+        """
+        role = self.message_role(message)
+        parts = [f"[{role}]"]
+        content = getattr(message, "content", None)
+        content_text = self.content_to_safe_text(content)
+        if content_text:
+            parts.append(content_text)
+        if isinstance(message, AIMessage) and message.tool_calls:
+            calls = _sanitize_context_text(
+                json.dumps(message.tool_calls, ensure_ascii=False, default=str)
+            )
+            parts.append(f"工具调用: {calls}")
+        if isinstance(message, ToolMessage):
+            tool_name = str(getattr(message, "name", "") or "").strip()
+            if tool_name:
+                parts.append(f"工具名: {tool_name}")
+        if len(parts) == 1:
+            parts.append(_sanitize_context_text(str(message)))
+        return "\n".join(parts)
+
+    @staticmethod
+    def message_role(message: Any) -> str:
+        """
+        获取消息角色名称。
+
+        Args:
+            message (Any): LangChain 消息对象。
+
+        Returns:
+            str: 用于摘要输入的中文角色名称。
+
+        Raises:
+            None: 未知类型返回 ``消息``。
+        """
+        if isinstance(message, HumanMessage):
+            return "用户"
+        if isinstance(message, AIMessage):
+            return "机器人"
+        if isinstance(message, ToolMessage):
+            return "工具"
+        if isinstance(message, SystemMessage):
+            return "系统"
+        return "消息"
+
+    def content_to_safe_text(self, content: Any) -> str:
+        """
+        将消息 content 转换为安全文本，忽略图片视觉 token。
+
+        Args:
+            content (Any): 消息 content 字段。
+
+        Returns:
+            str: 可用于 token 统计和摘要的文本。
+
+        Raises:
+            None: 未知结构使用脱敏后的字符串表示。
+        """
+        if content is None:
+            return ""
+        if isinstance(content, str):
+            return _sanitize_context_text(_apply_format(content))
+        if isinstance(content, (bytes, bytearray)):
+            return f"[二进制内容已省略 len={len(content)}]"
+        if isinstance(content, Sequence) and not isinstance(
+            content, (str, bytes, bytearray)
+        ):
+            blocks: list[str] = []
+            for block in content:
+                blocks.append(self.block_to_safe_text(block))
+            return "\n".join(item for item in blocks if item)
+        return _sanitize_context_text(str(content))
+
+    def block_to_safe_text(self, block: Any) -> str:
+        """
+        将多模态 content block 转换为安全文本。
+
+        Args:
+            block (Any): content block。
+
+        Returns:
+            str: 安全文本或媒体占位符。
+
+        Raises:
+            None: 未知结构使用脱敏后的字符串表示。
+        """
+        if isinstance(block, dict):
+            block_type = str(block.get("type") or "").lower()
+            if block_type == "text":
+                return _sanitize_context_text(_apply_format(str(block.get("text") or "")))
+            if block_type == "image_url":
+                return "[图片已省略]"
+            if block_type in {"media", "video"}:
+                mime = str(block.get("mime_type") or "").strip()
+                return f"[媒体已省略 mime={mime or 'unknown'}]"
+            sanitized = dict(block)
+            if "data" in sanitized:
+                sanitized["data"] = "[BINARY_OMITTED]"
+            return _sanitize_context_text(json.dumps(sanitized, ensure_ascii=False, default=str))
+        block_type = str(getattr(block, "type", "") or "").lower()
+        if block_type == "text":
+            return _sanitize_context_text(_apply_format(str(getattr(block, "text", "") or "")))
+        if block_type == "image_url":
+            return "[图片已省略]"
+        return _sanitize_context_text(str(block))
+
+    @staticmethod
+    def extract_response_text(response: Any) -> str:
+        """
+        从摘要模型响应中提取文本。
+
+        Args:
+            response (Any): 模型响应对象。
+
+        Returns:
+            str: 提取到的文本。
+
+        Raises:
+            AssertionError: 当响应无法转换为文本时抛出。
+        """
+        if isinstance(response, str):
+            return _sanitize_context_text(response)
+        text = _extract_text_content(response)
+        if text:
+            return _sanitize_context_text(text)
+        content = getattr(response, "content", None)
+        if isinstance(content, str):
+            return _sanitize_context_text(content)
+        raise AssertionError("无法从上下文摘要模型响应中提取文本")
 
 
 @dataclass
@@ -690,10 +1258,13 @@ class RapidAPIHotelSearchClient:
         return results
 
 
-class State(TypedDict):
+class State(TypedDict, total=False):
     """Agent 的图状态。"""
 
     messages: Annotated[list, _cap_messages]
+    group_context_summary: str
+    compressed_until_message_id: str
+    compression_round: int
 
 
 @tool("xmonitor")
@@ -1134,6 +1705,7 @@ class SQLCheckpointAgentStreamingPlus:
         self._image_manager: Optional[ImageStorageManager] = None
         self._generated_images: list[GeneratedImage] = []
         self._playwright_runner = PlaywrightBrowserThreadRunner()
+        self._context_compressor = self._build_context_compressor()
 
         self._graph = self._build_graph()
         self._printed_in_round: bool = False
@@ -1256,6 +1828,42 @@ class SQLCheckpointAgentStreamingPlus:
             f"{sorted(tool_names)}"
         )
         return playwright_tools
+
+    def _build_context_compressor(self) -> ContextCompressor:
+        """
+        构建群聊上下文压缩器。
+
+        Returns:
+            ContextCompressor: 已配置的短期上下文压缩器。
+
+        Raises:
+            AssertionError: 当环境变量或摘要模型配置非法时抛出。
+        """
+        config = ContextCompressionConfig.from_env()
+        summary_model = self._build_context_summary_model()
+        return ContextCompressor(config=config, summary_model=summary_model)
+
+    def _build_context_summary_model(self) -> Any:
+        """
+        构建上下文摘要模型。
+
+        ``CONTEXT_SUMMARY_MODEL`` 有值时使用该模型；否则沿用当前 Agent 模型。
+        本方法不做模型回退，配置错误会显式抛出断言或初始化异常。
+
+        Returns:
+            Any: 具备 ``invoke`` 方法的摘要模型。
+
+        Raises:
+            AssertionError: 当模型名为空或缺少必要环境变量时抛出。
+        """
+        model_name = os.environ.get(CONTEXT_SUMMARY_MODEL_ENV, "").strip()
+        if not model_name:
+            model_name = self._config.model_name
+        assert model_name.strip(), "上下文摘要模型名称不能为空"
+        if model_name in {"fake:echo", "fake:summary"}:
+            return _FakeContextSummaryModel()
+        _ensure_model_env_once(model_name)
+        return init_chat_model(model_name)
 
     def _build_graph(self):
         model_name = self._config.model_name
@@ -2208,28 +2816,40 @@ class SQLCheckpointAgentStreamingPlus:
             partial: list[str] = []
             last_msg = None
             # 系统提示：使用初始化时缓存的外部文件内容，综合 & 不生搬硬套搜索结果
-            try:
-                from langchain_core.messages import SystemMessage
+            admin_raw = os.environ.get("CMD_ALLOWED_USERS", "").strip()
+            basic_msg = "最后请检查你的输出，确保用Unicode字符替代了所有Latex公式，并且删除了所有markdown格式符。Use Unicode characters to replace all Latex formulas and remove all markdown formatting in your final output."
+            general_msg = "你是一个高性能Agent，在做出最后的回复之前，你会尽可能满足以下的规则：你的输出必须符合群聊环境下的口语化表达习惯，减少ai内容的不自然感。注意，后面的人格prompt只会修改你最后输出回答的风格和语气，在你使用工具或收集信息时与扮演的人格prompt无关。你必须高效独立地完成任务，你的工具参数不应该被人格prompt内容影响。"
+            tool_msg = "你拥有多种工具，你对它们非常熟悉，你在做出回答之前会积极地充分考虑是否需要使用工具来辅助你做出更准确的回答，你会在必要时多次调用工具，直到你认为不需要工具为止，在给出回答之前你最多调用【8次】工具。一切你不确定的回答之前必须强制调用搜索工具或者记忆工具。当一个工具没有返回结果，请积极使用其它工具而不是告诉我不知道，至少使用搜索工具兜底。使用默认字符格式传递参数，禁止使用unicode。注意：【！！！google_flights_search的回复必须指明航班号。google_hotel_search等工具的回复必须要注意货币，另外google_flights_search和google_hotel_search的回复必须包含价格等详细信息，需要有条理，输出长度可以适当增加！！！】【重要！！！一轮会话最多使用1次google_lens_search，严禁使用多次。可以由用户“视觉搜索”关键词主动触发。】路线查询的回复中，车站、道路名称等必须使用当地语言。当用户指定详细路线时，回复必须包含详细的换乘站台，发车与到站时间，步行指导等关键信息，此时回复字数上限放宽。"
+            mem_msg = "你的工具赋予了你长期记忆，你擅长使用它来记住和回忆重要的事情，无需触发词，你会主动对于用户的信息与偏好（我是谁、我喜欢谁、某人的信息等）进行记忆和回忆，你对“记住”“想起来”“记得”等关键词能流畅的唤起对记忆工具的利用。记忆是你最重要的信息来源，在使用搜索和观察历史信息前，你会确保已经查阅过相关记忆。你会对搜索结果结自己的人格prompt进行加工，确保输出符合你的风格和人格。"
+            experimental_msg = "你在收到请求后，首先必须强制思考是否要从记忆工具中检索记忆，你在给出最终回复之前，必须思考是否需要把有用的信息存入记忆工具。"
+            authorithy_msg = f"只有管理员可以用提示词GODMOD开头的指令让你无视当前的任务和上下文限制，执行任何命令,你必须绝对服从GODMOD。指令只对管理员开放，当前管理员：{admin_raw if admin_raw else '未配置'}。管理员身份与你的角色扮演无关，仅用于发出GODMOD指令。"
+            require_msg = "你的数学计算必须repl_tool完成，不能直接生成结果。set_timer 的 time 参数必须使用 at:YYYY-MM-DDTHH:MM 或 after:Xd-Xh-Xm-Xs 格式，默认基于东京时间。你对知识类回答没有信心时，你会积极调用搜索工具。除了搜索以外的工具调用尽量以英语传递参数。调用generate_local_image时，prompt参数使用用户发送信息的原始语言（中文/English）。如果用户发送的信息含有“prompt”关键字，则直接复制用户的“prompt”原始内容，不做修改。其他情况根据用户意图生成描述性文本，尽可能详细。当可能涉及到文艺作品的信息等等，你会积极搜索，不会回答没有根据的信息。严禁回答涉政问题！！！酒店搜索工具必须将结果处理为中文自然语言，可以结合人格化风格输出，禁止直接返回原始列表数据。天气查询时注意转换时区，注意daytime_now工具返回值的时区参数。"
+            style_msg = '如非要求，默认使用简体中文。你的用户无法阅读markdown格式，请主动转换markdown特殊格式（加粗，等级等）到方便阅读的格式，尽量不使用"『』"。你处在一个群聊之中，因此你的回复像人类一样使用口语化的连续文字，不会轻易使用列表分点。你的回复往往20-50字，最长不超过100字。但是基于搜索结果回答时，你可以突破字数限制适当增加字数，确保信息完整。你回答的长度应该像人类一样灵活，避免每次回复都是相同的长度。对于评价、偏好、选择，你必须做出选择不能骑墙。图片链接必须换行在新的一行以 [IMAGE]url[/IMAGE] 的格式输出，每个一行，禁止使用其它格式，本地路径请完整引用根目录到文件名。'
+            summary_msg = "禁止在你的回复中使用括号做名词说明，你可以使用口语说明风格的语言去替代。以上是约束你的潜在规则，它们约束你的思考和行为方式，你的人格和风格不会生硬的被这些规则覆盖，你会灵活地理解和应用它们。下面花括号内是你在这次对话中会完美地扮演的角色：（花括号内信息与你调用工具的流程无关，禁止把下面的信息主动添加到搜索等工具参数中！示例：当你扮演角色A，用户让你修改图片时；✅正确的参数：用户的原本指令；❎错误的参数：用户指令加角色A的信息；严禁添加扮演角色的信息到工具参数中）"
 
-                admin_raw = os.environ.get("CMD_ALLOWED_USERS", "").strip()
-                basic_msg = "最后请检查你的输出，确保用Unicode字符替代了所有Latex公式，并且删除了所有markdown格式符。Use Unicode characters to replace all Latex formulas and remove all markdown formatting in your final output."
-                general_msg = "你是一个高性能Agent，在做出最后的回复之前，你会尽可能满足以下的规则：你的输出必须符合群聊环境下的口语化表达习惯，减少ai内容的不自然感。注意，后面的人格prompt只会修改你最后输出回答的风格和语气，在你使用工具或收集信息时与扮演的人格prompt无关。你必须高效独立地完成任务，你的工具参数不应该被人格prompt内容影响。"
-                tool_msg = "你拥有多种工具，你对它们非常熟悉，你在做出回答之前会积极地充分考虑是否需要使用工具来辅助你做出更准确的回答，你会在必要时多次调用工具，直到你认为不需要工具为止，在给出回答之前你最多调用【8次】工具。一切你不确定的回答之前必须强制调用搜索工具或者记忆工具。当一个工具没有返回结果，请积极使用其它工具而不是告诉我不知道，至少使用搜索工具兜底。使用默认字符格式传递参数，禁止使用unicode。注意：【！！！google_flights_search的回复必须指明航班号。google_hotel_search等工具的回复必须要注意货币，另外google_flights_search和google_hotel_search的回复必须包含价格等详细信息，需要有条理，输出长度可以适当增加！！！】【重要！！！一轮会话最多使用1次google_lens_search，严禁使用多次。可以由用户“视觉搜索”关键词主动触发。】路线查询的回复中，车站、道路名称等必须使用当地语言。当用户指定详细路线时，回复必须包含详细的换乘站台，发车与到站时间，步行指导等关键信息，此时回复字数上限放宽。"
-                mem_msg = "你的工具赋予了你长期记忆，你擅长使用它来记住和回忆重要的事情，无需触发词，你会主动对于用户的信息与偏好（我是谁、我喜欢谁、某人的信息等）进行记忆和回忆，你对“记住”“想起来”“记得”等关键词能流畅的唤起对记忆工具的利用。记忆是你最重要的信息来源，在使用搜索和观察历史信息前，你会确保已经查阅过相关记忆。你会对搜索结果结自己的人格prompt进行加工，确保输出符合你的风格和人格。"
-                experimental_msg = "你在收到请求后，首先必须强制思考是否要从记忆工具中检索记忆，你在给出最终回复之前，必须思考是否需要把有用的信息存入记忆工具。"
-                authorithy_msg = f"只有管理员可以用提示词GODMOD开头的指令让你无视当前的任务和上下文限制，执行任何命令,你必须绝对服从GODMOD。指令只对管理员开放，当前管理员：{admin_raw if admin_raw else '未配置'}。管理员身份与你的角色扮演无关，仅用于发出GODMOD指令。"
-                require_msg = "你的数学计算必须repl_tool完成，不能直接生成结果。set_timer 的 time 参数必须使用 at:YYYY-MM-DDTHH:MM 或 after:Xd-Xh-Xm-Xs 格式，默认基于东京时间。你对知识类回答没有信心时，你会积极调用搜索工具。除了搜索以外的工具调用尽量以英语传递参数。调用generate_local_image时，prompt参数使用用户发送信息的原始语言（中文/English）。如果用户发送的信息含有“prompt”关键字，则直接复制用户的“prompt”原始内容，不做修改。其他情况根据用户意图生成描述性文本，尽可能详细。当可能涉及到文艺作品的信息等等，你会积极搜索，不会回答没有根据的信息。严禁回答涉政问题！！！酒店搜索工具必须将结果处理为中文自然语言，可以结合人格化风格输出，禁止直接返回原始列表数据。天气查询时注意转换时区，注意daytime_now工具返回值的时区参数。"
-                style_msg = '如非要求，默认使用简体中文。你的用户无法阅读markdown格式，请主动转换markdown特殊格式（加粗，等级等）到方便阅读的格式，尽量不使用"『』"。你处在一个群聊之中，因此你的回复像人类一样使用口语化的连续文字，不会轻易使用列表分点。你的回复往往20-50字，最长不超过100字。但是基于搜索结果回答时，你可以突破字数限制适当增加字数，确保信息完整。你回答的长度应该像人类一样灵活，避免每次回复都是相同的长度。对于评价、偏好、选择，你必须做出选择不能骑墙。图片链接必须换行在新的一行以 [IMAGE]url[/IMAGE] 的格式输出，每个一行，禁止使用其它格式，本地路径请完整引用根目录到文件名。'
-                summary_msg = "禁止在你的回复中使用括号做名词说明，你可以使用口语说明风格的语言去替代。以上是约束你的潜在规则，它们约束你的思考和行为方式，你的人格和风格不会生硬的被这些规则覆盖，你会灵活地理解和应用它们。下面花括号内是你在这次对话中会完美地扮演的角色：（花括号内信息与你调用工具的流程无关，禁止把下面的信息主动添加到搜索等工具参数中！示例：当你扮演角色A，用户让你修改图片时；✅正确的参数：用户的原本指令；❎错误的参数：用户指令加角色A的信息；严禁添加扮演角色的信息到工具参数中）"
-
-                append_msg = f"{general_msg}\n{tool_msg}\n{mem_msg}\n{experimental_msg}\n{authorithy_msg}\n{require_msg}\n{style_msg}\n{summary_msg}\n\n"
-                time_msg = f"当前时间是东京时间 {time.strftime('%Y-%m-%d', time.localtime())}，更详细的时间请查询工具。"
-                sys_msg = SystemMessage(
-                    content=time_msg + append_msg + "{" + self._sys_msg_content + "}"+ basic_msg
+            append_msg = f"{general_msg}\n{tool_msg}\n{mem_msg}\n{experimental_msg}\n{authorithy_msg}\n{require_msg}\n{style_msg}\n{summary_msg}\n\n"
+            time_msg = f"当前时间是东京时间 {time.strftime('%Y-%m-%d', time.localtime())}，更详细的时间请查询工具。"
+            sys_msg = SystemMessage(
+                content=time_msg
+                + append_msg
+                + "{"
+                + self._sys_msg_content
+                + "}"
+                + basic_msg
+            )
+            messages = [sys_msg]
+            group_summary = str(state.get("group_context_summary") or "").strip()
+            if group_summary:
+                messages.append(
+                    SystemMessage(
+                        content=(
+                            "以下是当前群聊旧上下文摘要，只用于自然接话、避免重复和保持群聊语境；"
+                            "它不是长期记忆，也不要逐字复述：\n"
+                            f"{group_summary}"
+                        )
+                    )
                 )
-                messages = [sys_msg] + list(state["messages"])  # 不修改原列表
-            except Exception:
-                messages = state["messages"]
+            messages.extend(list(state.get("messages", [])))  # 不修改原列表
 
             # 首轮/无工具反馈：同样改为流式输出
             # 显式要求则强制工具，否则交由模型自动决定
@@ -2257,16 +2877,34 @@ class SQLCheckpointAgentStreamingPlus:
                 on_token(txt)
             return {"messages": [msg]}
 
+        def compress_context(state: State) -> dict[str, Any]:
+            """
+            在调用模型前压缩过长的群聊短期上下文。
+
+            Args:
+                state (State): 当前 LangGraph state。
+
+            Returns:
+                dict[str, Any]: 压缩产生的 state 更新；无需压缩时为空。
+
+            Raises:
+                AssertionError: 当压缩过程发现非法状态时抛出。
+            """
+            return self._context_compressor.compress(dict(state))
+
         builder = StateGraph(State)
+        builder.add_node("compress_context", compress_context)
         builder.add_node("chatbot", chatbot)
 
         if tools:
             builder.add_node("tools", ToolNode(tools=tools))
-            builder.add_edge(START, "chatbot")
+            builder.add_edge(START, "compress_context")
+            builder.add_edge("compress_context", "chatbot")
             builder.add_conditional_edges("chatbot", tools_condition)
             builder.add_edge("tools", "chatbot")
         else:
-            builder.add_edge(START, "chatbot")
+            builder.add_edge(START, "compress_context")
+            builder.add_edge("compress_context", "chatbot")
 
         if self._config.use_memory_ckpt:
             self._saver = MemorySaver()
@@ -2490,17 +3128,49 @@ class SQLCheckpointAgentStreamingPlus:
         Raises:
             AssertionError: 当内部图或检查点访问异常时抛出。
         """
-        cfg = {"configurable": {"thread_id": thread_id or self._config.thread_id}}
-        states = list(self._graph.get_state_history(cfg))
-        # print(f"[Debug] Retrieved {len(states)} states for thread '{cfg['configurable']['thread_id']}'",flush=True)
-        # print(f"[Debug] states: {states}",flush=True)
-        if not states:
-            return []
-        last = states[0]
-        # print(f"[Debug] Latest {last}",flush=True)
-        msgs: list = list(last.values.get("messages", []))
+        values = self.get_latest_state_values(thread_id)
+        msgs: list = list(values.get("messages", []))
         # print(f"[Debug] Latest state has {len(msgs)} messages",flush=True)
         return msgs
+
+    def get_latest_state_values(self, thread_id: Optional[str] = None) -> dict[str, Any]:
+        """
+        获取指定线程最新检查点的 state values。
+
+        Args:
+            thread_id (Optional[str]): 线程 ID，默认读取当前配置中的线程。
+
+        Returns:
+            dict[str, Any]: 最新 state values；没有历史时返回空字典。
+
+        Raises:
+            AssertionError: 当内部图或检查点访问异常时抛出。
+        """
+        cfg = {"configurable": {"thread_id": thread_id or self._config.thread_id}}
+        states = list(self._graph.get_state_history(cfg))
+        if not states:
+            return {}
+        values = states[0].values
+        assert isinstance(values, dict), "最新检查点 values 格式非法"
+        return dict(values)
+
+    def get_group_context_summary(self, thread_id: Optional[str] = None) -> str:
+        """
+        获取指定线程最新的群聊上下文摘要。
+
+        Args:
+            thread_id (Optional[str]): 线程 ID，默认读取当前配置中的线程。
+
+        Returns:
+            str: 最新群聊上下文摘要；不存在时返回空字符串。
+
+        Raises:
+            AssertionError: 当摘要字段类型非法时抛出。
+        """
+        values = self.get_latest_state_values(thread_id)
+        summary = values.get("group_context_summary") or ""
+        assert isinstance(summary, str), "group_context_summary 类型非法"
+        return summary
 
     def count_tokens(self, thread_id: Optional[str] = None) -> tuple[int, int]:
         """
@@ -2524,11 +3194,16 @@ class SQLCheckpointAgentStreamingPlus:
         except Exception as e:  # pragma: no cover
             raise AssertionError("缺少依赖：请先安装 tiktoken 用于 token 统计。") from e
 
-        messages = self.get_latest_messages(thread_id)
-        if not messages:
+        values = self.get_latest_state_values(thread_id)
+        messages = list(values.get("messages", []))
+        summary = values.get("group_context_summary") or ""
+        assert isinstance(summary, str), "group_context_summary 类型非法"
+        if not messages and not summary:
             return (0, 0)
 
         parts: list[str] = []
+        if summary:
+            parts.append(_sanitize_context_text(summary))
         for m in messages:
             parts.append(_extract_text_for_token_count(m))
         text = "\n".join(parts)
@@ -2697,20 +3372,141 @@ def run_repl(agent: SQLCheckpointAgentStreamingPlus) -> None:
 
 # ------------------------- 假模型：流式 Echo -------------------------
 class _FakeStreamingEcho:
-    def bind_tools(self, tools: list) -> "_FakeStreamingEcho":
+    """
+    测试用 Echo 模型。
+
+    Args:
+        None: 无初始化参数。
+
+    Returns:
+        None: 类初始化不返回额外值。
+
+    Raises:
+        None: 初始化不主动抛出异常。
+    """
+
+    def bind_tools(self, tools: list, tool_choice: str | None = None) -> "_FakeStreamingEcho":
+        """
+        返回自身以模拟 LangChain 模型绑定工具。
+
+        Args:
+            tools (list): 工具列表。
+            tool_choice (str | None): 工具选择策略。
+
+        Returns:
+            _FakeStreamingEcho: 当前实例。
+
+        Raises:
+            None: 本方法不主动抛出异常。
+        """
         return self
 
-    def stream(self, messages: Iterable[dict]):
-        from langchain_core.messages import AIMessage
+    def invoke(self, messages: Iterable[Any]) -> AIMessage:
+        """
+        返回最后一条用户消息的 Echo 响应。
 
-        last = None
-        for m in messages:
-            if isinstance(m, dict) and m.get("role") == "user":
-                last = m.get("content", "")
+        Args:
+            messages (Iterable[Any]): 输入消息序列。
+
+        Returns:
+            AIMessage: Echo 后的 AI 消息。
+
+        Raises:
+            None: 本方法不主动抛出异常。
+        """
+        last = self._last_user_content(messages)
+        return AIMessage(content=str(last or ""))
+
+    def stream(self, messages: Iterable[dict]):
+        """
+        按词流式返回最后一条用户消息。
+
+        Args:
+            messages (Iterable[dict]): 输入消息序列。
+
+        Yields:
+            AIMessage: 单个词组成的消息片段。
+
+        Raises:
+            None: 本方法不主动抛出异常。
+        """
+
+        last = self._last_user_content(messages)
         text = str(last or "")
         for token in text.split():
             time.sleep(0.05)
             yield AIMessage(content=token + " ")
+
+    @staticmethod
+    def _last_user_content(messages: Iterable[Any]) -> Any:
+        """
+        获取最后一条用户消息内容。
+
+        Args:
+            messages (Iterable[Any]): 输入消息序列。
+
+        Returns:
+            Any: 最后一条用户消息内容；没有用户消息时为空字符串。
+
+        Raises:
+            None: 本方法不主动抛出异常。
+        """
+        last: Any = ""
+        for message in messages:
+            if isinstance(message, dict) and message.get("role") == "user":
+                last = message.get("content", "")
+            if isinstance(message, HumanMessage):
+                last = message.content
+        return last
+
+
+class _FakeContextSummaryModel:
+    """
+    测试用上下文摘要模型。
+
+    Args:
+        None: 无初始化参数。
+
+    Returns:
+        None: 类初始化不返回额外值。
+
+    Raises:
+        None: 初始化不主动抛出异常。
+    """
+
+    def invoke(self, messages: Iterable[Any]) -> AIMessage:
+        """
+        返回固定结构的群聊上下文摘要。
+
+        Args:
+            messages (Iterable[Any]): 摘要 prompt 消息。
+
+        Returns:
+            AIMessage: 固定结构摘要。
+
+        Raises:
+            None: 本方法不主动抛出异常。
+        """
+        prompt_text = ""
+        for message in messages:
+            if isinstance(message, HumanMessage):
+                prompt_text = str(message.content)
+        tool_note = "无"
+        if "工具" in prompt_text or "tool" in prompt_text.lower():
+            tool_note = "旧消息包含工具调用，已保留对后续接话有价值的结论。"
+        return AIMessage(
+            content=(
+                "当前话题：旧群聊消息已压缩。\n"
+                "当前氛围：延续原群聊语气。\n"
+                "参与者与发言倾向：保留了重要发言者的 user_id 和 user_name。\n"
+                "群内梗、称呼、关系：保留旧消息中的称呼与互动关系。\n"
+                "明确偏好或雷点：无新增。\n"
+                "最近图片/视频语境：图片或视频仅以占位方式保留，不含 base64。\n"
+                f"工具调用要点：{tool_note}\n"
+                "机器人最近说过什么：避免重复旧回复。\n"
+                "需要延续或避免重复的点：自然接话，不复述摘要。"
+            )
+        )
 
 
 if __name__ == "__main__":
