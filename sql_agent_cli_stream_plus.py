@@ -572,10 +572,10 @@ class ContextCompressionConfig:
         AssertionError: 当参数不是正整数或阈值关系非法时抛出。
     """
 
-    trigger_text_tokens: int = 60000
-    keep_recent_text_tokens: int = 40000
-    min_keep_recent_turns: int = 8
-    max_summary_text_tokens: int = 8000
+    trigger_text_tokens: int = 35000
+    keep_recent_text_tokens: int = 20000
+    min_keep_recent_turns: int = 5
+    max_summary_text_tokens: int = 3500
 
     def __post_init__(self) -> None:
         """
@@ -608,14 +608,14 @@ class ContextCompressionConfig:
         """
         return cls(
             trigger_text_tokens=_read_positive_int_env(
-                CONTEXT_TRIGGER_TEXT_TOKENS_ENV, 60000
+                CONTEXT_TRIGGER_TEXT_TOKENS_ENV, 35000
             ),
             keep_recent_text_tokens=_read_positive_int_env(
-                CONTEXT_KEEP_TEXT_TOKENS_ENV, 40000
+                CONTEXT_KEEP_TEXT_TOKENS_ENV, 20000
             ),
-            min_keep_recent_turns=_read_positive_int_env(CONTEXT_MIN_TURNS_ENV, 8),
+            min_keep_recent_turns=_read_positive_int_env(CONTEXT_MIN_TURNS_ENV, 5),
             max_summary_text_tokens=_read_positive_int_env(
-                CONTEXT_MAX_SUMMARY_TOKENS_ENV, 8000
+                CONTEXT_MAX_SUMMARY_TOKENS_ENV, 3500
             ),
         )
 

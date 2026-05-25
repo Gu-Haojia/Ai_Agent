@@ -172,6 +172,34 @@ def _business_messages() -> list:
     return add_messages([], raw_messages)
 
 
+def test_context_compression_config_uses_conservative_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    验证未设置环境变量时使用保守的线上默认压缩配置。
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): 环境变量清理工具。
+
+    Returns:
+        None: 无返回值。
+
+    Raises:
+        None: 测试用例不主动抛出异常。
+    """
+    monkeypatch.delenv("CONTEXT_COMPRESS_TRIGGER_TEXT_TOKENS", raising=False)
+    monkeypatch.delenv("CONTEXT_KEEP_RECENT_TEXT_TOKENS", raising=False)
+    monkeypatch.delenv("CONTEXT_MIN_KEEP_RECENT_TURNS", raising=False)
+    monkeypatch.delenv("CONTEXT_MAX_SUMMARY_TEXT_TOKENS", raising=False)
+
+    config = ContextCompressionConfig.from_env()
+
+    assert config.trigger_text_tokens == 35000
+    assert config.keep_recent_text_tokens == 20000
+    assert config.min_keep_recent_turns == 5
+    assert config.max_summary_text_tokens == 3500
+
+
 def test_context_compressor_keeps_group_chat_context_and_tool_summary() -> None:
     """
     验证群聊压缩会保留完整轮次、工具要点并去掉图片 base64。
