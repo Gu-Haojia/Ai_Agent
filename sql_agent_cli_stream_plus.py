@@ -220,6 +220,7 @@ CONTEXT_TRIGGER_TEXT_TOKENS_ENV: str = "CONTEXT_COMPRESS_TRIGGER_TEXT_TOKENS"
 CONTEXT_KEEP_TEXT_TOKENS_ENV: str = "CONTEXT_KEEP_RECENT_TEXT_TOKENS"
 CONTEXT_MIN_TURNS_ENV: str = "CONTEXT_MIN_KEEP_RECENT_TURNS"
 CONTEXT_MAX_SUMMARY_TOKENS_ENV: str = "CONTEXT_MAX_SUMMARY_TEXT_TOKENS"
+CONTEXT_MIN_COMPRESSIBLE_TOKENS_ENV: str = "CONTEXT_MIN_COMPRESSIBLE_TEXT_TOKENS"
 CONTEXT_SUMMARY_MODEL_ENV: str = "CONTEXT_SUMMARY_MODEL"
 
 
@@ -588,6 +589,8 @@ class ContextCompressionConfig:
         keep_recent_text_tokens (int): 压缩后尽量保留的最近原文 token 数。
         min_keep_recent_turns (int): 无论 token 数如何都保留的最近完整轮次数。
         max_summary_text_tokens (int): 群聊摘要允许的最大文本 token 数。
+        min_compressible_text_tokens (int): 可压缩旧上下文至少达到该 token
+            数时才调用摘要模型。
         print_summary (bool): 是否在控制台输出压缩摘要正文。
 
     Returns:
@@ -601,6 +604,7 @@ class ContextCompressionConfig:
     keep_recent_text_tokens: int = 20000
     min_keep_recent_turns: int = 5
     max_summary_text_tokens: int = 3500
+    min_compressible_text_tokens: int = 8000
     print_summary: bool = False
 
     def __post_init__(self) -> None:
@@ -617,6 +621,9 @@ class ContextCompressionConfig:
         assert self.keep_recent_text_tokens > 0, "保留阈值必须为正整数"
         assert self.min_keep_recent_turns > 0, "最小保留轮数必须为正整数"
         assert self.max_summary_text_tokens > 0, "摘要 token 上限必须为正整数"
+        assert (
+            self.min_compressible_text_tokens > 0
+        ), "可压缩区阈值必须为正整数"
         assert isinstance(self.print_summary, bool), "摘要输出开关必须为布尔值"
         assert (
             self.keep_recent_text_tokens < self.trigger_text_tokens
@@ -643,6 +650,9 @@ class ContextCompressionConfig:
             min_keep_recent_turns=_read_positive_int_env(CONTEXT_MIN_TURNS_ENV, 5),
             max_summary_text_tokens=_read_positive_int_env(
                 CONTEXT_MAX_SUMMARY_TOKENS_ENV, 3500
+            ),
+            min_compressible_text_tokens=_read_positive_int_env(
+                CONTEXT_MIN_COMPRESSIBLE_TOKENS_ENV, 8000
             ),
         )
 
@@ -800,6 +810,9 @@ class ContextCompressor:
             message for turn in turns[:keep_start] for message in turn.messages
         ]
         assert compressed_messages, "被压缩消息不能为空"
+        compressible_tokens = sum(turn.text_tokens for turn in turns[:keep_start])
+        if compressible_tokens < self._config.min_compressible_text_tokens:
+            return {}
         new_summary = self.summarize(summary, compressed_messages)
         summary_tokens = self.count_text_tokens(new_summary)
         last_message_id = str(getattr(compressed_messages[-1], "id", "") or "").strip()
@@ -816,6 +829,7 @@ class ContextCompressor:
         self.emit_compression_log(
             round_number=new_round,
             total_tokens_before=total_tokens,
+            compressible_tokens=compressible_tokens,
             removed_messages=len(compressed_messages),
             kept_turns=len(turns) - keep_start,
             summary_tokens=summary_tokens,
@@ -832,6 +846,7 @@ class ContextCompressor:
         self,
         round_number: int,
         total_tokens_before: int,
+        compressible_tokens: int,
         removed_messages: int,
         kept_turns: int,
         summary_tokens: int,
@@ -843,6 +858,7 @@ class ContextCompressor:
         Args:
             round_number (int): 本次压缩后的累计轮次。
             total_tokens_before (int): 压缩触发前的文本 token 总数。
+            compressible_tokens (int): 本次被压缩旧上下文的文本 token 数。
             removed_messages (int): 本次被移出原文上下文的消息数。
             kept_turns (int): 压缩后保留的最近完整轮次数。
             summary_tokens (int): 新摘要的文本 token 数。
@@ -858,6 +874,7 @@ class ContextCompressor:
             "[ContextCompression] 已压缩群聊上下文: "
             f"round={round_number}, "
             f"total_tokens_before={total_tokens_before}, "
+            f"compressible_tokens={compressible_tokens}, "
             f"removed_messages={removed_messages}, "
             f"kept_turns={kept_turns}, "
             f"summary_tokens={summary_tokens}",

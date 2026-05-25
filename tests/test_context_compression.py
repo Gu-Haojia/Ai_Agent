@@ -191,6 +191,7 @@ def test_context_compression_config_uses_conservative_defaults(
     monkeypatch.delenv("CONTEXT_KEEP_RECENT_TEXT_TOKENS", raising=False)
     monkeypatch.delenv("CONTEXT_MIN_KEEP_RECENT_TURNS", raising=False)
     monkeypatch.delenv("CONTEXT_MAX_SUMMARY_TEXT_TOKENS", raising=False)
+    monkeypatch.delenv("CONTEXT_MIN_COMPRESSIBLE_TEXT_TOKENS", raising=False)
 
     config = ContextCompressionConfig.from_env()
 
@@ -198,6 +199,7 @@ def test_context_compression_config_uses_conservative_defaults(
     assert config.keep_recent_text_tokens == 20000
     assert config.min_keep_recent_turns == 5
     assert config.max_summary_text_tokens == 3500
+    assert config.min_compressible_text_tokens == 8000
     assert config.print_summary is False
 
 
@@ -223,6 +225,7 @@ def test_context_compressor_keeps_group_chat_context_and_tool_summary(
             keep_recent_text_tokens=180,
             min_keep_recent_turns=4,
             max_summary_text_tokens=400,
+            min_compressible_text_tokens=1,
         ),
         summary_model,
     )
@@ -239,6 +242,7 @@ def test_context_compressor_keeps_group_chat_context_and_tool_summary(
     output = capsys.readouterr().out
     assert "[ContextCompression] 已压缩群聊上下文" in output
     assert "total_tokens_before=" in output
+    assert "compressible_tokens=" in output
     assert "removed_messages=" in output
     assert "kept_turns=" in output
     assert "summary_tokens=" in output
@@ -285,6 +289,7 @@ def test_context_compressor_prints_summary_when_enabled(
             keep_recent_text_tokens=180,
             min_keep_recent_turns=4,
             max_summary_text_tokens=400,
+            min_compressible_text_tokens=1,
             print_summary=True,
         ),
         RecordingSummaryModel(),
@@ -303,6 +308,46 @@ def test_context_compressor_prints_summary_when_enabled(
     assert "[ContextCompression] 已压缩群聊上下文" in output
     assert "[ContextCompression] 摘要正文:" in output
     assert "群友在聊演唱会抽选" in output
+
+
+def test_context_compressor_skips_when_compressible_area_is_too_small(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """
+    验证可压缩旧上下文过小时不会频繁调用摘要模型。
+
+    Args:
+        capsys (pytest.CaptureFixture[str]): 控制台输出捕获工具。
+
+    Returns:
+        None: 无返回值。
+
+    Raises:
+        None: 测试用例不主动抛出异常。
+    """
+    summary_model = RecordingSummaryModel()
+    compressor = ContextCompressor(
+        ContextCompressionConfig(
+            trigger_text_tokens=260,
+            keep_recent_text_tokens=180,
+            min_keep_recent_turns=4,
+            max_summary_text_tokens=400,
+            min_compressible_text_tokens=10000,
+        ),
+        summary_model,
+    )
+
+    update = compressor.compress(
+        {
+            "messages": _business_messages(),
+            "group_context_summary": "当前话题：上一轮大家刚开始聊演唱会抽选。",
+            "compression_round": 0,
+        }
+    )
+
+    assert update == {}
+    assert summary_model.prompts == []
+    assert "[ContextCompression]" not in capsys.readouterr().out
 
 
 def test_context_compressor_skips_when_below_threshold() -> None:
@@ -355,6 +400,7 @@ def test_agent_persists_group_context_summary_in_thread_state(
     monkeypatch.setenv("CONTEXT_KEEP_RECENT_TEXT_TOKENS", "120")
     monkeypatch.setenv("CONTEXT_MIN_KEEP_RECENT_TURNS", "2")
     monkeypatch.setenv("CONTEXT_MAX_SUMMARY_TEXT_TOKENS", "500")
+    monkeypatch.setenv("CONTEXT_MIN_COMPRESSIBLE_TEXT_TOKENS", "1")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("REMINDER_STORE_FILE", str(tmp_path / "reminders.json"))
 
