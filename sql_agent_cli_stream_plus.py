@@ -852,14 +852,8 @@ class ContextCompressor:
             None: 无返回值。
 
         Raises:
-            AssertionError: 当日志字段类型或取值非法时抛出。
+            None: 日志输出不主动中断主流程。
         """
-        assert round_number > 0, "压缩轮次必须为正整数"
-        assert total_tokens_before > 0, "压缩前 token 数必须为正整数"
-        assert removed_messages > 0, "移除消息数必须为正整数"
-        assert kept_turns > 0, "保留轮次数必须为正整数"
-        assert summary_tokens > 0, "摘要 token 数必须为正整数"
-        assert isinstance(summary, str), "summary 必须是字符串"
         print(
             "[ContextCompression] 已压缩群聊上下文: "
             f"round={round_number}, "
