@@ -218,7 +218,7 @@ _LATEX_MATH_PATTERN: re.Pattern[str] = re.compile(
 _LATEX_TO_UNICODE_CONVERTER = LatexNodes2Text()
 CONTEXT_TRIGGER_TEXT_TOKENS_ENV: str = "CONTEXT_COMPRESS_TRIGGER_TEXT_TOKENS"
 CONTEXT_KEEP_TEXT_TOKENS_ENV: str = "CONTEXT_KEEP_RECENT_TEXT_TOKENS"
-CONTEXT_MIN_TURNS_ENV: str = "CONTEXT_MIN_KEEP_RECENT_TURNS"
+CONTEXT_MIN_MESSAGES_ENV: str = "CONTEXT_MIN_KEEP_RECENT_MESSAGES"
 CONTEXT_MAX_SUMMARY_TOKENS_ENV: str = "CONTEXT_MAX_SUMMARY_TEXT_TOKENS"
 CONTEXT_MIN_COMPRESSIBLE_TOKENS_ENV: str = "CONTEXT_MIN_COMPRESSIBLE_TEXT_TOKENS"
 CONTEXT_SUMMARY_MODEL_ENV: str = "CONTEXT_SUMMARY_MODEL"
@@ -587,7 +587,8 @@ class ContextCompressionConfig:
     Args:
         trigger_text_tokens (int): 触发压缩的文本 token 阈值。
         keep_recent_text_tokens (int): 压缩后尽量保留的最近原文 token 数。
-        min_keep_recent_turns (int): 无论 token 数如何都保留的最近完整轮次数。
+        min_keep_recent_messages (int): 无论 token 数如何都至少保留的最近消息数；
+            若消息数边界落在轮次中间，则向前扩展到完整轮次。
         max_summary_text_tokens (int): 群聊摘要允许的最大文本 token 数。
         min_compressible_text_tokens (int): 可压缩旧上下文至少达到该 token
             数时才调用摘要模型。
@@ -602,7 +603,7 @@ class ContextCompressionConfig:
 
     trigger_text_tokens: int = 35000
     keep_recent_text_tokens: int = 20000
-    min_keep_recent_turns: int = 5
+    min_keep_recent_messages: int = 10
     max_summary_text_tokens: int = 3500
     min_compressible_text_tokens: int = 8000
     print_summary: bool = False
@@ -619,7 +620,7 @@ class ContextCompressionConfig:
         """
         assert self.trigger_text_tokens > 0, "触发阈值必须为正整数"
         assert self.keep_recent_text_tokens > 0, "保留阈值必须为正整数"
-        assert self.min_keep_recent_turns > 0, "最小保留轮数必须为正整数"
+        assert self.min_keep_recent_messages > 0, "最小保留消息数必须为正整数"
         assert self.max_summary_text_tokens > 0, "摘要 token 上限必须为正整数"
         assert (
             self.min_compressible_text_tokens > 0
@@ -647,7 +648,9 @@ class ContextCompressionConfig:
             keep_recent_text_tokens=_read_positive_int_env(
                 CONTEXT_KEEP_TEXT_TOKENS_ENV, 20000
             ),
-            min_keep_recent_turns=_read_positive_int_env(CONTEXT_MIN_TURNS_ENV, 5),
+            min_keep_recent_messages=_read_positive_int_env(
+                CONTEXT_MIN_MESSAGES_ENV, 10
+            ),
             max_summary_text_tokens=_read_positive_int_env(
                 CONTEXT_MAX_SUMMARY_TOKENS_ENV, 3500
             ),
@@ -799,7 +802,8 @@ class ContextCompressor:
             return {}
 
         turns = self.split_turns(messages)
-        if len(turns) <= self._config.min_keep_recent_turns:
+        total_message_count = sum(len(turn.messages) for turn in turns)
+        if total_message_count <= self._config.min_keep_recent_messages:
             return {}
 
         keep_start = self.select_keep_start(turns)
@@ -831,6 +835,7 @@ class ContextCompressor:
             total_tokens_before=total_tokens,
             compressible_tokens=compressible_tokens,
             removed_messages=len(compressed_messages),
+            kept_messages=sum(len(turn.messages) for turn in turns[keep_start:]),
             kept_turns=len(turns) - keep_start,
             summary_tokens=summary_tokens,
             summary=new_summary,
@@ -848,6 +853,7 @@ class ContextCompressor:
         total_tokens_before: int,
         compressible_tokens: int,
         removed_messages: int,
+        kept_messages: int,
         kept_turns: int,
         summary_tokens: int,
         summary: str,
@@ -860,6 +866,7 @@ class ContextCompressor:
             total_tokens_before (int): 压缩触发前的文本 token 总数。
             compressible_tokens (int): 本次被压缩旧上下文的文本 token 数。
             removed_messages (int): 本次被移出原文上下文的消息数。
+            kept_messages (int): 压缩后保留的最近消息数。
             kept_turns (int): 压缩后保留的最近完整轮次数。
             summary_tokens (int): 新摘要的文本 token 数。
             summary (str): 新生成的群聊上下文摘要。
@@ -876,6 +883,7 @@ class ContextCompressor:
             f"total_tokens_before={total_tokens_before}, "
             f"compressible_tokens={compressible_tokens}, "
             f"removed_messages={removed_messages}, "
+            f"kept_messages={kept_messages}, "
             f"kept_turns={kept_turns}, "
             f"summary_tokens={summary_tokens}",
             flush=True,
@@ -927,6 +935,9 @@ class ContextCompressor:
         """
         选择压缩后最近原文轮次的起始下标。
 
+        保留区按最近消息数兜底，并向前扩展到完整轮次；超过消息数兜底后，
+        继续在最近原文 token 预算内尽量多保留旧轮次。
+
         Args:
             turns (Sequence[ContextTurn]): 已按时间排序的轮次。
 
@@ -939,15 +950,19 @@ class ContextCompressor:
         assert isinstance(turns, Sequence), "turns 必须是序列"
         keep_start = len(turns)
         kept_tokens = 0
+        kept_messages = 0
         for index in range(len(turns) - 1, -1, -1):
             turn = turns[index]
-            required_by_min_turns = len(turns) - index <= self._config.min_keep_recent_turns
+            required_by_min_messages = (
+                kept_messages < self._config.min_keep_recent_messages
+            )
             within_token_budget = (
                 kept_tokens + turn.text_tokens <= self._config.keep_recent_text_tokens
             )
-            if required_by_min_turns or within_token_budget:
+            if required_by_min_messages or within_token_budget:
                 keep_start = index
                 kept_tokens += turn.text_tokens
+                kept_messages += len(turn.messages)
                 continue
             break
         return keep_start
