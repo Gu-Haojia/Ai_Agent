@@ -186,6 +186,7 @@ from src.x_monitor import (
     XPostResult,
 )
 from src.x_monitor_media import send_x_message_with_images
+from src.x_monitor_tool import get_x_monitor_manager
 from src.x_monitor_translate import TRANSLATION_MODE_ENV, XTweetTranslationMode
 from image_storage import GeneratedImage, ImageStorageManager, StoredImage, StoredVideo
 from src.yt_dlp_downloader import YtDlpVideoDownloader
@@ -2497,8 +2498,7 @@ def main() -> None:
     meru_store = os.environ.get("MERU_WATCH_STORE", ".meru_watch.json")
     meru_monitor = MeruMonitorManager(store_path=meru_store)
     QQBotHandler.meru_monitor = meru_monitor
-    x_store = os.environ.get("X_MONITOR_STORE", ".x_monitor.json")
-    x_monitor = XMonitorManager(store_path=x_store)
+    x_monitor = get_x_monitor_manager()
     QQBotHandler.x_monitor = x_monitor
 
     def _send_daily_text(group_id: int, text: str) -> None:

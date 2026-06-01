@@ -62,6 +62,12 @@ from src.web_browser_tool import WebBrowserTool
 from src.anilist_client import AniListAPI, ANILIST_MEDIA_SORTS
 from src.timer_reminder import TimerReminderManager
 from src.asobi_ticket_agent import AsobiTicketQuery
+from src.x_monitor_tool import (
+    list_x_monitor_tasks,
+    send_x_link,
+    start_x_monitor,
+    stop_x_monitor,
+)
 
 ANILIST_SORT_CHOICES_TEXT: str = ", ".join(ANILIST_MEDIA_SORTS)
 
@@ -670,6 +676,115 @@ class State(TypedDict):
     """Agent 的图状态。"""
 
     messages: Annotated[list, _cap_messages]
+
+
+@tool("xmonitor")
+def xmonitor(
+    action: str,
+    group_id: int,
+    user_id: int,
+    username: str = "",
+    interval_seconds: float | None = None,
+) -> str:
+    """
+    管理指定群中的 X 账号推文监控任务。
+
+    必须使用当前用户消息中提供的 Group_id 和 User_id，不得猜测或修改。
+
+    Args:
+        action (str): 操作类型，仅支持 ``start``、``stop``、``list``。
+        group_id (int): 当前用户消息中的 Group_id。
+        user_id (int): 当前用户消息中的 User_id。
+        username (str): X 账号 handle，不是显示名称。start 和 stop 时必填。
+            示例：``kana_hanaiwa`` 或 ``@kana_hanaiwa``，不要传入
+            ``Kana Hanaiwa``。
+        interval_seconds (float | None): 轮询间隔秒数。start 时必填。
+
+    Returns:
+        str: JSON 字符串，包含操作结果。
+
+    Raises:
+        AssertionError: 当输入参数非法时抛出。
+        RuntimeError: 当 X API 请求失败或任务数量超过限制时抛出。
+    """
+    normalized_action = action.strip().lower()
+    assert normalized_action in {"start", "stop", "list"}, (
+        "action 仅支持 start/stop/list"
+    )
+    assert group_id > 0, "group_id 必须为正整数"
+    assert user_id > 0, "user_id 必须为正整数"
+    if normalized_action == "start":
+        assert username.strip(), "start 操作必须提供 username"
+        assert interval_seconds is not None, "start 操作必须提供 interval_seconds"
+        assert interval_seconds > 0, "interval_seconds 必须大于 0"
+        start_x_monitor(
+            username=username,
+            interval_seconds=interval_seconds,
+            group_id=group_id,
+            user_id=user_id,
+        )
+        result: dict[str, object] = {
+            "action": normalized_action,
+            "group_id": group_id,
+            "user_id": user_id,
+            "username": username.lstrip("@"),
+            "interval_seconds": interval_seconds,
+            "status": "started",
+        }
+    elif normalized_action == "stop":
+        assert username.strip(), "stop 操作必须提供 username"
+        stopped = stop_x_monitor(username=username, group_id=group_id)
+        result = {
+            "action": normalized_action,
+            "group_id": group_id,
+            "user_id": user_id,
+            "username": username.lstrip("@"),
+            "stopped": stopped,
+        }
+    else:
+        result = {
+            "action": normalized_action,
+            "group_id": group_id,
+            "user_id": user_id,
+            "tasks": list_x_monitor_tasks(group_id=group_id),
+        }
+    output = json.dumps(result, ensure_ascii=False)
+    print(
+        f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [XMonitor Tool Output] {output}",
+        flush=True,
+    )
+    return output
+
+
+@tool("xlink")
+def xlink(url: str, group_id: int, user_id: int) -> str:
+    """
+    拉取指定 X/Twitter 推文链接，并将推文截图发送到当前群。
+
+    必须使用当前用户消息中提供的 Group_id 和 User_id，不得猜测或修改。
+
+    Args:
+        url (str): X/Twitter 推文链接。
+        group_id (int): 当前用户消息中的 Group_id。
+        user_id (int): 当前用户消息中的 User_id。
+
+    Returns:
+        str: 已发送推文的正文。
+
+    Raises:
+        AssertionError: 当输入参数或推文链接非法时抛出。
+        RuntimeError: 当 X API 或 OneBot 请求失败时抛出。
+        ValueError: 当 X API 返回字段格式非法时抛出。
+    """
+    assert url.strip(), "url 不能为空"
+    assert group_id > 0, "group_id 必须为正整数"
+    assert user_id > 0, "user_id 必须为正整数"
+    item = send_x_link(url=url, group_id=group_id, user_id=user_id)
+    print(
+        f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [XLink Tool Output] {item.text}",
+        flush=True,
+    )
+    return item.text
 
 
 @dataclass
@@ -1734,6 +1849,9 @@ class SQLCheckpointAgentStreamingPlus:
                     return "\n".join(output_lines) if output_lines else "未找到释义"
 
                 tools.append(nbnhhsh)
+
+                tools.append(xmonitor)
+                tools.append(xlink)
 
         @tool  # raw api 1.39.1
         def generate_local_image(
