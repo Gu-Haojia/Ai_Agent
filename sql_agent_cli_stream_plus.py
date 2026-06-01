@@ -684,7 +684,7 @@ def xmonitor(
     group_id: int,
     user_id: int,
     username: str = "",
-    interval_seconds: float | None = None,
+    interval_seconds: float = 300,
 ) -> str:
     """
     管理指定群中的 X 账号推文监控任务。
@@ -698,7 +698,7 @@ def xmonitor(
         username (str): X 账号 handle，不是显示名称。start 和 stop 时必填。
             示例：``kana_hanaiwa`` 或 ``@kana_hanaiwa``，不要传入
             ``Kana Hanaiwa``。
-        interval_seconds (float | None): 轮询间隔秒数。start 时必填。
+        interval_seconds (float): 轮询间隔秒数。start 时可省略，默认 300 秒。
 
     Returns:
         str: JSON 字符串，包含操作结果。
@@ -715,7 +715,6 @@ def xmonitor(
     assert user_id > 0, "user_id 必须为正整数"
     if normalized_action == "start":
         assert username.strip(), "start 操作必须提供 username"
-        assert interval_seconds is not None, "start 操作必须提供 interval_seconds"
         assert interval_seconds > 0, "interval_seconds 必须大于 0"
         start_x_monitor(
             username=username,
