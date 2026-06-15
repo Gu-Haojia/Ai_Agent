@@ -63,6 +63,8 @@ from src.anilist_client import AniListAPI, ANILIST_MEDIA_SORTS
 from src.timer_reminder import TimerReminderManager
 from src.asobi_ticket_agent import AsobiTicketQuery
 from src.x_monitor_tool import (
+    build_x_monitor_permission_failure,
+    is_x_monitor_tool_user_allowed,
     list_x_monitor_tasks,
     send_x_link,
     start_x_monitor,
@@ -713,7 +715,14 @@ def xmonitor(
     )
     assert group_id > 0, "group_id 必须为正整数"
     assert user_id > 0, "user_id 必须为正整数"
-    if normalized_action == "start":
+    result: dict[str, object]
+    if not is_x_monitor_tool_user_allowed(user_id):
+        result = build_x_monitor_permission_failure(
+            normalized_action,
+            group_id,
+            user_id,
+        )
+    elif normalized_action == "start":
         assert username.strip(), "start 操作必须提供 username"
         assert interval_seconds > 0, "interval_seconds 必须大于 0"
         start_x_monitor(
@@ -722,7 +731,7 @@ def xmonitor(
             group_id=group_id,
             user_id=user_id,
         )
-        result: dict[str, object] = {
+        result = {
             "action": normalized_action,
             "group_id": group_id,
             "user_id": user_id,

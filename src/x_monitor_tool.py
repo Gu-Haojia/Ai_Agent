@@ -39,6 +39,85 @@ def get_x_monitor_manager() -> XMonitorManager:
         return _X_MONITOR_MANAGER
 
 
+def _get_cmd_allowed_user_ids() -> tuple[int, ...]:
+    """
+    读取允许执行受限 X 监控工具的 QQ 用户号白名单。
+
+    Args:
+        None: 本函数不接收参数。
+
+    Returns:
+        tuple[int, ...]: 允许执行工具的 QQ 用户号。空元组表示不限制。
+
+    Raises:
+        AssertionError: 当 `CMD_ALLOWED_USERS` 包含非正整数用户号时抛出。
+    """
+    raw = os.environ.get("CMD_ALLOWED_USERS", "").strip()
+    if not raw:
+        return ()
+    user_ids: list[int] = []
+    for item in raw.split(","):
+        token = item.strip()
+        if not token:
+            continue
+        assert token.isdigit(), "CMD_ALLOWED_USERS 只能包含逗号分隔的正整数用户号"
+        user_id = int(token)
+        assert user_id > 0, "CMD_ALLOWED_USERS 只能包含正整数用户号"
+        user_ids.append(user_id)
+    return tuple(user_ids)
+
+
+def is_x_monitor_tool_user_allowed(user_id: int) -> bool:
+    """
+    判断用户是否允许执行 xmonitor 工具。
+
+    Args:
+        user_id (int): 当前用户消息中的 User_id。
+
+    Returns:
+        bool: True 表示允许执行；False 表示拒绝执行。
+
+    Raises:
+        AssertionError: 当用户号非法或权限配置非法时抛出。
+    """
+    assert user_id > 0, "user_id 必须为正整数"
+    allowed_user_ids = _get_cmd_allowed_user_ids()
+    return not allowed_user_ids or user_id in allowed_user_ids
+
+
+def build_x_monitor_permission_failure(
+    action: str,
+    group_id: int,
+    user_id: int,
+) -> dict[str, object]:
+    """
+    构造 xmonitor 工具权限拒绝结果。
+
+    Args:
+        action (str): xmonitor 操作类型。
+        group_id (int): 当前用户消息中的 Group_id。
+        user_id (int): 当前用户消息中的 User_id。
+
+    Returns:
+        dict[str, object]: 便于 Agent 继续生成的失败结果。
+
+    Raises:
+        AssertionError: 当输入参数非法时抛出。
+    """
+    normalized_action = action.strip().lower()
+    assert normalized_action, "action 不能为空"
+    assert group_id > 0, "group_id 必须为正整数"
+    assert user_id > 0, "user_id 必须为正整数"
+    return {
+        "action": normalized_action,
+        "group_id": group_id,
+        "user_id": user_id,
+        "status": "failed",
+        "error": "permission_denied",
+        "message": "无权执行 xmonitor 工具，请联系管理员加入 CMD_ALLOWED_USERS。",
+    }
+
+
 def start_x_monitor(
     username: str,
     interval_seconds: float,

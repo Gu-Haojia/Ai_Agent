@@ -221,6 +221,29 @@ class XMonitorToolCoreTests(unittest.TestCase):
 
         self.assertEqual(tasks, [self.manager.tasks[0]])
 
+    def test_xmonitor_permission_uses_cmd_allowed_users(self) -> None:
+        """
+        xmonitor 工具权限应复用 CMD_ALLOWED_USERS 白名单。
+        """
+        with mock.patch.dict("os.environ", {"CMD_ALLOWED_USERS": ""}):
+            self.assertTrue(tool_module.is_x_monitor_tool_user_allowed(456))
+
+        with mock.patch.dict("os.environ", {"CMD_ALLOWED_USERS": "456,789"}):
+            self.assertTrue(tool_module.is_x_monitor_tool_user_allowed(456))
+            self.assertFalse(tool_module.is_x_monitor_tool_user_allowed(123))
+
+    def test_xmonitor_permission_failure_payload(self) -> None:
+        """
+        xmonitor 工具权限拒绝结果应明确返回失败状态。
+        """
+        payload = tool_module.build_x_monitor_permission_failure("START", 123, 456)
+
+        self.assertEqual(payload["action"], "start")
+        self.assertEqual(payload["group_id"], 123)
+        self.assertEqual(payload["user_id"], 456)
+        self.assertEqual(payload["status"], "failed")
+        self.assertEqual(payload["error"], "permission_denied")
+
     def test_send_link_uses_shared_manager_and_target_group(self) -> None:
         """
         链接工具应复用共享 Manager，并将截图发送到模型传入的群。
@@ -270,7 +293,9 @@ class XMonitorToolRegistrationTests(unittest.TestCase):
         """
         tools = self._build_tools()
         xmonitor = tools["xmonitor"]
-        with mock.patch.object(agent_module, "start_x_monitor") as start:
+        with mock.patch.dict(
+            "os.environ", {"CMD_ALLOWED_USERS": ""}
+        ), mock.patch.object(agent_module, "start_x_monitor") as start:
             output = xmonitor.invoke(  # type: ignore[attr-defined]
                 {
                     "action": "start",
@@ -313,7 +338,9 @@ class XMonitorToolRegistrationTests(unittest.TestCase):
         """
         tools = self._build_tools()
         xmonitor = tools["xmonitor"]
-        with mock.patch.object(agent_module, "start_x_monitor") as start:
+        with mock.patch.dict(
+            "os.environ", {"CMD_ALLOWED_USERS": ""}
+        ), mock.patch.object(agent_module, "start_x_monitor") as start:
             output = xmonitor.invoke(  # type: ignore[attr-defined]
                 {
                     "action": "start",
@@ -331,6 +358,45 @@ class XMonitorToolRegistrationTests(unittest.TestCase):
             group_id=123,
             user_id=456,
         )
+
+    def test_xmonitor_wrapper_denies_unlisted_user_for_all_actions(self) -> None:
+        """
+        xmonitor 包装层应拒绝未列入白名单的用户且不执行底层操作。
+        """
+        tools = self._build_tools()
+        xmonitor = tools["xmonitor"]
+        cases: list[tuple[str, dict[str, object]]] = [
+            ("start", {"username": "@kana_hanaiwa", "interval_seconds": 60}),
+            ("stop", {"username": "@kana_hanaiwa"}),
+            ("list", {}),
+        ]
+
+        for action, extra_payload in cases:
+            with self.subTest(action=action):
+                payload: dict[str, object] = {
+                    "action": action,
+                    "group_id": 123,
+                    "user_id": 456,
+                }
+                payload.update(extra_payload)
+                with mock.patch.dict(
+                    "os.environ", {"CMD_ALLOWED_USERS": "999"}
+                ), mock.patch.object(
+                    agent_module, "start_x_monitor"
+                ) as start, mock.patch.object(
+                    agent_module, "stop_x_monitor"
+                ) as stop, mock.patch.object(
+                    agent_module, "list_x_monitor_tasks"
+                ) as list_tasks:
+                    output = xmonitor.invoke(payload)  # type: ignore[attr-defined]
+
+                parsed = json.loads(output)
+                self.assertEqual(parsed["action"], action)
+                self.assertEqual(parsed["status"], "failed")
+                self.assertEqual(parsed["error"], "permission_denied")
+                start.assert_not_called()
+                stop.assert_not_called()
+                list_tasks.assert_not_called()
 
     def test_xlink_wrapper_returns_text_only(self) -> None:
         """
