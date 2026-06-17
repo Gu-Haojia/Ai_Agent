@@ -26,7 +26,11 @@ import requests
 from pylatexenc.latex2text import LatexNodes2Text
 
 from typing_extensions import TypedDict
-from langchain_core.tools import tool
+from langchain_community.agent_toolkits.playwright.toolkit import (
+    PlayWrightBrowserToolkit,
+)
+from langchain_community.tools.playwright.utils import create_sync_playwright_browser
+from langchain_core.tools import BaseTool, tool
 from langchain.chat_models import init_chat_model
 from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.store.postgres import PostgresStore
@@ -36,6 +40,7 @@ from langgraph.graph import START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 from langchain_core.messages import AIMessage, ToolMessage, HumanMessage, SystemMessage
+from playwright.sync_api import Browser as SyncBrowser
 from image_storage import GeneratedImage, ImageStorageManager
 from src.visual_crossing_weather import (
     VisualCrossingWeatherClient,
@@ -72,6 +77,15 @@ from src.x_monitor_tool import (
 )
 
 ANILIST_SORT_CHOICES_TEXT: str = ", ".join(ANILIST_MEDIA_SORTS)
+PLAYWRIGHT_BROWSER_TOOL_NAMES: set[str] = {
+    "click_element",
+    "navigate_browser",
+    "previous_webpage",
+    "extract_text",
+    "extract_hyperlinks",
+    "get_elements",
+    "current_webpage",
+}
 
 # ---- 环境校验：仅在首次需要时检查，避免重复消耗 ----
 _ENV_COMMON_CHECKED: bool = False
@@ -967,6 +981,7 @@ class SQLCheckpointAgentStreamingPlus:
         self._asobi_query = AsobiTicketQuery()
         self._image_manager: Optional[ImageStorageManager] = None
         self._generated_images: list[GeneratedImage] = []
+        self._playwright_browser: Optional[SyncBrowser] = None
 
         self._graph = self._build_graph()
         self._printed_in_round: bool = False
@@ -977,13 +992,19 @@ class SQLCheckpointAgentStreamingPlus:
 
     def shutdown(self) -> None:
         """
-        停止 Agent 的后台调度资源。
+        停止 Agent 的后台调度资源并释放 Playwright 浏览器。
+
+        Returns:
+            None: 函数无返回值。
 
         Raises:
             None.
         """
         if isinstance(self._reminder_scheduler, TimerReminderManager):
             self._reminder_scheduler.stop()
+        if self._playwright_browser is not None:
+            self._playwright_browser.close()
+            self._playwright_browser = None
 
     def set_memory_namespace(self, namespace: str) -> None:
         """
@@ -1064,6 +1085,30 @@ class SQLCheckpointAgentStreamingPlus:
         assert content and content.strip(), "系统提示文件内容为空。"
         return content
 
+    def _build_playwright_browser_tools(self) -> list[BaseTool]:
+        """
+        构造 Playwright Browser Toolkit 的同步浏览器工具。
+
+        Returns:
+            list[BaseTool]: 可注册到 Agent 的 Playwright 浏览器工具列表。
+
+        Raises:
+            AssertionError: 当 Toolkit 返回的工具集合不符合预期时抛出。
+        """
+        if self._playwright_browser is None:
+            self._playwright_browser = create_sync_playwright_browser(headless=True)
+
+        toolkit = PlayWrightBrowserToolkit.from_browser(
+            sync_browser=self._playwright_browser
+        )
+        playwright_tools = toolkit.get_tools()
+        tool_names = {str(playwright_tool.name) for playwright_tool in playwright_tools}
+        assert tool_names == PLAYWRIGHT_BROWSER_TOOL_NAMES, (
+            "Playwright Browser Toolkit 工具集合不符合预期: "
+            f"{sorted(tool_names)}"
+        )
+        return playwright_tools
+
     def _build_graph(self):
         model_name = self._config.model_name
         if model_name == "fake:echo":
@@ -1088,6 +1133,8 @@ class SQLCheckpointAgentStreamingPlus:
 
                 browser_tool = WebBrowserTool(llm=summary_llm)
                 tools.append(browser_tool)
+                for playwright_tool in self._build_playwright_browser_tools():
+                    tools.append(playwright_tool)
 
                 visual_crossing_key = os.environ.get(
                     "VISUAL_CROSSING_API_KEY", ""
