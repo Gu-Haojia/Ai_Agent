@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+import json
 from typing import Any
 
 from langchain_community.agent_toolkits.playwright.toolkit import (
@@ -96,12 +97,21 @@ class ThreadBoundPlaywrightTool(BaseTool):
             **kwargs (Any): 已通过 LangChain schema 校验的工具参数。
 
         Returns:
-            str: 原始 Playwright 工具返回文本。
+            str: 原始 Playwright 工具返回文本，或结构化错误 JSON。
 
         Raises:
-            AssertionError: 当执行器已关闭或返回值类型非法时抛出。
+            None: 工具执行异常会转换为返回值交给 LLM。
         """
-        return self._runner.invoke(self._tool_name, dict(kwargs))
+        try:
+            return self._runner.invoke(self._tool_name, dict(kwargs))
+        except Exception as exc:
+            payload = {
+                "status": "failed",
+                "tool_name": self._tool_name,
+                "error_type": exc.__class__.__name__,
+                "error": str(exc),
+            }
+            return json.dumps(payload, ensure_ascii=False)
 
 
 class PlaywrightBrowserThreadRunner:

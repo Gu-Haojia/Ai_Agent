@@ -5,13 +5,17 @@ Playwright Browser Toolkit 注册测试。
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import json
 import unittest
 from types import SimpleNamespace
 
 import sql_agent_cli_stream_plus as agent_module
+from pydantic import BaseModel
 from src.playwright_browser_toolkit_runner import (
     PLAYWRIGHT_BROWSER_TOOL_NAMES,
+    PlaywrightBrowserToolSpec,
     PlaywrightBrowserThreadRunner,
+    ThreadBoundPlaywrightTool,
 )
 
 
@@ -59,6 +63,46 @@ class _FakePlaywrightRunner(PlaywrightBrowserThreadRunner):
             None: 本方法不主动抛出异常。
         """
         self.closed = True
+
+
+class _RaisingPlaywrightRunner(PlaywrightBrowserThreadRunner):
+    """
+    测试用 Playwright runner，用于模拟工具执行异常。
+    """
+
+    def __init__(self) -> None:
+        """
+        初始化测试 runner。
+
+        Returns:
+            None: 构造函数无返回值。
+
+        Raises:
+            None: 本方法不主动抛出异常。
+        """
+        pass
+
+    def invoke(self, tool_name: str, arguments: dict[str, object]) -> str:
+        """
+        模拟固定线程工具调用失败。
+
+        Args:
+            tool_name (str): 被调用的工具名。
+            arguments (dict[str, object]): 工具参数。
+
+        Returns:
+            str: 本测试方法不会返回。
+
+        Raises:
+            RuntimeError: 始终抛出，用于验证代理工具错误返回。
+        """
+        raise RuntimeError(f"{tool_name} failed with {arguments}")
+
+
+class _EmptyToolArgs(BaseModel):
+    """
+    测试用空参数 schema。
+    """
 
 
 class PlaywrightBrowserToolkitRegistrationTests(unittest.TestCase):
@@ -129,6 +173,31 @@ class PlaywrightBrowserToolkitRegistrationTests(unittest.TestCase):
         agent.shutdown()
 
         self.assertTrue(runner.closed)
+
+    def test_proxy_tool_returns_error_json_on_exception(self) -> None:
+        """
+        代理工具内部异常应作为工具返回值暴露给 LLM。
+
+        Returns:
+            None: 测试用例无返回值。
+
+        Raises:
+            AssertionError: 当异常继续冒泡或返回值格式不符合预期时抛出。
+        """
+        spec = PlaywrightBrowserToolSpec(
+            name="current_webpage",
+            description="Returns the URL of the current page",
+            args_schema=_EmptyToolArgs,
+        )
+        tool = ThreadBoundPlaywrightTool(_RaisingPlaywrightRunner(), spec)
+
+        output = tool.invoke({})
+        payload = json.loads(output)
+
+        self.assertEqual(payload["status"], "failed")
+        self.assertEqual(payload["tool_name"], "current_webpage")
+        self.assertEqual(payload["error_type"], "RuntimeError")
+        self.assertIn("current_webpage failed", payload["error"])
 
     def test_playwright_tool_runs_from_worker_thread(self) -> None:
         """
