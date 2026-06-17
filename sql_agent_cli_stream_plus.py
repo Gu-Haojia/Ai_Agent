@@ -1125,14 +1125,16 @@ class SQLCheckpointAgentStreamingPlus:
                 if os.environ.get("TAVILY_API_KEY"):
                     tools = [TavilySearch(max_results=3)]
 
-                summary_model_name = os.environ.get("SUMMARY_MODEL", "").strip()
-                assert (
-                    summary_model_name
-                ), "启用 web_browser 工具时必须设置 SUMMARY_MODEL 环境变量。"
-                summary_llm = init_chat_model(summary_model_name)
+                enable_legacy_web_browser_tool: bool = False
+                if enable_legacy_web_browser_tool:
+                    summary_model_name = os.environ.get("SUMMARY_MODEL", "").strip()
+                    assert (
+                        summary_model_name
+                    ), "启用 web_browser 工具时必须设置 SUMMARY_MODEL 环境变量。"
+                    summary_llm = init_chat_model(summary_model_name)
 
-                browser_tool = WebBrowserTool(llm=summary_llm)
-                tools.append(browser_tool)
+                    browser_tool = WebBrowserTool(llm=summary_llm)
+                    tools.append(browser_tool)
                 for playwright_tool in self._build_playwright_browser_tools():
                     tools.append(playwright_tool)
 

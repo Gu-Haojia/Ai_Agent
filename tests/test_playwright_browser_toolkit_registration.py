@@ -11,6 +11,43 @@ from unittest import mock
 import sql_agent_cli_stream_plus as agent_module
 
 
+class _FakeBindableLLM:
+    """
+    测试用的可绑定工具 LLM。
+    """
+
+    def __init__(self) -> None:
+        """
+        初始化测试用 LLM。
+
+        Returns:
+            None: 构造函数无返回值。
+
+        Raises:
+            None: 本方法不主动抛出异常。
+        """
+        self.bound_tools: list[tuple[list[object], object]] = []
+
+    def bind_tools(
+        self, tools: list[object], tool_choice: object = None
+    ) -> "_FakeBindableLLM":
+        """
+        记录传入的工具列表并返回自身。
+
+        Args:
+            tools (list[object]): 被绑定到 LLM 的工具列表。
+            tool_choice (object): LangChain 工具选择参数。
+
+        Returns:
+            _FakeBindableLLM: 当前测试 LLM 实例。
+
+        Raises:
+            None: 本方法不主动抛出异常。
+        """
+        self.bound_tools.append((list(tools), tool_choice))
+        return self
+
+
 class PlaywrightBrowserToolkitRegistrationTests(unittest.TestCase):
     """
     验证 Agent 对 Playwright Browser Toolkit 的注册与资源释放。
@@ -105,6 +142,79 @@ class PlaywrightBrowserToolkitRegistrationTests(unittest.TestCase):
 
         fake_browser.close.assert_called_once_with()
         self.assertIsNone(agent._playwright_browser)
+
+    def test_build_graph_keeps_legacy_web_browser_disabled(self) -> None:
+        """
+        启用工具时应跳过旧 web_browser 总结工具并保留 Playwright 工具。
+
+        Returns:
+            None: 测试用例无返回值。
+
+        Raises:
+            AssertionError: 当旧工具未被屏蔽时由断言抛出。
+        """
+
+        @agent_module.tool("fake_playwright_browser")
+        def fake_playwright_browser() -> str:
+            """
+            返回测试用 Playwright 工具结果。
+
+            Returns:
+                str: 固定的测试字符串。
+
+            Raises:
+                None: 本函数不主动抛出异常。
+            """
+            return "ok"
+
+        agent = agent_module.SQLCheckpointAgentStreamingPlus.__new__(
+            agent_module.SQLCheckpointAgentStreamingPlus
+        )
+        agent._config = agent_module.AgentConfig(
+            model_name="openai:test", use_memory_ckpt=True
+        )
+        agent._enable_tools = True
+        agent._sys_msg_content = "test"
+        agent._reminder_scheduler = mock.Mock()
+        agent._asobi_query = mock.Mock()
+        agent._image_manager = None
+        agent._generated_images = []
+        agent._memory_namespace = ""
+        fake_llm = _FakeBindableLLM()
+
+        with mock.patch.dict(
+            "os.environ",
+            {
+                "SUMMARY_MODEL": "",
+                "TAVILY_API_KEY": "",
+                "SERPAPI_API_KEY": "",
+                "VISUAL_CROSSING_API_KEY": "",
+            },
+        ), mock.patch.object(
+            agent_module,
+            "init_chat_model",
+            return_value=fake_llm,
+        ) as init_model, mock.patch.object(
+            agent_module.SQLCheckpointAgentStreamingPlus,
+            "_build_playwright_browser_tools",
+            return_value=[fake_playwright_browser],
+        ), mock.patch.object(
+            agent_module,
+            "WebBrowserTool",
+        ) as web_browser_tool, mock.patch.object(
+            agent_module,
+            "InMemoryStore",
+            return_value=mock.Mock(),
+        ):
+            graph = agent._build_graph()
+
+        self.assertIsNotNone(graph)
+        init_model.assert_called_once_with("openai:test")
+        web_browser_tool.assert_not_called()
+        self.assertTrue(fake_llm.bound_tools)
+        bound_tool_names = {str(tool.name) for tool in fake_llm.bound_tools[0][0]}
+        self.assertIn("fake_playwright_browser", bound_tool_names)
+        self.assertNotIn("web_browser", bound_tool_names)
 
 
 if __name__ == "__main__":
