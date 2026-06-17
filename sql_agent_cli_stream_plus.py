@@ -26,10 +26,6 @@ import requests
 from pylatexenc.latex2text import LatexNodes2Text
 
 from typing_extensions import TypedDict
-from langchain_community.agent_toolkits.playwright.toolkit import (
-    PlayWrightBrowserToolkit,
-)
-from langchain_community.tools.playwright.utils import create_sync_playwright_browser
 from langchain_core.tools import BaseTool, tool
 from langchain.chat_models import init_chat_model
 from langgraph.checkpoint.postgres import PostgresSaver
@@ -40,8 +36,11 @@ from langgraph.graph import START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 from langchain_core.messages import AIMessage, ToolMessage, HumanMessage, SystemMessage
-from playwright.sync_api import Browser as SyncBrowser
 from image_storage import GeneratedImage, ImageStorageManager
+from src.playwright_browser_toolkit_runner import (
+    PLAYWRIGHT_BROWSER_TOOL_NAMES,
+    PlaywrightBrowserThreadRunner,
+)
 from src.visual_crossing_weather import (
     VisualCrossingWeatherClient,
     VisualCrossingWeatherFormatter,
@@ -77,15 +76,6 @@ from src.x_monitor_tool import (
 )
 
 ANILIST_SORT_CHOICES_TEXT: str = ", ".join(ANILIST_MEDIA_SORTS)
-PLAYWRIGHT_BROWSER_TOOL_NAMES: set[str] = {
-    "click_element",
-    "navigate_browser",
-    "previous_webpage",
-    "extract_text",
-    "extract_hyperlinks",
-    "get_elements",
-    "current_webpage",
-}
 
 # ---- 环境校验：仅在首次需要时检查，避免重复消耗 ----
 _ENV_COMMON_CHECKED: bool = False
@@ -981,7 +971,7 @@ class SQLCheckpointAgentStreamingPlus:
         self._asobi_query = AsobiTicketQuery()
         self._image_manager: Optional[ImageStorageManager] = None
         self._generated_images: list[GeneratedImage] = []
-        self._playwright_browser: Optional[SyncBrowser] = None
+        self._playwright_runner = PlaywrightBrowserThreadRunner()
 
         self._graph = self._build_graph()
         self._printed_in_round: bool = False
@@ -1002,9 +992,8 @@ class SQLCheckpointAgentStreamingPlus:
         """
         if isinstance(self._reminder_scheduler, TimerReminderManager):
             self._reminder_scheduler.stop()
-        if self._playwright_browser is not None:
-            self._playwright_browser.close()
-            self._playwright_browser = None
+        if isinstance(self._playwright_runner, PlaywrightBrowserThreadRunner):
+            self._playwright_runner.close()
 
     def set_memory_namespace(self, namespace: str) -> None:
         """
@@ -1095,13 +1084,10 @@ class SQLCheckpointAgentStreamingPlus:
         Raises:
             AssertionError: 当 Toolkit 返回的工具集合不符合预期时抛出。
         """
-        if self._playwright_browser is None:
-            self._playwright_browser = create_sync_playwright_browser(headless=True)
-
-        toolkit = PlayWrightBrowserToolkit.from_browser(
-            sync_browser=self._playwright_browser
-        )
-        playwright_tools = toolkit.get_tools()
+        assert isinstance(
+            self._playwright_runner, PlaywrightBrowserThreadRunner
+        ), "Playwright runner 未初始化"
+        playwright_tools = self._playwright_runner.build_tools()
         tool_names = {str(playwright_tool.name) for playwright_tool in playwright_tools}
         assert tool_names == PLAYWRIGHT_BROWSER_TOOL_NAMES, (
             "Playwright Browser Toolkit 工具集合不符合预期: "

@@ -4,11 +4,61 @@ Playwright Browser Toolkit 注册测试。
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import unittest
 from types import SimpleNamespace
-from unittest import mock
 
 import sql_agent_cli_stream_plus as agent_module
+from src.playwright_browser_toolkit_runner import (
+    PLAYWRIGHT_BROWSER_TOOL_NAMES,
+    PlaywrightBrowserThreadRunner,
+)
+
+
+class _FakePlaywrightRunner(PlaywrightBrowserThreadRunner):
+    """
+    测试用 Playwright runner，避免启动真实浏览器。
+    """
+
+    def __init__(self, tools: list[object]) -> None:
+        """
+        初始化测试 runner。
+
+        Args:
+            tools (list[object]): 模拟返回的工具列表。
+
+        Returns:
+            None: 构造函数无返回值。
+
+        Raises:
+            None: 本方法不主动抛出异常。
+        """
+        self.tools = tools
+        self.closed = False
+
+    def build_tools(self) -> list[object]:
+        """
+        返回预置的测试工具列表。
+
+        Returns:
+            list[object]: 模拟工具列表。
+
+        Raises:
+            None: 本方法不主动抛出异常。
+        """
+        return self.tools
+
+    def close(self) -> None:
+        """
+        标记测试 runner 已关闭。
+
+        Returns:
+            None: 函数无返回值。
+
+        Raises:
+            None: 本方法不主动抛出异常。
+        """
+        self.closed = True
 
 
 class PlaywrightBrowserToolkitRegistrationTests(unittest.TestCase):
@@ -16,9 +66,9 @@ class PlaywrightBrowserToolkitRegistrationTests(unittest.TestCase):
     验证 Agent 对 Playwright Browser Toolkit 的注册与资源释放。
     """
 
-    def test_build_playwright_browser_tools_uses_sync_browser(self) -> None:
+    def test_build_playwright_browser_tools_uses_runner(self) -> None:
         """
-        Playwright Browser Toolkit 应使用同步浏览器并返回完整工具集合。
+        Agent 应通过固定线程 runner 构造 Playwright 工具。
 
         Returns:
             None: 测试用例无返回值。
@@ -29,31 +79,15 @@ class PlaywrightBrowserToolkitRegistrationTests(unittest.TestCase):
         agent = agent_module.SQLCheckpointAgentStreamingPlus.__new__(
             agent_module.SQLCheckpointAgentStreamingPlus
         )
-        agent._playwright_browser = None
-        fake_browser = mock.Mock()
         fake_tools = [
             SimpleNamespace(name=name)
-            for name in sorted(agent_module.PLAYWRIGHT_BROWSER_TOOL_NAMES)
+            for name in sorted(PLAYWRIGHT_BROWSER_TOOL_NAMES)
         ]
-        fake_toolkit = mock.Mock()
-        fake_toolkit.get_tools.return_value = fake_tools
+        agent._playwright_runner = _FakePlaywrightRunner(fake_tools)
 
-        with mock.patch.object(
-            agent_module,
-            "create_sync_playwright_browser",
-            return_value=fake_browser,
-        ) as create_browser, mock.patch.object(
-            agent_module.PlayWrightBrowserToolkit,
-            "from_browser",
-            return_value=fake_toolkit,
-        ) as from_browser:
-            tools = agent._build_playwright_browser_tools()
+        tools = agent._build_playwright_browser_tools()
 
         self.assertEqual(tools, fake_tools)
-        self.assertEqual(agent._playwright_browser, fake_browser)
-        create_browser.assert_called_once_with(headless=True)
-        from_browser.assert_called_once_with(sync_browser=fake_browser)
-        fake_toolkit.get_tools.assert_called_once_with()
 
     def test_build_playwright_browser_tools_rejects_missing_tools(self) -> None:
         """
@@ -68,25 +102,16 @@ class PlaywrightBrowserToolkitRegistrationTests(unittest.TestCase):
         agent = agent_module.SQLCheckpointAgentStreamingPlus.__new__(
             agent_module.SQLCheckpointAgentStreamingPlus
         )
-        agent._playwright_browser = None
-        fake_toolkit = mock.Mock()
-        fake_toolkit.get_tools.return_value = [SimpleNamespace(name="navigate_browser")]
+        agent._playwright_runner = _FakePlaywrightRunner(
+            [SimpleNamespace(name="navigate_browser")]
+        )
 
-        with mock.patch.object(
-            agent_module,
-            "create_sync_playwright_browser",
-            return_value=mock.Mock(),
-        ), mock.patch.object(
-            agent_module.PlayWrightBrowserToolkit,
-            "from_browser",
-            return_value=fake_toolkit,
-        ):
-            with self.assertRaises(AssertionError):
-                agent._build_playwright_browser_tools()
+        with self.assertRaises(AssertionError):
+            agent._build_playwright_browser_tools()
 
-    def test_shutdown_closes_playwright_browser(self) -> None:
+    def test_shutdown_closes_playwright_runner(self) -> None:
         """
-        Agent 关闭时应释放 Playwright 浏览器实例。
+        Agent 关闭时应释放 Playwright runner。
 
         Returns:
             None: 测试用例无返回值。
@@ -97,14 +122,44 @@ class PlaywrightBrowserToolkitRegistrationTests(unittest.TestCase):
         agent = agent_module.SQLCheckpointAgentStreamingPlus.__new__(
             agent_module.SQLCheckpointAgentStreamingPlus
         )
-        fake_browser = mock.Mock()
-        agent._playwright_browser = fake_browser
+        runner = _FakePlaywrightRunner([])
+        agent._playwright_runner = runner
         agent._reminder_scheduler = object()
 
         agent.shutdown()
 
-        fake_browser.close.assert_called_once_with()
-        self.assertIsNone(agent._playwright_browser)
+        self.assertTrue(runner.closed)
+
+    def test_playwright_tool_runs_from_worker_thread(self) -> None:
+        """
+        Playwright 工具被 LangGraph 线程池调用时不应触发 greenlet 跨线程错误。
+
+        Returns:
+            None: 测试用例无返回值。
+
+        Raises:
+            AssertionError: 当工具无法在线程池中执行时由断言抛出。
+        """
+        agent = agent_module.SQLCheckpointAgentStreamingPlus.__new__(
+            agent_module.SQLCheckpointAgentStreamingPlus
+        )
+        agent._playwright_runner = PlaywrightBrowserThreadRunner()
+        agent._reminder_scheduler = object()
+
+        try:
+            tools = {
+                str(playwright_tool.name): playwright_tool
+                for playwright_tool in agent._build_playwright_browser_tools()
+            }
+            current_webpage = tools["current_webpage"]
+
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(current_webpage.invoke, {})
+                output = future.result(timeout=10)
+
+            self.assertIn("about:blank", output)
+        finally:
+            agent.shutdown()
 
 
 if __name__ == "__main__":
