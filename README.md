@@ -76,11 +76,11 @@ LangGraph/
 3. 启动（默认把容器 8080 映射到宿主 8080，想换端口设置 `EXPOSED_PORT`）：  
    ```bash
    EXPOSED_PORT=8088 docker compose up -d
-   docker compose exec app date  # 可选，验证时区；compose 已挂载 /etc/localtime 并设置 TZ
+   docker compose exec app date  # 可选，验证时区；镜像内 tzdata 与 TZ=Asia/Tokyo 管理时区
    ```  
 4. 存储与挂载：项目根目录 bind mount 到 `/app`；`logs/`、`prompts/`、`ticket_data/`、`images/` 及四个 JSON 会在 entrypoint 中自动创建并保持宿主可读写。Postgres 数据放在命名卷 `postgres-data`，容器重建不丢失。  
 5. 常用运维：  
-   - 更新代码后热重启：`docker compose restart app`；若依赖有变再 `docker compose build`。  
+   - 更新普通代码后热重启：`docker compose restart app`；若 Dockerfile、compose 或依赖有变，执行 `docker compose up -d --build --force-recreate app`。
    - 需要宿主直连数据库时，在 `postgres` 服务加端口映射如 `ports: ["55432:5432"]`。  
    - 查看运行日志：`docker compose logs -f app`。
 

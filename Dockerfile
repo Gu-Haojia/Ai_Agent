@@ -3,7 +3,7 @@ FROM python:3.11-slim
 ARG DEBIAN_FRONTEND=noninteractive
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    TZ=UTC
+    TZ=Asia/Tokyo
 
 # 安装系统依赖、字体与 psql 工具，便于健康检查；tzdata 用于时区同步
 RUN apt-get update && apt-get install -y --no-install-recommends \
