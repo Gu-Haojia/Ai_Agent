@@ -82,9 +82,9 @@ def test_normalize_blocked_ai_message_keeps_non_blocked_message() -> None:
     assert normalized is message
 
 
-def test_normalize_blocked_ai_message_trusts_stop_empty_content() -> None:
+def test_normalize_blocked_ai_message_converts_stop_empty_content() -> None:
     """
-    验证 STOP 空内容消息会按正常结束保留原对象。
+    验证 STOP 空内容消息会被转换为可显示的文本块。
 
     Returns:
         None: 无返回值。
@@ -97,4 +97,4 @@ def test_normalize_blocked_ai_message_trusts_stop_empty_content() -> None:
 
     normalized = _normalize_blocked_ai_message(message)
 
-    assert normalized is message
+    assert _extract_text_content(normalized) == "（模型本次未返回可展示内容：STOP）"
