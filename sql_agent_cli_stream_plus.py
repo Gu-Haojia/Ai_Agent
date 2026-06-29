@@ -74,6 +74,13 @@ from src.x_monitor_tool import (
     start_x_monitor,
     stop_x_monitor,
 )
+from src.netease_music_tool import (
+    DEFAULT_NETEASE_MUSIC_API_BASE,
+    DEFAULT_ONEBOT_API_BASE,
+    NeteaseMusicClient,
+    NeteaseMusicToolError,
+    OneBotMusicCardSender,
+)
 
 ANILIST_SORT_CHOICES_TEXT: str = ", ".join(ANILIST_MEDIA_SORTS)
 
@@ -799,6 +806,147 @@ def xlink(url: str, group_id: int, user_id: int) -> str:
         flush=True,
     )
     return item.text
+
+
+@tool("netease_music_search")
+def netease_music_search(keyword: str, limit: int = 3) -> str:
+    """
+    搜索网易云音乐单曲并返回可用于发送音乐卡片的歌曲 ID 候选。
+
+    只负责搜索，不会发送消息。搜索词建议包含歌名和歌手名，例如
+    ``海阔天空 Beyond``。不要猜测歌曲 ID，应从本工具结果中选择。
+
+    Args:
+        keyword (str): 歌名或“歌名 + 歌手”关键词。
+        limit (int): 返回候选数量，范围为 1 至 5，默认 3。
+
+    Returns:
+        str: JSON 字符串，包含搜索状态和歌曲候选列表。
+
+    Raises:
+        AssertionError: 当关键词为空、过长或 limit 超出范围时抛出。
+    """
+    normalized_keyword = keyword.strip()
+    assert normalized_keyword, "keyword 不能为空"
+    assert len(normalized_keyword) <= 100, "keyword 长度不能超过 100"
+    assert 1 <= limit <= 5, "limit 必须在 1 到 5 之间"
+
+    api_base = os.environ.get(
+        "NETEASE_MUSIC_API_BASE",
+        DEFAULT_NETEASE_MUSIC_API_BASE,
+    ).strip()
+    assert api_base, "NETEASE_MUSIC_API_BASE 不能为空"
+    client = NeteaseMusicClient(base_url=api_base)
+    try:
+        songs = client.search(normalized_keyword, limit=limit)
+        if songs:
+            result: dict[str, object] = {
+                "status": "success",
+                "query": normalized_keyword,
+                "source": "netease",
+                "count": len(songs),
+                "songs": [
+                    song.to_dict(rank)
+                    for rank, song in enumerate(songs, start=1)
+                ],
+            }
+        else:
+            result = {
+                "status": "not_found",
+                "query": normalized_keyword,
+                "source": "netease",
+                "count": 0,
+                "songs": [],
+                "message": "未找到相关网易云歌曲，请补充歌手名或调整关键词。",
+            }
+    except NeteaseMusicToolError as exc:
+        result = {
+            "status": "failed",
+            "query": normalized_keyword,
+            "source": "netease",
+            "error": exc.error_code,
+            "message": str(exc),
+        }
+    except AssertionError as exc:
+        result = {
+            "status": "failed",
+            "query": normalized_keyword,
+            "source": "netease",
+            "error": "invalid_response",
+            "message": str(exc),
+        }
+    output = json.dumps(result, ensure_ascii=False)
+    print(
+        f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m "
+        f"[NeteaseMusicSearch Tool Output] {output}",
+        flush=True,
+    )
+    return output
+
+
+@tool("send_netease_music_card")
+def send_netease_music_card(song_id: str, group_id: int) -> str:
+    """
+    把指定网易云歌曲 ID 作为音乐卡片发送到目标 QQ 群。
+
+    ``song_id`` 必须来自 ``netease_music_search`` 的搜索结果；
+    ``group_id`` 由调用时直接提供，不进行上下文提取。
+
+    Args:
+        song_id (str): 网易云单曲 ID，例如 ``1357375695``。
+        group_id (int): 接收音乐卡片的目标 QQ 群号。
+
+    Returns:
+        str: JSON 字符串，包含发送状态和 OneBot 消息 ID。
+
+    Raises:
+        AssertionError: 当 song_id 或 group_id 非法时抛出。
+    """
+    normalized_song_id = song_id.strip()
+    assert normalized_song_id.isdigit(), "song_id 必须是数字字符串"
+    assert group_id > 0, "group_id 必须为正整数"
+
+    api_base = os.environ.get("ONEBOT_API_BASE", DEFAULT_ONEBOT_API_BASE).strip()
+    access_token = os.environ.get("ONEBOT_ACCESS_TOKEN", "").strip()
+    assert api_base, "ONEBOT_API_BASE 不能为空"
+    sender = OneBotMusicCardSender(
+        api_base=api_base,
+        access_token=access_token,
+    )
+    try:
+        message_id = sender.send(normalized_song_id, group_id)
+        result: dict[str, object] = {
+            "status": "sent",
+            "action": "send_netease_music_card",
+            "song_id": normalized_song_id,
+            "group_id": group_id,
+            "message_id": message_id,
+        }
+    except NeteaseMusicToolError as exc:
+        result = {
+            "status": "failed",
+            "action": "send_netease_music_card",
+            "song_id": normalized_song_id,
+            "group_id": group_id,
+            "error": exc.error_code,
+            "message": str(exc),
+        }
+    except AssertionError as exc:
+        result = {
+            "status": "failed",
+            "action": "send_netease_music_card",
+            "song_id": normalized_song_id,
+            "group_id": group_id,
+            "error": "invalid_response",
+            "message": str(exc),
+        }
+    output = json.dumps(result, ensure_ascii=False)
+    print(
+        f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m "
+        f"[NeteaseMusicCard Tool Output] {output}",
+        flush=True,
+    )
+    return output
 
 
 @dataclass
@@ -1897,6 +2045,8 @@ class SQLCheckpointAgentStreamingPlus:
 
                 tools.append(xmonitor)
                 tools.append(xlink)
+                tools.append(netease_music_search)
+                tools.append(send_netease_music_card)
 
         @tool  # raw api 1.39.1
         def generate_local_image(

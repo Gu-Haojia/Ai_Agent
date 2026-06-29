@@ -98,6 +98,7 @@ LangGraph/
 | `DRY_RUN` | 设为 `1` 时使用内存检查点 | `0` |
 | `ENABLE_TOOLS` | 设为 `1` 时显式启用工具节点 | `1` |
 | `TAVILY_API_KEY` | Tavily 搜索工具 Key | 可选 |
+| `NETEASE_MUSIC_API_BASE` | 网易云歌曲检索 API 基地址 | `https://nce.gqzsldy.com` |
 
 ### QQ 机器人 & 自动任务
 
@@ -180,6 +181,7 @@ brew services stop postgresql
 
 - **搜索**：Tavily Search、Web Browser（抓取并总结页面）。
 - **旅行**：Google Flights / Hotels / Directions 工具链。
+- **音乐**：检索网易云歌曲候选，并通过 NapCat 向指定群发送音乐卡片。
 - **天气**：Visual Crossing 天气查询，支持多地点、多时段。
 - **票务**：Asobi Ticket 抓取 + `imas_ticket_tool` 便捷命令。
 - **图像**：Reverse Image 上传 + `image_storage.py` 文件存档。
