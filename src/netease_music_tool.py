@@ -133,13 +133,13 @@ class NeteaseMusicClient:
         self._timeout_seconds = timeout_seconds
         self._http_get = http_get or requests.get
 
-    def search(self, keyword: str, limit: int = 3) -> list[NeteaseSong]:
+    def search(self, keyword: str, limit: int = 5) -> list[NeteaseSong]:
         """
         按关键词搜索网易云单曲。
 
         Args:
             keyword (str): 歌名或“歌名 + 歌手”搜索词。
-            limit (int): 返回候选歌曲数量，范围为 1 至 5。
+            limit (int): 返回候选歌曲数量，范围为 1 至 5，默认 5。
 
         Returns:
             list[NeteaseSong]: 按上游相关度排序的歌曲候选列表。

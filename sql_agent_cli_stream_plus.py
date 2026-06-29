@@ -809,7 +809,7 @@ def xlink(url: str, group_id: int, user_id: int) -> str:
 
 
 @tool("netease_music_search")
-def netease_music_search(keyword: str, limit: int = 3) -> str:
+def netease_music_search(keyword: str, limit: int = 5) -> str:
     """
     搜索网易云音乐单曲并返回可用于发送音乐卡片的歌曲 ID 候选。
 
@@ -818,7 +818,7 @@ def netease_music_search(keyword: str, limit: int = 3) -> str:
 
     Args:
         keyword (str): 歌名或“歌名 + 歌手”关键词。
-        limit (int): 返回候选数量，范围为 1 至 5，默认 3。
+        limit (int): 返回候选数量，范围为 1 至 5，默认 5。
 
     Returns:
         str: JSON 字符串，包含搜索状态和歌曲候选列表。

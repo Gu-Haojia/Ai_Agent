@@ -123,6 +123,16 @@ class NeteaseMusicClientTests(unittest.TestCase):
         )
 
         self.assertEqual(client.search("不存在的歌曲"), [])
+        http_get.assert_called_once_with(
+            "https://music-api.example/search",
+            params={
+                "keywords": "不存在的歌曲",
+                "limit": 5,
+                "offset": 0,
+                "type": 1,
+            },
+            timeout=10.0,
+        )
 
     def test_search_exposes_timeout_with_stable_error_code(self) -> None:
         """搜索超时应转换为模型可判断的稳定错误码。"""
@@ -237,7 +247,7 @@ class NeteaseMusicToolRegistrationTests(unittest.TestCase):
         self.assertEqual(payload["status"], "success")
         self.assertEqual(payload["songs"][0]["song_id"], "1357375695")
         self.assertEqual(payload["songs"][0]["rank"], 1)
-        search.assert_called_once_with("海阔天空 Beyond", limit=3)
+        search.assert_called_once_with("海阔天空 Beyond", limit=5)
 
     def test_search_wrapper_returns_structured_failure(self) -> None:
         """搜索外部错误应在工具边界转换成结构化失败。"""
