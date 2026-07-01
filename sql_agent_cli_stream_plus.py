@@ -66,8 +66,10 @@ from src.web_browser_tool import WebBrowserTool
 from src.anilist_client import AniListAPI, ANILIST_MEDIA_SORTS
 from src.timer_reminder import TimerReminderManager
 from src.asobi_ticket_agent import AsobiTicketQuery
+from src.x_monitor import XMonitorToolError
 from src.x_monitor_tool import (
     build_x_monitor_permission_failure,
+    build_x_monitor_tool_failure,
     is_x_monitor_tool_user_allowed,
     list_x_monitor_tasks,
     send_x_link,
@@ -720,7 +722,6 @@ def xmonitor(
 
     Raises:
         AssertionError: 当输入参数非法时抛出。
-        RuntimeError: 当 X API 请求失败或任务数量超过限制时抛出。
     """
     normalized_action = action.strip().lower()
     assert normalized_action in {"start", "stop", "list"}, (
@@ -738,20 +739,30 @@ def xmonitor(
     elif normalized_action == "start":
         assert username.strip(), "start 操作必须提供 username"
         assert interval_seconds > 0, "interval_seconds 必须大于 0"
-        start_x_monitor(
-            username=username,
-            interval_seconds=interval_seconds,
-            group_id=group_id,
-            user_id=user_id,
-        )
-        result = {
-            "action": normalized_action,
-            "group_id": group_id,
-            "user_id": user_id,
-            "username": username.lstrip("@"),
-            "interval_seconds": interval_seconds,
-            "status": "started",
-        }
+        try:
+            start_x_monitor(
+                username=username,
+                interval_seconds=interval_seconds,
+                group_id=group_id,
+                user_id=user_id,
+            )
+        except XMonitorToolError as exc:
+            result = build_x_monitor_tool_failure(
+                normalized_action,
+                group_id,
+                user_id,
+                exc,
+                username=username,
+            )
+        else:
+            result = {
+                "action": normalized_action,
+                "group_id": group_id,
+                "user_id": user_id,
+                "username": username.lstrip("@"),
+                "interval_seconds": interval_seconds,
+                "status": "started",
+            }
     elif normalized_action == "stop":
         assert username.strip(), "stop 操作必须提供 username"
         stopped = stop_x_monitor(username=username, group_id=group_id)

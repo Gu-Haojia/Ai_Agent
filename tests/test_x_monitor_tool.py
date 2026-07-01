@@ -12,7 +12,7 @@ from unittest import mock
 
 import sql_agent_cli_stream_plus as agent_module
 import src.x_monitor_tool as tool_module
-from src.x_monitor import XPostResult
+from src.x_monitor import XMonitorToolError, XPostResult
 
 
 def _make_post() -> XPostResult:
@@ -358,6 +358,37 @@ class XMonitorToolRegistrationTests(unittest.TestCase):
             group_id=123,
             user_id=456,
         )
+
+    def test_xmonitor_wrapper_returns_structured_x_api_failure(self) -> None:
+        """
+        xmonitor 包装层应把预期的 X API 错误结构化返回给模型。
+        """
+        tools = self._build_tools()
+        xmonitor = tools["xmonitor"]
+        with mock.patch.dict(
+            "os.environ", {"CMD_ALLOWED_USERS": ""}
+        ), mock.patch.object(
+            agent_module,
+            "start_x_monitor",
+            side_effect=XMonitorToolError(
+                "x_user_not_found",
+                "未找到该 X 用户，请确认 username 是账号 handle。",
+            ),
+        ):
+            output = xmonitor.invoke(  # type: ignore[attr-defined]
+                {
+                    "action": "start",
+                    "group_id": 123,
+                    "user_id": 456,
+                    "username": "mizuki_yumina",
+                }
+            )
+
+        payload = json.loads(output)
+        self.assertEqual(payload["status"], "failed")
+        self.assertEqual(payload["error"], "x_user_not_found")
+        self.assertEqual(payload["username"], "mizuki_yumina")
+        self.assertIn("账号 handle", payload["message"])
 
     def test_xmonitor_wrapper_denies_unlisted_user_for_all_actions(self) -> None:
         """

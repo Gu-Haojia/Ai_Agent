@@ -11,7 +11,12 @@ from functools import partial
 from threading import Lock
 from typing import Sequence
 
-from src.x_monitor import DEFAULT_LIMIT, XMonitorManager, XPostResult
+from src.x_monitor import (
+    DEFAULT_LIMIT,
+    XMonitorManager,
+    XMonitorToolError,
+    XPostResult,
+)
 from src.x_monitor_media import _send_group_msg, send_x_message_with_images
 
 DEFAULT_ONEBOT_API_BASE = "http://127.0.0.1:3000"
@@ -118,6 +123,47 @@ def build_x_monitor_permission_failure(
     }
 
 
+def build_x_monitor_tool_failure(
+    action: str,
+    group_id: int,
+    user_id: int,
+    error: XMonitorToolError,
+    username: str = "",
+) -> dict[str, object]:
+    """
+    将预期的 X 监控业务错误转换为 Agent 可读取的失败结果。
+
+    Args:
+        action (str): xmonitor 操作类型。
+        group_id (int): 当前用户消息中的 Group_id。
+        user_id (int): 当前用户消息中的 User_id。
+        error (XMonitorToolError): 带稳定错误码的业务异常。
+        username (str): 本次操作使用的 X 账号 handle。
+
+    Returns:
+        dict[str, object]: 便于 Agent 继续生成回复的结构化失败结果。
+
+    Raises:
+        AssertionError: 当输入参数非法时抛出。
+    """
+    normalized_action = action.strip().lower()
+    normalized_username = username.strip().lstrip("@")
+    assert normalized_action, "action 不能为空"
+    assert group_id > 0, "group_id 必须为正整数"
+    assert user_id > 0, "user_id 必须为正整数"
+    result: dict[str, object] = {
+        "action": normalized_action,
+        "group_id": group_id,
+        "user_id": user_id,
+        "status": "failed",
+        "error": error.error_code,
+        "message": str(error),
+    }
+    if normalized_username:
+        result["username"] = normalized_username
+    return result
+
+
 def start_x_monitor(
     username: str,
     interval_seconds: float,
@@ -138,7 +184,7 @@ def start_x_monitor(
 
     Raises:
         AssertionError: 当输入参数非法时抛出。
-        RuntimeError: 当 X API 请求失败或任务数量超过限制时抛出。
+        XMonitorToolError: 当 X API 请求失败或任务数量超过限制时抛出。
     """
     assert username.strip(), "username 不能为空"
     assert interval_seconds > 0, "interval_seconds 必须大于 0"

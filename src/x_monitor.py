@@ -166,6 +166,62 @@ def _extract_api_error(payload: object) -> str:
     return detail or title
 
 
+def _is_resource_not_found_error(payload: object) -> bool:
+    """
+    判断 X API 响应是否表示目标资源不存在。
+
+    Args:
+        payload (object): X API 返回的 JSON 对象。
+
+    Returns:
+        bool: errors 中包含 resource-not-found 错误时返回 True。
+
+    Raises:
+        None: 本函数不抛出异常。
+    """
+    if not isinstance(payload, dict):
+        return False
+    errors = payload.get("errors")
+    if not isinstance(errors, list):
+        return False
+    for error in errors:
+        if not isinstance(error, dict):
+            continue
+        error_type = str(error.get("type") or "").strip()
+        title = str(error.get("title") or "").strip()
+        if error_type.endswith("/resource-not-found") or title == "Not Found Error":
+            return True
+    return False
+
+
+class XMonitorToolError(RuntimeError):
+    """
+    表示可在 X 监控工具边界转换成结构化输出的业务错误。
+
+    Attributes:
+        error_code (str): 供 Agent 判断错误类型的稳定错误码。
+    """
+
+    def __init__(self, error_code: str, message: str) -> None:
+        """
+        初始化带稳定错误码的 X 监控工具异常。
+
+        Args:
+            error_code (str): 供 Agent 判断错误类型的稳定错误码。
+            message (str): 面向 Agent 的简短错误说明。
+
+        Returns:
+            None: 构造函数无返回值。
+
+        Raises:
+            AssertionError: 当错误码或错误说明为空时抛出。
+        """
+        assert error_code.strip(), "error_code 不能为空"
+        assert message.strip(), "message 不能为空"
+        super().__init__(message)
+        self.error_code = error_code
+
+
 @dataclass(frozen=True)
 class XTweetLink:
     """
@@ -364,8 +420,7 @@ class XAPIClient:
 
         Raises:
             AssertionError: 当响应缺少必要字段时抛出。
-            RuntimeError: 当网络或 API 调用失败时抛出。
-            ValueError: 当 API 返回非 JSON 数据时抛出。
+            XMonitorToolError: 当用户不存在、网络或 API 调用失败时抛出。
         """
         normalized = _normalize_username(username)
         payload = self._request_json(
@@ -386,8 +441,7 @@ class XAPIClient:
 
         Raises:
             AssertionError: 当参数非法或响应缺少必要字段时抛出。
-            RuntimeError: 当网络或 API 调用失败时抛出。
-            ValueError: 当 API 返回非 JSON 数据时抛出。
+            XMonitorToolError: 当用户不存在、网络或 API 调用失败时抛出。
         """
         normalized_user_id = user_id.strip()
         assert normalized_user_id, "user_id 不能为空"
@@ -409,9 +463,22 @@ class XAPIClient:
             XUserProfile: 解析后的用户资料。
 
         Raises:
-            AssertionError: 当响应缺少必要字段时抛出。
+            AssertionError: 当成功响应缺少必要字段时抛出。
+            XMonitorToolError: 当 X API 返回用户不存在或其他业务错误时抛出。
         """
         data = payload.get("data")
+        if not isinstance(data, dict) and _is_resource_not_found_error(payload):
+            raise XMonitorToolError(
+                "x_user_not_found",
+                "未找到该 X 用户，请确认 username 是账号 handle，不要填写显示名称。",
+            )
+        if not isinstance(data, dict):
+            detail = _extract_api_error(payload)
+            if detail:
+                raise XMonitorToolError(
+                    "upstream_api_error",
+                    f"X API 返回错误：{detail}",
+                )
         assert isinstance(data, dict), "X API 用户响应缺少 data 对象"
         user_id = str(data.get("id") or "").strip()
         api_username = str(data.get("username") or "").strip()
@@ -445,8 +512,7 @@ class XAPIClient:
 
         Raises:
             AssertionError: 当参数非法时抛出。
-            RuntimeError: 当网络或 API 调用失败时抛出。
-            ValueError: 当 API 返回非 JSON 数据时抛出。
+            XMonitorToolError: 当网络、鉴权或 API 调用失败时抛出。
         """
         normalized_user_id = user_id.strip()
         assert normalized_user_id, "user_id 不能为空"
@@ -475,8 +541,7 @@ class XAPIClient:
 
         Raises:
             AssertionError: 当推文 ID 为空或不是数字时抛出。
-            RuntimeError: 当网络或 API 调用失败时抛出。
-            ValueError: 当 API 返回非 JSON 数据时抛出。
+            XMonitorToolError: 当网络、鉴权或 API 调用失败时抛出。
         """
         normalized = tweet_id.strip()
         assert normalized, "tweet_id 不能为空"
@@ -499,9 +564,7 @@ class XAPIClient:
             dict[str, object]: 解析后的 JSON 对象。
 
         Raises:
-            AssertionError: 当响应 JSON 不是对象时抛出。
-            RuntimeError: 当网络或 API 调用失败时抛出。
-            ValueError: 当 API 返回非 JSON 数据时抛出。
+            XMonitorToolError: 当网络、鉴权、响应格式或 API 调用失败时抛出。
         """
         headers = {
             "Authorization": f"Bearer {self._bearer_token}",
@@ -511,24 +574,46 @@ class XAPIClient:
         try:
             response = requests.get(url, headers=headers, params=params, timeout=20)
         except requests.RequestException as exc:
-            raise RuntimeError("请求 X API 失败，请检查网络连接。") from exc
+            raise XMonitorToolError(
+                "network_error",
+                "请求 X API 失败，请检查网络连接。",
+            ) from exc
         try:
             payload = response.json()
         except ValueError as exc:
-            raise ValueError("X API 返回非 JSON 数据。") from exc
-        assert isinstance(payload, dict), "X API 返回格式异常，应为 JSON 对象"
+            raise XMonitorToolError(
+                "invalid_response",
+                "X API 返回非 JSON 数据。",
+            ) from exc
+        if not isinstance(payload, dict):
+            raise XMonitorToolError(
+                "invalid_response",
+                "X API 返回格式异常，应为 JSON 对象。",
+            )
         if response.status_code == 401:
-            raise RuntimeError("X API 鉴权失败：请确认 X_BEARER_TOKEN 是否正确。")
+            raise XMonitorToolError(
+                "authentication_failed",
+                "X API 鉴权失败，请确认 X_BEARER_TOKEN 是否正确。",
+            )
         if response.status_code == 403:
             detail = _extract_api_error(payload)
             suffix = f"：{detail}" if detail else ""
-            raise RuntimeError(f"X API 拒绝访问，请检查权限或订阅状态{suffix}")
+            raise XMonitorToolError(
+                "access_denied",
+                f"X API 拒绝访问，请检查权限或订阅状态{suffix}",
+            )
         if response.status_code == 429:
-            raise RuntimeError("X API 调用被限流，请稍后再试。")
+            raise XMonitorToolError(
+                "rate_limited",
+                "X API 调用被限流，请稍后再试。",
+            )
         if response.status_code >= 400:
             detail = _extract_api_error(payload)
             suffix = f"：{detail}" if detail else ""
-            raise RuntimeError(f"X API 调用失败，HTTP {response.status_code}{suffix}")
+            raise XMonitorToolError(
+                "upstream_http_error",
+                f"X API 调用失败，HTTP {response.status_code}{suffix}",
+            )
         return payload
 
 
@@ -896,7 +981,7 @@ class XMonitorManager:
 
         Raises:
             AssertionError: 当参数非法时抛出。
-            RuntimeError: 当任务超过上限或 API 调用失败时抛出。
+            XMonitorToolError: 当任务超过上限或 API 调用失败时抛出。
         """
         normalized = _normalize_username(username)
         assert interval > 0, "interval 必须大于 0"
@@ -957,7 +1042,7 @@ class XMonitorManager:
 
         Raises:
             AssertionError: 当任务参数非法时抛出。
-            RuntimeError: 当任务超过上限时抛出。
+            XMonitorToolError: 当任务超过上限时抛出。
         """
         assert username.strip(), "username 不能为空"
         assert x_user_id.strip(), "x_user_id 不能为空"
@@ -968,7 +1053,10 @@ class XMonitorManager:
         with self._lock:
             self._prune_dead_watch_tasks()
             if len(self._watch_tasks) >= MAX_WATCH_TASKS:
-                raise RuntimeError(f"最多支持 {MAX_WATCH_TASKS} 个 X 监控任务，请先关闭后再启动。")
+                raise XMonitorToolError(
+                    "task_limit_reached",
+                    f"最多支持 {MAX_WATCH_TASKS} 个 X 监控任务，请先关闭后再启动。",
+                )
             fetcher = lambda since_id: self._fetch_results(
                 username.strip(), x_user_id.strip(), since_id=since_id
             )

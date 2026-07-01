@@ -20,6 +20,7 @@ from src.x_monitor import (
     NEW_POST_NOTICE_ENV,
     RESTORE_MODE_ENV,
     XAPIClient,
+    XMonitorToolError,
     XMonitorManager,
     XPostResult,
     _collect_post_image_urls,
@@ -429,6 +430,67 @@ class XMonitorParseTests(unittest.TestCase):
         self.assertIsInstance(params, dict)
         self.assertIn("most_recent_tweet_id", params["user.fields"])
         self.assertEqual(profile.most_recent_tweet_id, "12345")
+
+    def test_get_user_profile_reports_not_found_as_tool_error(self) -> None:
+        """
+        用户查询返回 HTTP 200 errors 时应抛出可供工具结构化的领域异常。
+        """
+
+        class FakeClient(XAPIClient):
+            """
+            返回用户不存在响应的客户端。
+            """
+
+            def __init__(self) -> None:
+                """
+                跳过真实鉴权初始化。
+
+                Returns:
+                    None: 构造函数无返回值。
+
+                Raises:
+                    None: 本方法不主动抛出异常。
+                """
+
+            def _request_json(
+                self, url: str, params: dict[str, str] | None = None
+            ) -> dict[str, object]:
+                """
+                返回 X API 用户不存在响应。
+
+                Args:
+                    url (str): 请求 URL。
+                    params (dict[str, str] | None): 查询参数。
+
+                Returns:
+                    dict[str, object]: 仅包含 errors 的 X API 响应。
+
+                Raises:
+                    None: 本方法不主动抛出异常。
+                """
+                return {
+                    "errors": [
+                        {
+                            "value": "mizuki_yumina",
+                            "detail": (
+                                "Could not find user with username: "
+                                "[mizuki_yumina]."
+                            ),
+                            "title": "Not Found Error",
+                            "type": (
+                                "https://api.x.com/2/problems/"
+                                "resource-not-found"
+                            ),
+                        }
+                    ]
+                }
+
+        client = FakeClient()
+
+        with self.assertRaises(XMonitorToolError) as caught:
+            client.get_user_profile("mizuki_yumina")
+
+        self.assertEqual(caught.exception.error_code, "x_user_not_found")
 
     def test_get_user_profile_by_id_requests_most_recent_tweet_id(self) -> None:
         """
