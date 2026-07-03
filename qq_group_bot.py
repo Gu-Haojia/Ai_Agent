@@ -1271,7 +1271,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
             _send_group_msg(
                 self.bot_cfg.api_base,
                 group_id,
-                "诶...?制作人先生好像没有权限呢，请联系管理员添加白名单后再试吧~",
+                "诶...？制作人先生好像没有权限呢，请联系管理员添加白名单后再试吧~",
                 self.bot_cfg.access_token,
             )
             #如果时间大于2026年1月1日0点
