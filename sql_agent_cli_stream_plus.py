@@ -1270,7 +1270,7 @@ class SQLCheckpointAgentStreamingPlus:
                 from langchain_tavily import TavilySearch
 
                 if os.environ.get("TAVILY_API_KEY"):
-                    tools = [TavilySearch(max_results=3)]
+                    tools = [TavilySearch(max_results=5)]
 
                 enable_legacy_web_browser_tool: bool = False
                 if enable_legacy_web_browser_tool:
