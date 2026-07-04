@@ -63,6 +63,7 @@ from src.google_reverse_image_client import GoogleReverseImageClient
 from src.google_reverse_image_tool import GoogleReverseImageTool, ReverseImageUploader
 from src.google_lens_tool import GoogleLensClient, GoogleLensTool
 from src.web_browser_tool import WebBrowserTool
+from src.tavily_search_tool import RoutedTavilySearch
 from src.anilist_client import AniListAPI, ANILIST_MEDIA_SORTS
 from src.timer_reminder import TimerReminderManager
 from src.asobi_ticket_agent import AsobiTicketQuery
@@ -1267,10 +1268,8 @@ class SQLCheckpointAgentStreamingPlus:
             llm = init_chat_model(model_name)
             tools = []
             if self._enable_tools:
-                from langchain_tavily import TavilySearch
-
                 if os.environ.get("TAVILY_API_KEY"):
-                    tools = [TavilySearch(max_results=5)]
+                    tools = [RoutedTavilySearch(max_results=5)]
 
                 enable_legacy_web_browser_tool: bool = False
                 if enable_legacy_web_browser_tool:
