@@ -858,7 +858,7 @@ def render_tweet_html(
   </style>
 </head>
 <body>
-  <main id="capture">{body}<div class="agent-footer">本推文由 筱泽广Agent 提供</div></main>
+  <main id="capture">{body}<div class="agent-footer">本推文由 天海春香Agent 提供</div></main>
 </body>
 </html>"""
 
