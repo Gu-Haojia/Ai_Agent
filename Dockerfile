@@ -14,6 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-liberation \
     fonts-noto-cjk \
     fonts-noto-color-emoji \
+    fonts-noto-core \
     libpq-dev \
     postgresql-client \
   && rm -rf /var/lib/apt/lists/*
