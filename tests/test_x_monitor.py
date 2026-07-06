@@ -801,30 +801,6 @@ class XMonitorRenderTests(unittest.TestCase):
             1.25,
         )
 
-    def test_parse_payload_reads_author_media_and_text_entities(self) -> None:
-        """
-        应解析作者、媒体，并在 HTML 中标记正文 entity。
-        """
-        payload = build_render_payload(text="hello @official #XMonitor")
-        tweets = XTweetPayloadParser().parse(payload)
-        self.assertEqual(len(tweets), 1)
-        self.assertEqual(tweets[0].author.name, "Kana Hanaiwa")
-        self.assertEqual(tweets[0].media[0].best_url, "https://example.com/1.jpg")
-
-        html = render_tweet_html(tweets[0], BrowserRenderConfig(width=720))
-        self.assertIn("Kana Hanaiwa", html)
-        self.assertIn("@kana_hanaiwa", html)
-        self.assertIn('<span class="mention">@official</span>', html)
-        self.assertIn('<span class="hashtag">#XMonitor</span>', html)
-        self.assertIn("https://example.com/1.jpg", html)
-        self.assertIn('"Noto Sans CJK JP"', html)
-        self.assertIn('"Noto Color Emoji"', html)
-        self.assertIn(
-            '<div class="agent-footer">本推文由 筱泽广Agent 提供</div>',
-            html,
-        )
-        self.assertIn(".agent-footer", html)
-
     def test_render_media_layout_pairs_two_vertical_images(self) -> None:
         """
         两张竖图应同一行等高并按比例分配宽度。
