@@ -2067,6 +2067,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
         - /clear              → 为当前群新建线程
         - /whoami             → 先回当前系统提示词，再基于“你是谁”生成一条消息
         - /token              → 统计当前群对应线程的消息 token 数
+        - /summary            → 查看当前线程的上下文压缩摘要
         - /forget             → 清空当前线程的全部历史消息
         - /apicheck           → 使用当前模型自检 API 调用耗时
 
@@ -2137,7 +2138,8 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 "16) /xmonitor list - 查看 X 推文监控任务\n"
                 "17) /xtrans - 切换 X 推文翻译模式\n"
                 "18) /xlink <推文链接> - 解析指定 X 推文并按当前翻译模式发图\n"
-                "19) /dl <链接> - 下载视频并直接发送到群聊"
+                "19) /dl <链接> - 下载视频并直接发送到群聊\n"
+                "20) /summary - 查看当前线程的上下文压缩摘要"
             )
             _send_group_msg(
                 self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
@@ -2389,6 +2391,24 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 msg = f"统计失败：{e}"
             except Exception as e:
                 msg = f"统计失败（内部错误）：{e}"
+            _send_group_msg(
+                self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
+            )
+            return True
+
+        if cmd == "/summary" and len(parts) == 1:
+            try:
+                tid = self._thread_id_for(group_id)
+                summary = self.agent.get_group_context_summary(thread_id=tid).strip()
+                msg = (
+                    f"当前线程上下文摘要：\n{summary}"
+                    if summary
+                    else "当前线程还没有上下文摘要。"
+                )
+            except AssertionError as e:
+                msg = f"摘要读取失败：{e}"
+            except Exception as e:
+                msg = f"摘要读取失败（内部错误）：{e}"
             _send_group_msg(
                 self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
             )

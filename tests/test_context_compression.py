@@ -5,12 +5,16 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Iterable, Any
+from unittest import mock
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.graph.message import add_messages
 
+import qq_group_bot
+from qq_group_bot import QQBotHandler
 from sql_agent_cli_stream_plus import (
     AgentConfig,
     ContextCompressionConfig,
@@ -523,3 +527,77 @@ def test_agent_persists_group_context_summary_in_thread_state(
     assert values["compression_round"] >= 1
     assert len(messages) > 0
     assert len(messages) < 20
+
+
+@pytest.mark.parametrize(
+    ("summary", "expected_message"),
+    [
+        ("当前话题：群友在讨论演唱会。", "当前线程上下文摘要：\n当前话题：群友在讨论演唱会。"),
+        ("", "当前线程还没有上下文摘要。"),
+    ],
+)
+def test_summary_command_returns_current_thread_summary(
+    summary: str,
+    expected_message: str,
+) -> None:
+    """
+    验证小写 /summary 会返回当前群线程的摘要或空摘要提示。
+
+    Args:
+        summary (str): Agent 查询接口返回的上下文摘要。
+        expected_message (str): 预期发送到群聊的文本。
+
+    Returns:
+        None: 测试用例无返回值。
+
+    Raises:
+        None: 测试用例不主动抛出异常。
+    """
+    handler = object.__new__(QQBotHandler)
+    handler.bot_cfg = SimpleNamespace(
+        api_base="http://onebot",
+        access_token="token",
+        cmd_allowed_users=(),
+    )
+    handler._group_threads = {10001: "thread-summary-test"}
+    summary_reader = mock.Mock(return_value=summary)
+    handler.agent = SimpleNamespace(get_group_context_summary=summary_reader)
+
+    with mock.patch.object(qq_group_bot, "_send_group_msg") as send_mock:
+        handled = handler._handle_commands(10001, 20002, "/summary")
+
+    assert handled is True
+    summary_reader.assert_called_once_with(thread_id="thread-summary-test")
+    send_mock.assert_called_once_with(
+        "http://onebot",
+        10001,
+        expected_message,
+        "token",
+    )
+
+
+def test_summary_command_does_not_accept_uppercase_name() -> None:
+    """
+    验证大写 /Summary 不会进入上下文摘要查询逻辑。
+
+    Returns:
+        None: 测试用例无返回值。
+
+    Raises:
+        None: 测试用例不主动抛出异常。
+    """
+    handler = object.__new__(QQBotHandler)
+    handler.bot_cfg = SimpleNamespace(
+        api_base="http://onebot",
+        access_token="token",
+        cmd_allowed_users=(),
+    )
+    summary_reader = mock.Mock(return_value="不应读取")
+    handler.agent = SimpleNamespace(get_group_context_summary=summary_reader)
+
+    with mock.patch.object(qq_group_bot, "_send_group_msg") as send_mock:
+        handled = handler._handle_commands(10001, 20002, "/Summary")
+
+    assert handled is True
+    summary_reader.assert_not_called()
+    assert send_mock.call_args.args[2] == "无此命令"
