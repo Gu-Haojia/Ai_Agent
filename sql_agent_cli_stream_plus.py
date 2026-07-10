@@ -1019,12 +1019,12 @@ class ContextCompressor:
         else:
             previous_block = "无"
         return (
-            "你在为一个群聊机器人压缩短期上下文。\n"
-            "请保留能帮助机器人自然接话的信息，不要写成任务清单或会议纪要。\n"
+            "你在为一个群聊角色扮演Agent压缩短期上下文。\n"
+            "请保留能帮助该Agent自然接话的信息，不要写成任务清单或会议纪要。\n"
             "必须保留重要的 user_id、user_name、关键发言、情绪、梗、称呼、关系、"
             "明确偏好或雷点。\n"
             "工具信息只有在会影响后续群聊接话、用户可能追问、"
-            "或机器人已经基于它做出判断时才保留；"
+            "或Agent已经基于它做出判断时才保留；"
             "保留工具名、调用目的、关键参数、关键结果，"
             "不要保留原始 JSON、HTML 或大段中间结果。\n"
             "图片和视频只保留数量、文件名、当时结论或上下文，不要保留 base64。\n"
@@ -1037,7 +1037,7 @@ class ContextCompressor:
             "明确偏好或雷点：\n"
             "最近图片/视频语境：\n"
             "工具调用要点：\n"
-            "机器人最近说过什么：\n"
+            "Agent最近说过什么：\n"
             "需要延续或避免重复的点：\n\n"
             f"上一版摘要：\n{previous_block}\n\n"
             f"需要压缩的旧消息：\n{message_text}"
@@ -1092,7 +1092,7 @@ class ContextCompressor:
         if isinstance(message, HumanMessage):
             return "用户"
         if isinstance(message, AIMessage):
-            return "机器人"
+            return "Agent"
         if isinstance(message, ToolMessage):
             return "工具"
         if isinstance(message, SystemMessage):
