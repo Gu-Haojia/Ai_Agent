@@ -69,6 +69,7 @@ from src.google_reverse_image_client import GoogleReverseImageClient
 from src.google_reverse_image_tool import GoogleReverseImageTool, ReverseImageUploader
 from src.google_lens_tool import GoogleLensClient, GoogleLensTool
 from src.web_browser_tool import WebBrowserTool
+from src.serper_image_search_tool import SerperImageSearchTool
 from src.tavily_search_tool import RoutedTavilySearch
 from src.anilist_client import AniListAPI, ANILIST_MEDIA_SORTS
 from src.timer_reminder import TimerReminderManager
@@ -1966,6 +1967,10 @@ class SQLCheckpointAgentStreamingPlus:
             if self._enable_tools:
                 if os.environ.get("TAVILY_API_KEY"):
                     tools = [RoutedTavilySearch(max_results=5)]
+
+                serper_api_key = os.environ.get("SERPER_API_KEY", "").strip()
+                if serper_api_key:
+                    tools.append(SerperImageSearchTool(api_key=serper_api_key))
 
                 enable_legacy_web_browser_tool: bool = False
                 if enable_legacy_web_browser_tool:
