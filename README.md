@@ -98,6 +98,7 @@ LangGraph/
 | `DRY_RUN` | 设为 `1` 时使用内存检查点 | `0` |
 | `ENABLE_TOOLS` | 设为 `1` 时显式启用工具节点 | `1` |
 | `TAVILY_API_KEY` | Tavily 搜索工具 Key | 可选 |
+| `SERPER_API_KEY` | Serper 图片搜索工具 Key | 可选 |
 | `NETEASE_MUSIC_API_BASE` | 网易云歌曲检索 API 基地址 | `https://nce.gqzsldy.com` |
 
 ### QQ 机器人 & 自动任务
