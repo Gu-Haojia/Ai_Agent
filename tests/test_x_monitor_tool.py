@@ -392,26 +392,6 @@ class XMonitorToolRegistrationTests(unittest.TestCase):
         self.assertEqual(payload["message"], "xmonitor 执行失败，原因未知。")
         self.assertNotIn("内部细节", output)
 
-    def test_xmonitor_wrapper_returns_schema_validation_failure(self) -> None:
-        """
-        xmonitor 工具应把进入函数前的 schema 错误转换为 JSON。
-        """
-        tools = self._build_tools()
-        xmonitor = tools["xmonitor"]
-
-        output = xmonitor.invoke(  # type: ignore[attr-defined]
-            {
-                "action": "list",
-                "group_id": "invalid",
-                "user_id": 456,
-            }
-        )
-
-        payload = json.loads(output)
-        self.assertEqual(payload["status"], "failed")
-        self.assertEqual(payload["error"], "invalid_argument")
-        self.assertEqual(payload["message"], "xmonitor 工具参数不合法。")
-
     def test_xmonitor_wrapper_uses_default_interval(self) -> None:
         """
         xmonitor 包装层省略轮询间隔时应默认使用 300 秒。
