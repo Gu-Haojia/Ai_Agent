@@ -74,7 +74,10 @@ class SerperImageSearchRequest(BaseModel):
     size_filter: SizeFilter = Field(
         "none",
         description=(
-            "尺寸过滤：none（无）、medium（中等）或 large（大）。"
+            "图片尺寸过滤，默认 none。用户未明确要求图片尺寸时，"
+            "必须省略本参数或使用 none，不要主动选择 medium 或 large。"
+            "仅当用户明确要求中等尺寸时使用 medium；明确要求大图、"
+            "高清或高分辨率图片时使用 large。"
         ),
     )
 
@@ -779,8 +782,8 @@ class SerperImageSearchTool(BaseTool):
     description: str = (
         "使用 Google Images 搜索图片，返回经过本地完整下载验证的"
         "原图 URL 和实际分辨率。仅在用户需要图片、照片或视觉"
-        "素材"
-        "时调用。"
+        "素材时调用。除非用户明确提出图片尺寸、高清或大图要求，"
+        "否则不要主动设置尺寸过滤。"
     )
     args_schema: type[BaseModel] = SerperImageSearchRequest
 

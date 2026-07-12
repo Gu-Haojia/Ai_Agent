@@ -185,6 +185,16 @@ class SerperImageSearchRequestTests(unittest.TestCase):
             schema["properties"]["size_filter"]["default"],
             "none",
         )
+        size_description = schema["properties"]["size_filter"]["description"]
+        self.assertIn("必须省略本参数或使用 none", size_description)
+        self.assertIn("不要主动选择 medium 或 large", size_description)
+
+    def test_tool_description_forbids_automatic_size_filtering(self) -> None:
+        """工具总描述应禁止模型在用户未要求时主动选择尺寸。"""
+
+        tool = SerperImageSearchTool(api_key="test-key")
+
+        self.assertIn("否则不要主动设置尺寸过滤", tool.description)
 
     def test_query_is_stripped_and_validated(self) -> None:
         """query 应去除首尾空白且拒绝纯空白。"""
