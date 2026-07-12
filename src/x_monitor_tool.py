@@ -164,6 +164,87 @@ def build_x_monitor_tool_failure(
     return result
 
 
+def build_x_monitor_invalid_argument_failure(
+    message: str,
+    action: str = "",
+    group_id: int | None = None,
+    user_id: int | None = None,
+    username: str = "",
+) -> dict[str, object]:
+    """
+    构造 xmonitor 参数错误结果。
+
+    Args:
+        message (str): 参数错误说明。
+        action (str): xmonitor 操作类型。
+        group_id (int | None): 当前用户消息中的 Group_id。
+        user_id (int | None): 当前用户消息中的 User_id。
+        username (str): 本次操作使用的 X 账号 handle。
+
+    Returns:
+        dict[str, object]: 便于 Agent 继续生成的参数失败结果。
+
+    Raises:
+        None: 本函数不主动抛出异常。
+    """
+    normalized_message = message.strip() or "xmonitor 工具参数不合法。"
+    result: dict[str, object] = {
+        "status": "failed",
+        "error": "invalid_argument",
+        "message": normalized_message,
+    }
+    normalized_action = action.strip().lower()
+    normalized_username = username.strip().lstrip("@")
+    if normalized_action:
+        result["action"] = normalized_action
+    if group_id is not None:
+        result["group_id"] = group_id
+    if user_id is not None:
+        result["user_id"] = user_id
+    if normalized_username:
+        result["username"] = normalized_username
+    return result
+
+
+def build_x_monitor_unknown_failure(
+    action: str = "",
+    group_id: int | None = None,
+    user_id: int | None = None,
+    username: str = "",
+) -> dict[str, object]:
+    """
+    构造不暴露内部异常细节的 xmonitor 未知错误结果。
+
+    Args:
+        action (str): xmonitor 操作类型。
+        group_id (int | None): 当前用户消息中的 Group_id。
+        user_id (int | None): 当前用户消息中的 User_id。
+        username (str): 本次操作使用的 X 账号 handle。
+
+    Returns:
+        dict[str, object]: 便于 Agent 继续生成的未知失败结果。
+
+    Raises:
+        None: 本函数不主动抛出异常。
+    """
+    result: dict[str, object] = {
+        "status": "failed",
+        "error": "unknown_error",
+        "message": "xmonitor 执行失败，原因未知。",
+    }
+    normalized_action = action.strip().lower()
+    normalized_username = username.strip().lstrip("@")
+    if normalized_action:
+        result["action"] = normalized_action
+    if group_id is not None:
+        result["group_id"] = group_id
+    if user_id is not None:
+        result["user_id"] = user_id
+    if normalized_username:
+        result["username"] = normalized_username
+    return result
+
+
 def start_x_monitor(
     username: str,
     interval_seconds: float,

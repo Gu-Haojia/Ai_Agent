@@ -318,19 +318,99 @@ class XMonitorToolRegistrationTests(unittest.TestCase):
 
     def test_xmonitor_wrapper_rejects_unknown_action(self) -> None:
         """
-        xmonitor 包装层遇到未知动作时应显式失败。
+        xmonitor 包装层遇到未知动作时应返回参数错误。
         """
         tools = self._build_tools()
         xmonitor = tools["xmonitor"]
 
-        with self.assertRaises(AssertionError):
-            xmonitor.invoke(  # type: ignore[attr-defined]
+        output = xmonitor.invoke(  # type: ignore[attr-defined]
+            {
+                "action": "unknown",
+                "group_id": 123,
+                "user_id": 456,
+            }
+        )
+
+        payload = json.loads(output)
+        self.assertEqual(payload["status"], "failed")
+        self.assertEqual(payload["error"], "invalid_argument")
+        self.assertEqual(payload["message"], "action 仅支持 start/stop/list")
+
+    def test_xmonitor_wrapper_returns_invalid_username_failure(self) -> None:
+        """
+        xmonitor 包装层应把用户名断言转换为参数错误。
+        """
+        tools = self._build_tools()
+        xmonitor = tools["xmonitor"]
+        with mock.patch.dict(
+            "os.environ", {"CMD_ALLOWED_USERS": ""}
+        ), mock.patch.object(
+            agent_module,
+            "start_x_monitor",
+            side_effect=AssertionError("用户名格式不合法"),
+        ):
+            output = xmonitor.invoke(  # type: ignore[attr-defined]
                 {
-                    "action": "unknown",
+                    "action": "start",
                     "group_id": 123,
                     "user_id": 456,
+                    "username": "akane_matsu_staff",
                 }
             )
+
+        payload = json.loads(output)
+        self.assertEqual(payload["status"], "failed")
+        self.assertEqual(payload["error"], "invalid_argument")
+        self.assertEqual(payload["message"], "用户名格式不合法")
+        self.assertEqual(payload["username"], "akane_matsu_staff")
+
+    def test_xmonitor_wrapper_returns_unknown_failure_without_detail(self) -> None:
+        """
+        xmonitor 包装层应隐藏未知异常细节并返回稳定错误码。
+        """
+        tools = self._build_tools()
+        xmonitor = tools["xmonitor"]
+        with mock.patch.dict(
+            "os.environ", {"CMD_ALLOWED_USERS": ""}
+        ), mock.patch.object(
+            agent_module,
+            "start_x_monitor",
+            side_effect=RuntimeError("不应向模型暴露的内部细节"),
+        ):
+            output = xmonitor.invoke(  # type: ignore[attr-defined]
+                {
+                    "action": "start",
+                    "group_id": 123,
+                    "user_id": 456,
+                    "username": "kana_hanaiwa",
+                }
+            )
+
+        payload = json.loads(output)
+        self.assertEqual(payload["status"], "failed")
+        self.assertEqual(payload["error"], "unknown_error")
+        self.assertEqual(payload["message"], "xmonitor 执行失败，原因未知。")
+        self.assertNotIn("内部细节", output)
+
+    def test_xmonitor_wrapper_returns_schema_validation_failure(self) -> None:
+        """
+        xmonitor 工具应把进入函数前的 schema 错误转换为 JSON。
+        """
+        tools = self._build_tools()
+        xmonitor = tools["xmonitor"]
+
+        output = xmonitor.invoke(  # type: ignore[attr-defined]
+            {
+                "action": "list",
+                "group_id": "invalid",
+                "user_id": 456,
+            }
+        )
+
+        payload = json.loads(output)
+        self.assertEqual(payload["status"], "failed")
+        self.assertEqual(payload["error"], "invalid_argument")
+        self.assertEqual(payload["message"], "xmonitor 工具参数不合法。")
 
     def test_xmonitor_wrapper_uses_default_interval(self) -> None:
         """

@@ -76,8 +76,10 @@ from src.timer_reminder import TimerReminderManager
 from src.asobi_ticket_agent import AsobiTicketQuery
 from src.x_monitor import XMonitorToolError
 from src.x_monitor_tool import (
+    build_x_monitor_invalid_argument_failure,
     build_x_monitor_permission_failure,
     build_x_monitor_tool_failure,
+    build_x_monitor_unknown_failure,
     is_x_monitor_tool_user_allowed,
     list_x_monitor_tasks,
     send_x_link,
@@ -1356,6 +1358,102 @@ class State(TypedDict, total=False):
     compression_round: int
 
 
+def _execute_xmonitor_action(
+    action: str,
+    group_id: int,
+    user_id: int,
+    username: str = "",
+    interval_seconds: float = 300,
+) -> dict[str, object]:
+    """
+    执行单次 xmonitor 操作。
+
+    Args:
+        action (str): 操作类型，仅支持 ``start``、``stop``、``list``。
+        group_id (int): 当前用户消息中的 Group_id。
+        user_id (int): 当前用户消息中的 User_id。
+        username (str): X 账号 handle，不是显示名称。start 和 stop 时必填。
+            示例：``kana_hanaiwa`` 或 ``@kana_hanaiwa``，不要传入
+            ``Kana Hanaiwa``。
+        interval_seconds (float): 轮询间隔秒数。start 时可省略，默认 300 秒。
+
+    Returns:
+        dict[str, object]: 操作结果。
+
+    Raises:
+        AssertionError: 当输入参数非法时抛出。
+        XMonitorToolError: 当 X 监控业务操作失败时抛出。
+        Exception: 当底层出现未知异常时抛出。
+    """
+    normalized_action = action.strip().lower()
+    assert normalized_action in {"start", "stop", "list"}, (
+        "action 仅支持 start/stop/list"
+    )
+    assert group_id > 0, "group_id 必须为正整数"
+    assert user_id > 0, "user_id 必须为正整数"
+    result: dict[str, object]
+    if not is_x_monitor_tool_user_allowed(user_id):
+        result = build_x_monitor_permission_failure(
+            normalized_action,
+            group_id,
+            user_id,
+        )
+    elif normalized_action == "start":
+        assert username.strip(), "start 操作必须提供 username"
+        assert interval_seconds > 0, "interval_seconds 必须大于 0"
+        start_x_monitor(
+            username=username,
+            interval_seconds=interval_seconds,
+            group_id=group_id,
+            user_id=user_id,
+        )
+        result = {
+            "action": normalized_action,
+            "group_id": group_id,
+            "user_id": user_id,
+            "username": username.lstrip("@"),
+            "interval_seconds": interval_seconds,
+            "status": "started",
+        }
+    elif normalized_action == "stop":
+        assert username.strip(), "stop 操作必须提供 username"
+        stopped = stop_x_monitor(username=username, group_id=group_id)
+        result = {
+            "action": normalized_action,
+            "group_id": group_id,
+            "user_id": user_id,
+            "username": username.lstrip("@"),
+            "stopped": stopped,
+        }
+    else:
+        result = {
+            "action": normalized_action,
+            "group_id": group_id,
+            "user_id": user_id,
+            "tasks": list_x_monitor_tasks(group_id=group_id),
+        }
+    return result
+
+
+def _format_xmonitor_validation_failure(_error: object) -> str:
+    """
+    将 xmonitor schema 校验异常转换为 JSON 失败结果。
+
+    Args:
+        _error (object): LangChain 传入的 schema 校验异常。
+
+    Returns:
+        str: 参数错误 JSON 字符串。
+
+    Raises:
+        None: 本函数不主动抛出异常。
+    """
+    result = build_x_monitor_invalid_argument_failure(
+        "xmonitor 工具参数不合法。"
+    )
+    return json.dumps(result, ensure_ascii=False)
+
+
 @tool("xmonitor")
 def xmonitor(
     action: str,
@@ -1379,74 +1477,58 @@ def xmonitor(
         interval_seconds (float): 轮询间隔秒数。start 时可省略，默认 300 秒。
 
     Returns:
-        str: JSON 字符串，包含操作结果。
+        str: JSON 字符串，包含操作结果或结构化失败。
 
     Raises:
-        AssertionError: 当输入参数非法时抛出。
+        None: 工具边界会将所有运行异常转换为失败 JSON。
     """
-    normalized_action = action.strip().lower()
-    assert normalized_action in {"start", "stop", "list"}, (
-        "action 仅支持 start/stop/list"
-    )
-    assert group_id > 0, "group_id 必须为正整数"
-    assert user_id > 0, "user_id 必须为正整数"
-    result: dict[str, object]
-    if not is_x_monitor_tool_user_allowed(user_id):
-        result = build_x_monitor_permission_failure(
-            normalized_action,
-            group_id,
-            user_id,
+    try:
+        result = _execute_xmonitor_action(
+            action=action,
+            group_id=group_id,
+            user_id=user_id,
+            username=username,
+            interval_seconds=interval_seconds,
         )
-    elif normalized_action == "start":
-        assert username.strip(), "start 操作必须提供 username"
-        assert interval_seconds > 0, "interval_seconds 必须大于 0"
-        try:
-            start_x_monitor(
-                username=username,
-                interval_seconds=interval_seconds,
-                group_id=group_id,
-                user_id=user_id,
-            )
-        except XMonitorToolError as exc:
-            result = build_x_monitor_tool_failure(
-                normalized_action,
-                group_id,
-                user_id,
-                exc,
-                username=username,
-            )
-        else:
-            result = {
-                "action": normalized_action,
-                "group_id": group_id,
-                "user_id": user_id,
-                "username": username.lstrip("@"),
-                "interval_seconds": interval_seconds,
-                "status": "started",
-            }
-    elif normalized_action == "stop":
-        assert username.strip(), "stop 操作必须提供 username"
-        stopped = stop_x_monitor(username=username, group_id=group_id)
-        result = {
-            "action": normalized_action,
-            "group_id": group_id,
-            "user_id": user_id,
-            "username": username.lstrip("@"),
-            "stopped": stopped,
-        }
-    else:
-        result = {
-            "action": normalized_action,
-            "group_id": group_id,
-            "user_id": user_id,
-            "tasks": list_x_monitor_tasks(group_id=group_id),
-        }
-    output = json.dumps(result, ensure_ascii=False)
+        output = json.dumps(result, ensure_ascii=False)
+    except XMonitorToolError as exc:
+        result = build_x_monitor_tool_failure(
+            action=action,
+            group_id=group_id,
+            user_id=user_id,
+            error=exc,
+            username=username,
+        )
+        output = json.dumps(result, ensure_ascii=False)
+    except AssertionError as exc:
+        result = build_x_monitor_invalid_argument_failure(
+            message=str(exc),
+            action=action,
+            group_id=group_id,
+            user_id=user_id,
+            username=username,
+        )
+        output = json.dumps(result, ensure_ascii=False)
+    except Exception as exc:
+        print(
+            f"[XMonitor Tool Error] {type(exc).__name__}: {exc}",
+            flush=True,
+        )
+        result = build_x_monitor_unknown_failure(
+            action=action,
+            group_id=group_id,
+            user_id=user_id,
+            username=username,
+        )
+        output = json.dumps(result, ensure_ascii=False)
     print(
         f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [XMonitor Tool Output] {output}",
         flush=True,
     )
     return output
+
+
+xmonitor.handle_validation_error = _format_xmonitor_validation_failure
 
 
 @tool("xlink")
