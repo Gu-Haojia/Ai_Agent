@@ -211,6 +211,30 @@ class MultimodalUnitTest(unittest.TestCase):
             candidates = manager._generate_url_candidates(url)
             self.assertTrue(any("imageView" not in c and "thumbnail" not in c for c in candidates[:-1]))
 
+    def test_save_remote_image_uses_validated_user_agent(self) -> None:
+        """确认最终图片下载使用与搜索验证一致的稳定 UA。"""
+        image_data = base64.b64decode(self._make_image_base64(1, 1, "PNG"))
+        response = SimpleNamespace(
+            status_code=200,
+            content=image_data,
+            headers={"Content-Type": "image/png"},
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            manager = ImageStorageManager(tmp_dir)
+            with mock.patch.object(
+                image_storage.requests,
+                "get",
+                return_value=response,
+            ) as get_mock:
+                stored = manager.save_remote_image("https://example.com/image.png")
+
+        self.assertIsNotNone(stored)
+        self.assertEqual(
+            get_mock.call_args.kwargs["headers"]["User-Agent"],
+            "Mozilla/5.0",
+        )
+
     def test_is_generated_path_handles_generated_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             manager = ImageStorageManager(tmp_dir)
