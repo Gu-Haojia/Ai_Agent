@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Optional, Sequence, TYPE_CHECKING
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
+import filetype
 import requests
 from google import genai
 from google.genai import types
@@ -137,18 +138,9 @@ class ImageStorageManager:
         Raises:
             AssertionError: 当无法识别图像类型时抛出。
         """
-        import imghdr
-
-        guessed = imghdr.what(None, data)
-        if guessed:
-            if guessed == "jpeg":
-                return "image/jpeg"
-            if guessed == "png":
-                return "image/png"
-            if guessed == "gif":
-                return "image/gif"
-            if guessed == "webp":
-                return "image/webp"
+        guessed = filetype.guess_mime(data)
+        if guessed and guessed.startswith("image/"):
+            return guessed
         if fallback:
             return fallback
         raise AssertionError("无法识别图像 MIME 类型")

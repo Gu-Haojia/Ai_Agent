@@ -119,6 +119,22 @@ class MultimodalUnitTest(unittest.TestCase):
             self.assertEqual(result.path.suffix, ".png")
             self.assertEqual(result.mime_type, "image/png")
 
+    def test_infer_mime_prefers_detected_image_type(self) -> None:
+        """应通过文件头识别真实图片类型并覆盖错误的备用 MIME。"""
+
+        image_data = base64.b64decode(self._make_image_base64(1, 1, "JPEG"))
+
+        result = ImageStorageManager._infer_mime(image_data, "image/png")
+
+        self.assertEqual(result, "image/jpeg")
+
+    def test_infer_mime_uses_fallback_for_unknown_data(self) -> None:
+        """无法从文件头识别图片时应继续使用调用方提供的备用 MIME。"""
+
+        result = ImageStorageManager._infer_mime(b"unknown-data", "image/webp")
+
+        self.assertEqual(result, "image/webp")
+
     def test_generate_image_via_openai_uses_generate_without_reference(self) -> None:
         """确认未传参考图时调用 OpenAI 图像生成接口。"""
         fake_response = SimpleNamespace(data=[SimpleNamespace(b64_json="ZmFrZQ==")])
