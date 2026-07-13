@@ -28,7 +28,6 @@ from pylatexenc.latex2text import LatexNodes2Text
 from typing_extensions import TypedDict
 from langchain_core.tools import BaseTool, tool
 from langchain.chat_models import init_chat_model
-from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.store.postgres import PostgresStore
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.store.memory import InMemoryStore
@@ -74,6 +73,10 @@ from src.tavily_search_tool import RoutedTavilySearch
 from src.anilist_client import AniListAPI, ANILIST_MEDIA_SORTS
 from src.timer_reminder import TimerReminderManager
 from src.asobi_ticket_agent import AsobiTicketQuery
+from src.checkpoint_retention import (
+    CheckpointRetentionError,
+    RetainingPostgresSaver,
+)
 from src.x_monitor import XMonitorToolError
 from src.x_monitor_tool import (
     build_x_monitor_permission_failure,
@@ -1655,6 +1658,7 @@ class AgentConfig:
     thread_id: str = "demo-plus"
     use_memory_ckpt: bool = False
     enable_tools: bool = False
+    checkpoint_retention_limit: int = 5
     # 用于持久记忆（langmem）命名空间的 store 隔离标识，由环境变量 STORE_ID 注入
     store_id: str = ""
 
@@ -1798,6 +1802,9 @@ class SQLCheckpointAgentStreamingPlus:
 
         if not self._config.use_memory_ckpt:
             assert self._config.pg_conn, "必须通过 LANGGRAPH_PG 提供 Postgres 连接串。"
+            assert (
+                self._config.checkpoint_retention_limit >= 1
+            ), "checkpoint_retention_limit 必须大于等于 1"
         if self._config.model_name != "fake:echo":
             _ensure_model_env_once(self._config.model_name)
         os.environ["IMAGE_PROVIDER"] = "gemini"
@@ -3040,7 +3047,9 @@ class SQLCheckpointAgentStreamingPlus:
             return builder.compile(checkpointer=self._saver, store=self._store)
 
         try:
-            self._saver_cm = PostgresSaver.from_conn_string(self._config.pg_conn)
+            self._saver_cm = RetainingPostgresSaver.from_conn_string(
+                self._config.pg_conn
+            )
             self._saver = self._saver_cm.__enter__()
             self._saver.setup()
             # 为 Postgres store 配置向量索引（若 API 不支持 index 参数则回退为默认构造）
@@ -3112,6 +3121,7 @@ class SQLCheckpointAgentStreamingPlus:
             cfg["configurable"]["langgraph_user_id"] = ns
         last_text = ""
         tool_notified = False
+        stream_completed = False
 
         if isinstance(user_input, HumanMessage):
             payload = {"messages": [user_input]}
@@ -3149,6 +3159,7 @@ class SQLCheckpointAgentStreamingPlus:
                     txt = _extract_text_content(m)
                     if txt:
                         last_text = txt
+            stream_completed = True
         except KeyboardInterrupt:
             print("\n暂停生成。")
             pass
@@ -3157,7 +3168,41 @@ class SQLCheckpointAgentStreamingPlus:
                 print(f"Agent: {last_text}")
             if self._printed_in_round:
                 print("")
+        if stream_completed:
+            self._prune_completed_thread(str(cfg["configurable"]["thread_id"]))
         return last_text
+
+    def _prune_completed_thread(self, thread_id: str) -> None:
+        """
+        在一次图执行成功完成后清理当前线程的旧 checkpoint。
+
+        内存 checkpointer 不产生持久化数据库膨胀，因此不执行保留清理。
+        Postgres 清理失败只记录明确错误，不覆盖已经生成的正常回复。
+
+        Args:
+            thread_id (str): 已成功完成本轮执行的 LangGraph 线程 ID。
+
+        Returns:
+            None: 函数无返回值。
+
+        Raises:
+            AssertionError: 当 Postgres 模式下 saver 类型与配置不一致时抛出。
+        """
+        if self._config.use_memory_ckpt:
+            return
+
+        assert isinstance(
+            self._saver, RetainingPostgresSaver
+        ), "Postgres 模式必须使用 RetainingPostgresSaver"
+        try:
+            self._saver.prune_thread(
+                thread_id,
+                checkpoint_ns="",
+                keep_last=self._config.checkpoint_retention_limit,
+            )
+        except CheckpointRetentionError as exc:
+            sys.stderr.write(f"[CheckpointRetention] {exc}\n")
+            return
 
     # --------------- 统计/工具 ---------------
     def del_latest_messages(self, thread_id: Optional[str] = None) -> None:
