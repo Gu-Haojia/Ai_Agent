@@ -1,5 +1,6 @@
 import base64
 from io import BytesIO
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -99,6 +100,38 @@ class MultimodalUnitTest(unittest.TestCase):
                     for item in content
                 )
             )
+
+    @unittest.skipUnless(_QQ_MODULE_AVAILABLE, "缺少 langgraph 依赖，跳过 QQ 解析逻辑测试")
+    def test_multimodal_content_builder_includes_datetime_reminder(self) -> None:
+        """
+        动态时间提醒应作为当前用户消息中的额外文本块。
+
+        Returns:
+            None: 测试无返回值。
+
+        Raises:
+            None: 断言失败时由 unittest 报告。
+        """
+        content = QQBotHandler._build_multimodal_content(
+            "用户原消息",
+            [],
+            include_datetime_system_reminder=True,
+        )
+
+        self.assertEqual(len(content), 2)
+        self.assertEqual(content[0], {"type": "text", "text": "用户原消息"})
+        self.assertTrue(
+            re.fullmatch(
+                r"<system_reminder>Current datetime: "
+                r"\d{4}-\d{2}-\d{2} \d{2}:\d{2} \(JST\), "
+                r"Weekday: [A-Za-z]+</system_reminder>",
+                str(content[1]["text"]),
+            )
+        )
+        self.assertEqual(
+            content[1]["type"],
+            "text",
+        )
 
     @unittest.skipUnless(_QQ_MODULE_AVAILABLE, "缺少 langgraph 依赖，跳过 QQ 解析逻辑测试")
     def test_compose_group_message_appends_cq_codes(self) -> None:

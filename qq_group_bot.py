@@ -844,6 +844,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
         images: Sequence[StoredImage],
         videos: Sequence[StoredVideo] = (),
         model_name: str = "",
+        include_datetime_system_reminder: bool = False,
     ) -> list[dict[str, object]]:
         """
         构造多模态消息内容列表。
@@ -853,6 +854,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
             images (Sequence[StoredImage]): 已保存的图像集合。
             videos (Sequence[StoredVideo], optional): 已保存的视频集合。
             model_name (str, optional): 当前使用的模型名称，用于选择视频片段格式。
+            include_datetime_system_reminder (bool, optional): 是否加入动态时间提醒。
 
         Returns:
             list[dict[str, object]]: 可直接传递给多模态模型的内容结构，
@@ -861,6 +863,19 @@ class QQBotHandler(BaseHTTPRequestHandler):
         """
         assert model_name or not videos, "存在视频时必须提供模型名称"
         content: list[dict[str, object]] = [{"type": "text", "text": model_input}]
+        if include_datetime_system_reminder:
+            now = datetime.now(ZoneInfo("Asia/Tokyo"))
+            content.append(
+                {
+                    "type": "text",
+                    "text": (
+                        "<system_reminder>"
+                        f"Current datetime: {now.strftime('%Y-%m-%d %H:%M (%Z)')}, "
+                        f"Weekday: {now.strftime('%A')}"
+                        "</system_reminder>"
+                    ),
+                }
+            )
         if images:
             content.append(
                 {
@@ -1394,6 +1409,9 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 if parsed.reply_message_ids
                 else []
             )
+            use_datetime_system_reminder = _is_truthy_env(
+                os.environ.get("ENABLE_DATETIME_SYSTEM_REMINDER")
+            )
             reply_texts = [c.text for c in reply_contents if c.text]
             user_text = parsed.text
             if not user_text:
@@ -1408,16 +1426,13 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 else:
                     user_text = "（用户未提供文本）"
             if reply_contents:
-                include_reply_timestamp = _is_truthy_env(
-                    os.environ.get("ENABLE_DATETIME_SYSTEM_REMINDER")
-                )
                 context_lines: list[str] = []
                 for idx, content in enumerate(reply_contents, 1):
                     context_lines.append(
                         _format_reply_context(
                             idx,
                             content,
-                            include_timestamp=include_reply_timestamp,
+                            include_timestamp=use_datetime_system_reminder,
                         )
                     )
                 context_lines.append(f"当前消息: [{user_text}]")
@@ -1468,8 +1483,11 @@ class QQBotHandler(BaseHTTPRequestHandler):
                     stored_images,
                     stored_videos,
                     self.agent._config.model_name,
+                    include_datetime_system_reminder=use_datetime_system_reminder,
                 )
-                if stored_images or stored_videos
+                if stored_images
+                or stored_videos
+                or use_datetime_system_reminder
                 else model_input
             )
             answer = self.agent.chat_once_stream(

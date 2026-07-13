@@ -2986,18 +2986,6 @@ class SQLCheckpointAgentStreamingPlus:
                     )
                 )
             messages.extend(list(state.get("messages", [])))  # 不修改原列表
-            if use_datetime_system_reminder:
-                now = datetime.now(ZoneInfo("Asia/Tokyo"))
-                messages.append(
-                    HumanMessage(
-                        content=(
-                            "<system_reminder>"
-                            f"Current datetime: {now.strftime('%Y-%m-%d %H:%M (%Z)')}, "
-                            f"Weekday: {now.strftime('%A')}"
-                            "</system_reminder>"
-                        )
-                    )
-                )
 
             # 首轮/无工具反馈：同样改为流式输出
             # 显式要求则强制工具，否则交由模型自动决定

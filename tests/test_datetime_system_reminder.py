@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import re
 from unittest import mock
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
+from qq_group_bot import QQBotHandler
 from sql_agent_cli_stream_plus import (
     AgentConfig,
     SQLCheckpointAgentStreamingPlus,
@@ -16,13 +16,13 @@ from sql_agent_cli_stream_plus import (
 
 
 @pytest.mark.parametrize("enabled", [False, True])
-def test_datetime_system_reminder_switches_time_location(
+def test_datetime_system_reminder_switches_legacy_system_date(
     enabled: bool,
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
-    验证环境变量在旧系统日期与动态用户提醒之间切换。
+    验证动态提醒开关反向控制旧系统日期。
 
     Args:
         enabled (bool): 是否开启动态时间提醒模式。
@@ -59,7 +59,16 @@ def test_datetime_system_reminder_switches_time_location(
     agent.set_token_printer(lambda _: None)
 
     try:
-        result = agent.chat_once_stream("你好")
+        user_input = (
+            QQBotHandler._build_multimodal_content(
+                "你好",
+                [],
+                include_datetime_system_reminder=True,
+            )
+            if enabled
+            else "你好"
+        )
+        result = agent.chat_once_stream(user_input)
         model_messages = list(invoke_mock.call_args.args[0])
         system_message = model_messages[0]
         human_messages = [
@@ -68,26 +77,29 @@ def test_datetime_system_reminder_switches_time_location(
 
         assert result == "ok"
         assert isinstance(system_message, SystemMessage)
+        assert len(human_messages) == 1
         if enabled:
             assert "当前时间是东京时间" not in str(system_message.content)
-            assert len(human_messages) == 2
-            assert human_messages[0].content == "你好"
-            assert re.fullmatch(
-                r"<system_reminder>Current datetime: "
-                r"\d{4}-\d{2}-\d{2} \d{2}:\d{2} \(JST\), "
-                r"Weekday: [A-Za-z]+</system_reminder>",
-                str(human_messages[1].content),
-            )
-            persisted_messages = agent.get_latest_messages(
-                f"test-datetime-reminder-{enabled}"
-            )
-            assert all(
-                "<system_reminder>" not in str(message.content)
-                for message in persisted_messages
+            assert isinstance(human_messages[0].content, list)
+            assert human_messages[0].content[0] == {
+                "type": "text",
+                "text": "你好",
+            }
+            assert str(human_messages[0].content[1]["text"]).startswith(
+                "<system_reminder>Current datetime:"
             )
         else:
             assert "当前时间是东京时间" in str(system_message.content)
-            assert len(human_messages) == 1
             assert human_messages[0].content == "你好"
+        persisted_messages = agent.get_latest_messages(
+            f"test-datetime-reminder-{enabled}"
+        )
+        persisted_human_messages = [
+            message
+            for message in persisted_messages
+            if isinstance(message, HumanMessage)
+        ]
+        assert len(persisted_human_messages) == 1
+        assert persisted_human_messages[0].content == human_messages[0].content
     finally:
         agent.shutdown()
