@@ -529,6 +529,34 @@ def test_agent_persists_group_context_summary_in_thread_state(
     assert len(messages) < 20
 
 
+def test_get_latest_state_values_does_not_read_checkpoint_history() -> None:
+    """
+    验证读取最新状态时不会遍历线程的全部 checkpoint 历史。
+
+    Returns:
+        None: 测试用例无返回值。
+
+    Raises:
+        None: 测试用例不主动抛出异常。
+    """
+    graph = mock.Mock()
+    graph.get_state.return_value = SimpleNamespace(
+        values={"group_context_summary": "当前摘要"}
+    )
+    graph.get_state_history.side_effect = AssertionError("不应读取全部 checkpoint 历史")
+    agent = object.__new__(SQLCheckpointAgentStreamingPlus)
+    agent._graph = graph
+    agent._config = SimpleNamespace(thread_id="default-thread")
+
+    values = agent.get_latest_state_values("summary-thread")
+
+    assert values == {"group_context_summary": "当前摘要"}
+    graph.get_state.assert_called_once_with(
+        {"configurable": {"thread_id": "summary-thread"}}
+    )
+    graph.get_state_history.assert_not_called()
+
+
 @pytest.mark.parametrize(
     ("summary", "expected_message"),
     [

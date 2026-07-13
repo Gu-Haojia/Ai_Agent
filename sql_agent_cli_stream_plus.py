@@ -3265,10 +3265,8 @@ class SQLCheckpointAgentStreamingPlus:
             AssertionError: 当内部图或检查点访问异常时抛出。
         """
         cfg = {"configurable": {"thread_id": thread_id or self._config.thread_id}}
-        states = list(self._graph.get_state_history(cfg))
-        if not states:
-            return {}
-        values = states[0].values
+        state = self._graph.get_state(cfg)
+        values = state.values
         assert isinstance(values, dict), "最新检查点 values 格式非法"
         return dict(values)
 
