@@ -26,6 +26,7 @@ class QQBotReplyContextTests(unittest.TestCase):
             "status": "ok",
             "retcode": 0,
             "data": {
+                "time": 1704067200,
                 "message": [{"type": "text", "data": {"text": "原消息"}}],
                 "raw_message": "原消息",
                 "sender": {
@@ -45,6 +46,7 @@ class QQBotReplyContextTests(unittest.TestCase):
         self.assertEqual(content.user_id, "123456")
         self.assertEqual(content.user_name, "群名片")
         self.assertEqual(content.text, "原消息")
+        self.assertEqual(content.sent_at, 1704067200)
 
     def test_format_reply_context_includes_sender(self) -> None:
         """
@@ -70,6 +72,54 @@ class QQBotReplyContextTests(unittest.TestCase):
             result,
             "引用消息1: User_id: [123456]; User_name: 群名片; Msg:\n[原消息]",
         )
+
+    def test_format_reply_context_includes_timestamp_when_enabled(self) -> None:
+        """
+        开启时间戳格式化时，引用上下文应包含东京时间。
+
+        Returns:
+            None: 测试无返回值。
+
+        Raises:
+            None: 断言失败时由 unittest 报告。
+        """
+        content = MessageContent(
+            text="原消息",
+            images=(),
+            videos=(),
+            user_id="123456",
+            user_name="群名片",
+            sent_at=1704067200,
+        )
+
+        result = _format_reply_context(1, content, include_timestamp=True)
+
+        self.assertEqual(
+            result,
+            "引用消息1: User_id: [123456]; User_name: 群名片; "
+            "Sent_at: [2024-01-01 09:00:00 (JST)]; Msg:\n[原消息]",
+        )
+
+    def test_format_reply_context_requires_timestamp_when_enabled(self) -> None:
+        """
+        开启时间戳格式化但引用消息缺少时间时应显式失败。
+
+        Returns:
+            None: 测试无返回值。
+
+        Raises:
+            None: 被测断言由测试捕获。
+        """
+        content = MessageContent(
+            text="原消息",
+            images=(),
+            videos=(),
+            user_id="123456",
+            user_name="群名片",
+        )
+
+        with self.assertRaisesRegex(AssertionError, "引用消息时间戳不能为空"):
+            _format_reply_context(1, content, include_timestamp=True)
 
 
 if __name__ == "__main__":

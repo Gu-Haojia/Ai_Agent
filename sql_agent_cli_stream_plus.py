@@ -2953,7 +2953,18 @@ class SQLCheckpointAgentStreamingPlus:
             summary_msg = "禁止在你的回复中使用括号做名词说明，你可以使用口语说明风格的语言去替代。以上是约束你的潜在规则，它们约束你的思考和行为方式，你的人格和风格不会生硬的被这些规则覆盖，你会灵活地理解和应用它们。下面花括号内是你在这次对话中会完美地扮演的角色：（花括号内信息与你调用工具的流程无关，禁止把下面的信息主动添加到搜索等工具参数中！示例：当你扮演角色A，用户让你修改图片时；✅正确的参数：用户的原本指令；❎错误的参数：用户指令加角色A的信息；严禁添加扮演角色的信息到工具参数中）"
 
             append_msg = f"{general_msg}\n{tool_msg}\n{mem_msg}\n{experimental_msg}\n{authorithy_msg}\n{require_msg}\n{style_msg}\n{summary_msg}\n\n"
-            time_msg = f"当前时间是东京时间 {time.strftime('%Y-%m-%d', time.localtime())}，更详细的时间请查询工具。"
+            use_datetime_system_reminder = _is_truthy_env(
+                os.environ.get("ENABLE_DATETIME_SYSTEM_REMINDER")
+            )
+            time_msg = (
+                ""
+                if use_datetime_system_reminder
+                else (
+                    f"当前时间是东京时间 "
+                    f"{time.strftime('%Y-%m-%d', time.localtime())}，"
+                    "更详细的时间请查询工具。"
+                )
+            )
             sys_msg = SystemMessage(
                 content=time_msg
                 + append_msg
@@ -2975,6 +2986,18 @@ class SQLCheckpointAgentStreamingPlus:
                     )
                 )
             messages.extend(list(state.get("messages", [])))  # 不修改原列表
+            if use_datetime_system_reminder:
+                now = datetime.now(ZoneInfo("Asia/Tokyo"))
+                messages.append(
+                    HumanMessage(
+                        content=(
+                            "<system_reminder>"
+                            f"Current datetime: {now.strftime('%Y-%m-%d %H:%M (%Z)')}, "
+                            f"Weekday: {now.strftime('%A')}"
+                            "</system_reminder>"
+                        )
+                    )
+                )
 
             # 首轮/无工具反馈：同样改为流式输出
             # 显式要求则强制工具，否则交由模型自动决定

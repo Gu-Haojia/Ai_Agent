@@ -23,6 +23,7 @@ NapCatQQ 专用的 QQ 群机器人（OneBot v11 HTTP 回调）。
 - ONEBOT_ACCESS_TOKEN: NapCat HTTP API token（若开启验证）
 - ALLOWED_GROUPS: 允许响应的群ID，逗号分隔；为空表示不限制
 - CMD_ALLOWED_USERS: 命令白名单用户QQ号，逗号分隔；为空表示所有人可执行命令
+- ENABLE_DATETIME_SYSTEM_REMINDER: 设为 1 时使用动态时间提醒并显示引用消息时间
 - MODEL_NAME, LANGGRAPH_PG, THREAD_ID, ENABLE_TOOLS 等：透传给 SQL Agent
 
 安全：
@@ -41,6 +42,7 @@ import shlex
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from datetime import datetime
 from pathlib import Path
 from dataclasses import dataclass
 from hashlib import sha1
@@ -49,6 +51,7 @@ from threading import Lock
 from typing import Callable, ClassVar, Optional, Sequence, Union
 from urllib.parse import urljoin
 from urllib.request import Request, urlopen
+from zoneinfo import ZoneInfo
 
 
 _CQ_REPLY_PATTERN = re.compile(r"\[CQ:reply,([^\]]*)\]")
@@ -113,7 +116,7 @@ def _fetch_message_content(
     api_base: str, message_id: str, access_token: str = ""
 ) -> MessageContent:
     """
-    通过 OneBot HTTP API 获取指定消息的文本、图像与视频内容。
+    通过 OneBot HTTP API 获取指定消息的内容、发送者与发送时间。
 
     Args:
         api_base (str): OneBot HTTP API 的基地址。
@@ -121,10 +124,11 @@ def _fetch_message_content(
         access_token (str): API Token，可为空字符串。
 
     Returns:
-        MessageContent: 对应消息的文本与图像内容。
+        MessageContent: 对应消息的标准化内容与元信息。
 
     Raises:
         RuntimeError: 当 HTTP 响应码或返回 retcode 不符合预期时抛出。
+        AssertionError: 当 OneBot 返回的数据结构或时间戳非法时抛出。
     """
 
     assert message_id, "message_id 不可为空"
@@ -153,6 +157,11 @@ def _fetch_message_content(
     user_name = str(
         sender.get("card") or sender.get("nickname") or user_id
     ).strip()
+    sent_at = data.get("time")
+    assert sent_at is None or isinstance(
+        sent_at, int
+    ), "get_msg time 必须为整数时间戳"
+    assert sent_at is None or sent_at > 0, "get_msg time 必须为正整数时间戳"
     content = _extract_message_content(data.get("message"), data.get("raw_message"))
     return MessageContent(
         text=content.text,
@@ -160,6 +169,7 @@ def _fetch_message_content(
         videos=content.videos,
         user_id=user_id,
         user_name=user_name,
+        sent_at=sent_at,
     )
 
 
@@ -191,6 +201,7 @@ from langchain.chat_models import init_chat_model
 from sql_agent_cli_stream_plus import (
     AgentConfig,
     SQLCheckpointAgentStreamingPlus,
+    _is_truthy_env,
 )
 from src.google_reverse_image_tool import ReverseImageUploader
 from src.meru_monitor import DEFAULT_LIMIT, MeruMonitorManager, MeruSearchResult
@@ -457,6 +468,7 @@ class MessageContent:
         videos (tuple[VideoSegmentInfo, ...]): 视频消息段。
         user_id (str): 消息发送者 QQ 号。
         user_name (str): 消息发送者群名片或昵称。
+        sent_at (Optional[int]): 消息发送时的 Unix 时间戳。
     """
 
     text: str
@@ -464,25 +476,41 @@ class MessageContent:
     videos: tuple[VideoSegmentInfo, ...]
     user_id: str = ""
     user_name: str = ""
+    sent_at: Optional[int] = None
 
 
-def _format_reply_context(index: int, content: MessageContent) -> str:
+def _format_reply_context(
+    index: int,
+    content: MessageContent,
+    include_timestamp: bool = False,
+) -> str:
     """
     将引用消息格式化为包含发送者信息的 Agent 上下文。
 
     Args:
         index (int): 从一开始的引用消息序号。
         content (MessageContent): 引用消息内容。
+        include_timestamp (bool): 是否在上下文中加入消息发送时间。
 
     Returns:
         str: 格式化后的引用消息上下文。
 
     Raises:
-        AssertionError: 当序号或发送者信息为空时抛出。
+        AssertionError: 当序号、发送者信息或必需的时间戳为空时抛出。
     """
     assert index > 0, "引用消息序号必须大于零"
     assert content.user_id, "引用消息 User_id 不能为空"
     assert content.user_name, "引用消息 User_name 不能为空"
+    timestamp_context = ""
+    if include_timestamp:
+        assert content.sent_at is not None, "引用消息时间戳不能为空"
+        sent_at = datetime.fromtimestamp(
+            content.sent_at,
+            tz=ZoneInfo("Asia/Tokyo"),
+        )
+        timestamp_context = (
+            f" Sent_at: [{sent_at.strftime('%Y-%m-%d %H:%M:%S (%Z)')}];"
+        )
     summary = content.text.strip() or "（引用消息未提供文本）"
     if content.images:
         summary += f"（包含{len(content.images)}张图片）"
@@ -490,7 +518,7 @@ def _format_reply_context(index: int, content: MessageContent) -> str:
         summary += f"（包含{len(content.videos)}个视频）"
     return (
         f"引用消息{index}: User_id: [{content.user_id}]; "
-        f"User_name: {content.user_name}; Msg:\n[{summary}]"
+        f"User_name: {content.user_name};{timestamp_context} Msg:\n[{summary}]"
     )
 
 
@@ -1380,9 +1408,18 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 else:
                     user_text = "（用户未提供文本）"
             if reply_contents:
+                include_reply_timestamp = _is_truthy_env(
+                    os.environ.get("ENABLE_DATETIME_SYSTEM_REMINDER")
+                )
                 context_lines: list[str] = []
                 for idx, content in enumerate(reply_contents, 1):
-                    context_lines.append(_format_reply_context(idx, content))
+                    context_lines.append(
+                        _format_reply_context(
+                            idx,
+                            content,
+                            include_timestamp=include_reply_timestamp,
+                        )
+                    )
                 context_lines.append(f"当前消息: [{user_text}]")
                 user_text = "\n".join(context_lines)
             model_input = f"Group_id: [{group_id}]; User_id: [{user_id}]; User_name: {author}; Msg:\n[{user_text}]"
