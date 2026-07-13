@@ -7,9 +7,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import urljoin, urlparse
 
 import requests
+from bs4 import BeautifulSoup
 
 from src.google_reverse_image_client import GoogleReverseImageClient
 
@@ -89,16 +90,60 @@ class ReverseImageUploader:
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
             raise ValueError("上传服务返回内容异常，未提供可访问的 URL。")
 
-        download_path = parsed.path
-        if not download_path.startswith("/dl/"):
-            if download_path.startswith("/"):
-                download_path = "/dl" + download_path
-            else:
-                download_path = f"/dl/{download_path}"
+        return self._resolve_download_url(link.strip())
 
-        return urlunparse(
-            parsed._replace(path=download_path, params="", query="", fragment="")
-        )
+    def _resolve_download_url(self, landing_url: str) -> str:
+        """
+        从 tmpfiles 落地页解析当前有效的签名下载链接。
+
+        Args:
+            landing_url (str): 上传接口返回的文件落地页地址。
+
+        Returns:
+            str: tmpfiles 落地页提供的签名下载链接。
+
+        Raises:
+            ValueError: 当落地页请求失败、响应异常或未提供合法下载链接时抛出。
+        """
+
+        headers = {
+            "User-Agent": self.user_agent,
+            "Accept": "text/html",
+        }
+        try:
+            response = requests.get(
+                landing_url,
+                headers=headers,
+                timeout=self.timeout_seconds,
+            )
+        except requests.RequestException as exc:
+            raise ValueError("读取临时图片下载页面失败，请检查网络。") from exc
+
+        if response.status_code >= 400:
+            raise ValueError(
+                f"临时图片下载页面返回异常状态码：HTTP {response.status_code}。"
+            )
+
+        soup = BeautifulSoup(response.text, "html.parser")
+        download_anchor = soup.select_one("a.download[href]")
+        if download_anchor is None:
+            raise ValueError("临时图片下载页面缺少下载链接。")
+
+        href = download_anchor.get("href")
+        if not isinstance(href, str) or not href.strip():
+            raise ValueError("临时图片下载页面提供了无效下载链接。")
+
+        download_url = urljoin(landing_url, href.strip())
+        landing_parsed = urlparse(landing_url)
+        download_parsed = urlparse(download_url)
+        if download_parsed.scheme not in {"http", "https"}:
+            raise ValueError("临时图片下载链接协议无效。")
+        if download_parsed.netloc != landing_parsed.netloc:
+            raise ValueError("临时图片下载链接域名与上传服务不一致。")
+        if not download_parsed.path.startswith("/dl/"):
+            raise ValueError("临时图片下载链接路径无效。")
+
+        return download_url
 
 
 @dataclass
