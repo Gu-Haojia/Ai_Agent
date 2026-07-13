@@ -145,7 +145,22 @@ def _fetch_message_content(
     if body.get("status") != "ok" or body.get("retcode") not in {0, None}:
         raise RuntimeError(f"get_msg failed: retcode={body.get('retcode')}")
     data = body.get("data") or {}
-    return _extract_message_content(data.get("message"), data.get("raw_message"))
+    assert isinstance(data, dict), "get_msg data 必须为对象"
+    sender = data.get("sender") or {}
+    assert isinstance(sender, dict), "get_msg sender 必须为对象"
+    user_id = str(sender.get("user_id") or "").strip()
+    assert user_id, "get_msg sender.user_id 不能为空"
+    user_name = str(
+        sender.get("card") or sender.get("nickname") or user_id
+    ).strip()
+    content = _extract_message_content(data.get("message"), data.get("raw_message"))
+    return MessageContent(
+        text=content.text,
+        images=content.images,
+        videos=content.videos,
+        user_id=user_id,
+        user_name=user_name,
+    )
 
 
 def _load_env_from_files(files: list[str]) -> None:
@@ -433,11 +448,50 @@ class VideoSegmentInfo:
 
 @dataclass(frozen=True)
 class MessageContent:
-    """标准化的消息内容（文本、图像与视频）。"""
+    """
+    标准化的消息内容。
+
+    Attributes:
+        text (str): 消息文本。
+        images (tuple[ImageSegmentInfo, ...]): 图片消息段。
+        videos (tuple[VideoSegmentInfo, ...]): 视频消息段。
+        user_id (str): 消息发送者 QQ 号。
+        user_name (str): 消息发送者群名片或昵称。
+    """
 
     text: str
     images: tuple[ImageSegmentInfo, ...]
     videos: tuple[VideoSegmentInfo, ...]
+    user_id: str = ""
+    user_name: str = ""
+
+
+def _format_reply_context(index: int, content: MessageContent) -> str:
+    """
+    将引用消息格式化为包含发送者信息的 Agent 上下文。
+
+    Args:
+        index (int): 从一开始的引用消息序号。
+        content (MessageContent): 引用消息内容。
+
+    Returns:
+        str: 格式化后的引用消息上下文。
+
+    Raises:
+        AssertionError: 当序号或发送者信息为空时抛出。
+    """
+    assert index > 0, "引用消息序号必须大于零"
+    assert content.user_id, "引用消息 User_id 不能为空"
+    assert content.user_name, "引用消息 User_name 不能为空"
+    summary = content.text.strip() or "（引用消息未提供文本）"
+    if content.images:
+        summary += f"（包含{len(content.images)}张图片）"
+    if content.videos:
+        summary += f"（包含{len(content.videos)}个视频）"
+    return (
+        f"引用消息{index}: User_id: [{content.user_id}]; "
+        f"User_name: {content.user_name}; Msg:\n[{summary}]"
+    )
 
 
 @dataclass(frozen=True)
@@ -1328,14 +1382,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
             if reply_contents:
                 context_lines: list[str] = []
                 for idx, content in enumerate(reply_contents, 1):
-                    summary = content.text.strip()
-                    if not summary:
-                        summary = "（引用消息未提供文本）"
-                    if content.images:
-                        summary += f"（包含{len(content.images)}张图片）"
-                    if content.videos:
-                        summary += f"（包含{len(content.videos)}个视频）"
-                    context_lines.append(f"引用消息{idx}: [{summary}]")
+                    context_lines.append(_format_reply_context(idx, content))
                 context_lines.append(f"当前消息: [{user_text}]")
                 user_text = "\n".join(context_lines)
             model_input = f"Group_id: [{group_id}]; User_id: [{user_id}]; User_name: {author}; Msg:\n[{user_text}]"
