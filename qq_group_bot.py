@@ -206,6 +206,7 @@ from sql_agent_cli_stream_plus import (
 from src.google_reverse_image_tool import ReverseImageUploader
 from src.meru_monitor import DEFAULT_LIMIT, MeruMonitorManager, MeruSearchResult
 from src.meru_watch_media import send_meru_message_with_images
+from src.napcat_account_profile import PromptAccountProfileManager
 from src.x_monitor import (
     DEFAULT_LIMIT as X_DEFAULT_LIMIT,
     XMonitorManager,
@@ -350,6 +351,116 @@ def _verify_signature(secret: str, body: bytes, signature: str) -> bool:
 
 
 MessagePayload = Union[str, Sequence[dict[str, dict[str, str]]]]
+
+
+def _call_onebot_action(
+    api_base: str,
+    action: str,
+    payload: dict[str, object],
+    access_token: str = "",
+) -> dict[str, object]:
+    """调用 NapCat OneBot action 并验证 HTTP 与业务响应。
+
+    Args:
+        api_base (str): NapCat HTTP API 基地址。
+        action (str): OneBot action 名称。
+        payload (dict[str, object]): JSON 请求参数。
+        access_token (str): API Token，可为空。
+
+    Returns:
+        dict[str, object]: NapCat 返回的业务响应。
+
+    Raises:
+        AssertionError: 当 action 或请求参数非法时抛出。
+        RuntimeError: 当 HTTP、JSON 或 NapCat 业务响应失败时抛出。
+    """
+    normalized_action = action.strip()
+    assert normalized_action, "OneBot action 不能为空"
+    assert isinstance(payload, dict), "OneBot payload 必须为字典"
+    url = urljoin(api_base + "/", normalized_action)
+    headers = {"Content-Type": "application/json"}
+    if access_token:
+        headers["Authorization"] = f"Bearer {access_token}"
+    request = Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers=headers,
+    )
+    with urlopen(request, timeout=60) as response:
+        if response.status != 200:
+            raise RuntimeError(f"{normalized_action} HTTP {response.status}")
+        response_body = response.read().decode("utf-8")
+    try:
+        result = json.loads(response_body)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"{normalized_action} 返回内容不是合法 JSON") from exc
+    if not isinstance(result, dict):
+        raise RuntimeError(f"{normalized_action} 返回结构必须为对象")
+    if result.get("status") != "ok" or result.get("retcode") != 0:
+        detail = result.get("message") or result.get("wording") or "未知错误"
+        raise RuntimeError(
+            f"{normalized_action} 调用失败：retcode={result.get('retcode')} "
+            f"message={detail}"
+        )
+    return result
+
+
+def _set_qq_nickname(
+    api_base: str,
+    nickname: str,
+    access_token: str = "",
+) -> None:
+    """修改当前 NapCat 登录账号的 QQ 昵称。
+
+    Args:
+        api_base (str): NapCat HTTP API 基地址。
+        nickname (str): 新 QQ 昵称。
+        access_token (str): API Token，可为空。
+
+    Returns:
+        None: 修改成功时无返回值。
+
+    Raises:
+        AssertionError: 当昵称为空时抛出。
+        RuntimeError: 当 NapCat action 调用失败时抛出。
+    """
+    normalized_nickname = nickname.strip()
+    assert normalized_nickname, "QQ 昵称不能为空"
+    _call_onebot_action(
+        api_base,
+        "set_qq_profile",
+        {"nickname": normalized_nickname},
+        access_token,
+    )
+
+
+def _set_qq_avatar(
+    api_base: str,
+    avatar_base64: str,
+    access_token: str = "",
+) -> None:
+    """通过 Base64 内容修改当前 NapCat 登录账号头像。
+
+    Args:
+        api_base (str): NapCat HTTP API 基地址。
+        avatar_base64 (str): 头像文件的纯 Base64 内容。
+        access_token (str): API Token，可为空。
+
+    Returns:
+        None: 修改成功时无返回值。
+
+    Raises:
+        AssertionError: 当头像内容为空时抛出。
+        RuntimeError: 当 NapCat action 调用失败时抛出。
+    """
+    normalized_avatar_base64 = avatar_base64.strip()
+    assert normalized_avatar_base64, "头像 Base64 内容不能为空"
+    _call_onebot_action(
+        api_base,
+        "set_qq_avatar",
+        {"file": f"base64://{normalized_avatar_base64}"},
+        access_token,
+    )
 
 
 def _send_group_msg(
@@ -780,6 +891,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
     image_storage: Optional[ImageStorageManager] = None
     meru_monitor: Optional[MeruMonitorManager] = None
     x_monitor: Optional[XMonitorManager] = None
+    account_profile_manager: Optional[PromptAccountProfileManager] = None
     _post_lock: ClassVar[Lock] = Lock()  # 串行化处理 POST 请求
     # 群/Prompt -> 线程ID 映射，用于在 Prompt 间恢复各自的群对话线程
     _group_threads: dict[str, str] = {}
@@ -2406,14 +2518,48 @@ class QQBotHandler(BaseHTTPRequestHandler):
                     self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
                 )
                 return True
-            os.environ["SYS_MSG_FILE"] = path
             try:
+                profile_manager = self.account_profile_manager
+                assert isinstance(
+                    profile_manager, PromptAccountProfileManager
+                ), "Prompt 账号资料管理器尚未初始化"
+                account_profile = profile_manager.resolve(name)
+                os.environ["SYS_MSG_FILE"] = path
                 self.rebuild_agent()
                 thread_id = self._thread_id_for(group_id)
-                msg = (
+                switch_msg = (
                     f"已切换到 {name} 并恢复对应线程：{thread_id}。"
                     "需要清除记忆请使用/forget 命令。"
                 )
+                if account_profile is None:
+                    msg = switch_msg + "该 Prompt 未配置账号资料，昵称和头像保持不变。"
+                else:
+                    try:
+                        _set_qq_nickname(
+                            self.bot_cfg.api_base,
+                            account_profile.nickname,
+                            self.bot_cfg.access_token,
+                        )
+                    except (AssertionError, RuntimeError) as profile_error:
+                        msg = switch_msg + f"账号资料同步失败：{profile_error}"
+                    else:
+                        try:
+                            _set_qq_avatar(
+                                self.bot_cfg.api_base,
+                                account_profile.avatar_base64,
+                                self.bot_cfg.access_token,
+                            )
+                        except (AssertionError, RuntimeError) as avatar_error:
+                            msg = (
+                                switch_msg
+                                + f"昵称已切换为 {account_profile.nickname}，"
+                                + f"但头像同步失败：{avatar_error}"
+                            )
+                        else:
+                            msg = (
+                                switch_msg
+                                + f"账号昵称和头像已切换为 {account_profile.nickname}。"
+                            )
             except AssertionError as e:
                 msg = f"切换失败：{e}"
             except Exception as e:
@@ -2718,6 +2864,10 @@ def main() -> None:
     QQBotHandler.bot_cfg = bot_cfg
     QQBotHandler.agent = agent
     QQBotHandler.image_storage = image_manager
+    QQBotHandler.account_profile_manager = PromptAccountProfileManager(
+        config_path=Path("prompts/avatars/account_profiles.json"),
+        avatar_dir=Path("prompts/avatars"),
+    )
     meru_store = os.environ.get("MERU_WATCH_STORE", ".meru_watch.json")
     meru_monitor = MeruMonitorManager(store_path=meru_store)
     QQBotHandler.meru_monitor = meru_monitor

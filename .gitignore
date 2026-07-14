@@ -45,6 +45,11 @@ logs/
 # Prompts (ignored)
 prompt/
 prompts/
+!prompts/
+prompts/*
+!prompts/avatars/
+prompts/avatars/*
+!prompts/avatars/account_profiles.json
 AGENTS.md
 
 # Excutable scripts

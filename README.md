@@ -141,8 +141,20 @@ python qq_group_bot.py
 ```
 
 - 支持 @ 机器人触发、`/switch` Prompt 并恢复对应线程、`/clear` 重置当前 Prompt 线程、`/cmd` 查看指令。
+- `/switch` 会读取 `prompts/avatars/account_profiles.json`；已登记 Prompt 会同步同目录中的头像，未登记 Prompt 保持当前账号资料不变。
 - 提供健康检查：`curl http://127.0.0.1:8080/healthz`.
 - `logs/`、`.qq_group_threads.json`、`ticket_data/` 会在首次运行时自动生成。
+
+Prompt 账号资料配置使用不含 `.txt` 后缀的 Prompt 文件名作为键：
+
+```json
+{
+  "藤田ことね": {
+    "nickname": "藤田ことね",
+    "avatar_file": "藤田ことね.png"
+  }
+}
+```
 
 ## 🗄️ PostgreSQL 持久化
 
