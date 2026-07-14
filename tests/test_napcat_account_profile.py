@@ -13,6 +13,28 @@ import qq_group_bot
 from src.napcat_account_profile import PromptAccountProfileManager
 
 
+def test_manager_creates_missing_local_config(tmp_path: Path) -> None:
+    """验证初始化时自动创建头像目录与空配置。
+
+    Args:
+        tmp_path (Path): pytest 临时目录。
+
+    Returns:
+        None: 测试通过时无返回值。
+
+    Raises:
+        None: 测试用例不主动抛出异常。
+    """
+    avatar_dir = tmp_path / "prompts" / "avatars"
+    config_path = avatar_dir / "account_profiles.json"
+
+    manager = PromptAccountProfileManager(config_path, avatar_dir)
+
+    assert avatar_dir.is_dir()
+    assert config_path.read_text(encoding="utf-8") == "{}\n"
+    assert manager.resolve("default") is None
+
+
 def test_manager_resolves_chinese_profile_and_avatar(tmp_path: Path) -> None:
     """验证中文 Prompt、昵称和头像文件名能够正确解析。
 

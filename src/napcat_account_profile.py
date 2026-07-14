@@ -44,6 +44,7 @@ class PromptAccountProfileManager:
 
     Raises:
         AssertionError: 当初始化路径参数非法时抛出。
+        OSError: 当配置目录或文件无法创建时抛出。
     """
 
     def __init__(self, config_path: Path, avatar_dir: Path) -> None:
@@ -58,11 +59,19 @@ class PromptAccountProfileManager:
 
         Raises:
             AssertionError: 当路径参数类型非法时抛出。
+            OSError: 当配置目录或文件无法创建时抛出。
         """
         assert isinstance(config_path, Path), "config_path 必须为 Path"
         assert isinstance(avatar_dir, Path), "avatar_dir 必须为 Path"
         self._config_path = config_path.resolve()
         self._avatar_dir = avatar_dir.resolve()
+        self._avatar_dir.mkdir(parents=True, exist_ok=True)
+        self._config_path.parent.mkdir(parents=True, exist_ok=True)
+        if not self._config_path.exists():
+            self._config_path.write_text("{}\n", encoding="utf-8")
+        assert self._config_path.is_file(), (
+            f"账号资料配置路径不是文件：{self._config_path}"
+        )
 
     def resolve(self, prompt_name: str) -> Optional[PromptAccountProfile]:
         """查找 Prompt 对应资料，未登记时返回 ``None``。
