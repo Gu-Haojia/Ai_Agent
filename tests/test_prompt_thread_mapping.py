@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,6 +12,7 @@ import pytest
 
 import qq_group_bot
 from qq_group_bot import QQBotHandler
+from src.napcat_account_profile import PromptAccountProfileManager
 
 
 @pytest.fixture(autouse=True)
@@ -35,6 +37,13 @@ def reset_thread_mapping_state(
     monkeypatch.setattr(QQBotHandler, "_env_consistency_checked", False)
     monkeypatch.setattr(QQBotHandler, "_group_namespaces", {})
     monkeypatch.setattr(QQBotHandler, "_ns_store_file", str(tmp_path / "namespaces.json"))
+    profile_config = tmp_path / "account_profiles.json"
+    profile_config.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        QQBotHandler,
+        "account_profile_manager",
+        PromptAccountProfileManager(profile_config, tmp_path / "avatars"),
+    )
     monkeypatch.setenv("SYS_MSG_FILE", "/app/prompts/default.txt")
 
 
@@ -135,7 +144,13 @@ def test_switch_command_selects_target_prompt_thread(
         QQBotHandler,
         "rebuild_agent",
         return_value=agent,
-    ), mock.patch.object(qq_group_bot, "_send_group_msg") as send_mock:
+    ), mock.patch.object(
+        qq_group_bot, "_set_qq_nickname"
+    ) as nickname_mock, mock.patch.object(
+        qq_group_bot, "_set_qq_avatar"
+    ) as avatar_mock, mock.patch.object(
+        qq_group_bot, "_send_group_msg"
+    ) as send_mock:
         handled = handler._handle_commands(10001, 20002, "/switch kotone")
 
     assert handled is True
@@ -146,6 +161,191 @@ def test_switch_command_selects_target_prompt_thread(
     assert send_mock.call_args.args[2].startswith(
         "已切换到 kotone 并恢复对应线程：thread-10001-mother-202。"
     )
+    nickname_mock.assert_not_called()
+    avatar_mock.assert_not_called()
+
+
+def test_switch_command_applies_tracked_account_profile(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """验证已登记 Prompt 会同步昵称和 Base64 头像。
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): pytest 环境与属性替换工具。
+        tmp_path (Path): pytest 临时目录。
+
+    Returns:
+        None: 测试通过时无返回值。
+
+    Raises:
+        None: 测试用例不主动抛出异常。
+    """
+    prompts_dir = tmp_path / "prompts"
+    avatar_dir = prompts_dir / "avatars"
+    avatar_dir.mkdir(parents=True)
+    (prompts_dir / "藤田ことね.txt").write_text("prompt", encoding="utf-8")
+    (avatar_dir / "藤田ことね.png").write_bytes(b"avatar")
+    profile_config = prompts_dir / "account_profiles.json"
+    profile_config.write_text(
+        json.dumps(
+            {
+                "藤田ことね": {
+                    "nickname": "藤田ことね",
+                    "avatar_file": "藤田ことね.png",
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(qq_group_bot.time, "time_ns", lambda: 404)
+    handler = _handler()
+    agent = _agent()
+    QQBotHandler.agent = agent
+    QQBotHandler.account_profile_manager = PromptAccountProfileManager(
+        profile_config,
+        avatar_dir,
+    )
+
+    with mock.patch.object(
+        QQBotHandler,
+        "rebuild_agent",
+        return_value=agent,
+    ), mock.patch.object(
+        qq_group_bot, "_set_qq_nickname"
+    ) as nickname_mock, mock.patch.object(
+        qq_group_bot, "_set_qq_avatar"
+    ) as avatar_mock, mock.patch.object(
+        qq_group_bot, "_send_group_msg"
+    ) as send_mock:
+        handled = handler._handle_commands(10001, 20002, "/switch 藤田ことね")
+
+    assert handled is True
+    nickname_mock.assert_called_once_with("http://onebot", "藤田ことね", "token")
+    expected_avatar = base64.b64encode(b"avatar").decode("ascii")
+    avatar_mock.assert_called_once_with("http://onebot", expected_avatar, "token")
+    assert "账号昵称和头像已切换为 藤田ことね" in send_mock.call_args.args[2]
+
+
+def test_switch_command_validates_tracked_profile_before_rebuild(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """验证已登记资料非法时不会修改 Prompt 或重建 Agent。
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): pytest 环境与属性替换工具。
+        tmp_path (Path): pytest 临时目录。
+
+    Returns:
+        None: 测试通过时无返回值。
+
+    Raises:
+        None: 测试用例不主动抛出异常。
+    """
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    (prompts_dir / "tracked.txt").write_text("prompt", encoding="utf-8")
+    profile_config = prompts_dir / "account_profiles.json"
+    profile_config.write_text(
+        json.dumps(
+            {
+                "tracked": {
+                    "nickname": "已登记昵称",
+                    "avatar_file": "missing.png",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    handler = _handler()
+    agent = _agent()
+    QQBotHandler.agent = agent
+    QQBotHandler.account_profile_manager = PromptAccountProfileManager(
+        profile_config,
+        prompts_dir / "avatars",
+    )
+
+    with mock.patch.object(
+        QQBotHandler,
+        "rebuild_agent",
+        return_value=agent,
+    ) as rebuild_mock, mock.patch.object(
+        qq_group_bot, "_send_group_msg"
+    ) as send_mock:
+        handled = handler._handle_commands(10001, 20002, "/switch tracked")
+
+    assert handled is True
+    rebuild_mock.assert_not_called()
+    assert qq_group_bot.os.environ["SYS_MSG_FILE"] == "/app/prompts/default.txt"
+    assert "头像文件不存在" in send_mock.call_args.args[2]
+
+
+def test_switch_command_reports_avatar_partial_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """验证头像 API 失败时明确保留 Prompt 与昵称已成功的状态。
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): pytest 环境与属性替换工具。
+        tmp_path (Path): pytest 临时目录。
+
+    Returns:
+        None: 测试通过时无返回值。
+
+    Raises:
+        None: 测试用例不主动抛出异常。
+    """
+    prompts_dir = tmp_path / "prompts"
+    avatar_dir = prompts_dir / "avatars"
+    avatar_dir.mkdir(parents=True)
+    (prompts_dir / "tracked.txt").write_text("prompt", encoding="utf-8")
+    (avatar_dir / "tracked.png").write_bytes(b"avatar")
+    profile_config = prompts_dir / "account_profiles.json"
+    profile_config.write_text(
+        json.dumps(
+            {
+                "tracked": {
+                    "nickname": "已登记昵称",
+                    "avatar_file": "tracked.png",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(qq_group_bot.time, "time_ns", lambda: 505)
+    handler = _handler()
+    agent = _agent()
+    QQBotHandler.agent = agent
+    QQBotHandler.account_profile_manager = PromptAccountProfileManager(
+        profile_config,
+        avatar_dir,
+    )
+
+    with mock.patch.object(
+        QQBotHandler,
+        "rebuild_agent",
+        return_value=agent,
+    ), mock.patch.object(
+        qq_group_bot, "_set_qq_nickname"
+    ) as nickname_mock, mock.patch.object(
+        qq_group_bot,
+        "_set_qq_avatar",
+        side_effect=RuntimeError("avatar rejected"),
+    ), mock.patch.object(
+        qq_group_bot, "_send_group_msg"
+    ) as send_mock:
+        handled = handler._handle_commands(10001, 20002, "/switch tracked")
+
+    assert handled is True
+    nickname_mock.assert_called_once()
+    assert qq_group_bot.os.environ["SYS_MSG_FILE"].endswith("prompts/tracked.txt")
+    assert "昵称已切换为 已登记昵称，但头像同步失败" in send_mock.call_args.args[2]
 
 
 def test_clear_replaces_only_current_prompt_thread(

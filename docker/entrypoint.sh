@@ -25,7 +25,7 @@ set_core_env_fixed() {
 }
 
 # 需要存在的目录与文件，确保宿主机可读写
-REQUIRED_DIRS=("logs" "prompts" "ticket_data" "images")
+REQUIRED_DIRS=("logs" "prompts" "prompts/avatars" "ticket_data" "images")
 REQUIRED_FILES=(".qq_group_threads.json" ".qq_reminder_threads.json" ".qq_group_memnames.json" ".meru_watch.json")
 
 create_dirs() {
