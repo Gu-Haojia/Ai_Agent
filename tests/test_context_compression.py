@@ -587,11 +587,14 @@ def test_summary_command_returns_current_thread_summary(
         access_token="token",
         cmd_allowed_users=(),
     )
-    handler._group_threads = {10001: "thread-summary-test"}
+    handler._group_threads = {"10001/default": "thread-summary-test"}
     summary_reader = mock.Mock(return_value=summary)
     handler.agent = SimpleNamespace(get_group_context_summary=summary_reader)
 
-    with mock.patch.object(qq_group_bot, "_send_group_msg") as send_mock:
+    with mock.patch.dict(
+        qq_group_bot.os.environ,
+        {"SYS_MSG_FILE": "/tmp/default.txt"},
+    ), mock.patch.object(qq_group_bot, "_send_group_msg") as send_mock:
         handled = handler._handle_commands(10001, 20002, "/summary")
 
     assert handled is True

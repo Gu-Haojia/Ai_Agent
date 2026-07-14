@@ -109,7 +109,7 @@ LangGraph/
 | `ONEBOT_API_BASE` | NapCat HTTP API 地址（默认 `http://127.0.0.1:3000`） |
 | `ONEBOT_SECRET` / `ONEBOT_ACCESS_TOKEN` | 回调签名与 API Token（可选） |
 | `ALLOWED_GROUPS` / `CMD_ALLOWED_USERS` | 群聊/命令白名单，逗号分隔 |
-| `THREAD_STORE_FILE` | 群 → 线程 ID 映射文件，默认 `.qq_group_threads.json` |
+| `THREAD_STORE_FILE` | 群 + Prompt → 线程 ID 映射文件，默认 `.qq_group_threads.json` |
 | `DAILY_TASK` / `NIGHTLY_TASK` | 需要播报的群号（逗号分隔） |
 | `DAILY_TASK_TIME` / `NIGHTLY_TASK_TIME` | HH:MM（24 小时制） |
 | `TICKET_TASK` | 接收 Ticket 更新的群号 |
@@ -140,7 +140,7 @@ source .venv311/bin/activate
 python qq_group_bot.py
 ```
 
-- 支持 @ 机器人触发、`/switch` Prompt、`/clear` 重置线程、`/cmd` 查看指令。
+- 支持 @ 机器人触发、`/switch` Prompt 并恢复对应线程、`/clear` 重置当前 Prompt 线程、`/cmd` 查看指令。
 - 提供健康检查：`curl http://127.0.0.1:8080/healthz`.
 - `logs/`、`.qq_group_threads.json`、`ticket_data/` 会在首次运行时自动生成。
 
@@ -193,7 +193,7 @@ brew services stop postgresql
 ## 🧊 酷炫玩法
 
 - **时间旅行调试**：`AgentWithTimetravel` 可从任意 checkpoint 回放，将复杂对话拆解成 DAG 并复用旧节点。
-- **群聊记忆命名空间**：每个群都绑定独立 `thread_id`，同时支持 `.qq_group_memnames.json` 持久化记忆命名空间，实现“群聊人格”。
+- **群聊记忆命名空间**：每个群的每个 Prompt 都绑定独立 `thread_id`；长期记忆仍按群通过 `.qq_group_memnames.json` 持久化，实现“群聊人格”。
 - **多模态自检**：`test_multimodal_unit.py` 通过本地伪造的 Cross-Image 流程验证图片上传/缓存逻辑，配合 `image_storage.py` 避免重复上链。
 
 ## 🧪 测试

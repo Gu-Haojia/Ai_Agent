@@ -781,8 +781,8 @@ class QQBotHandler(BaseHTTPRequestHandler):
     meru_monitor: Optional[MeruMonitorManager] = None
     x_monitor: Optional[XMonitorManager] = None
     _post_lock: ClassVar[Lock] = Lock()  # 串行化处理 POST 请求
-    # 群 -> 线程ID 映射，用于 /clear 后为群对话分配新线程
-    _group_threads: dict[int, str] = {}
+    # 群/Prompt -> 线程ID 映射，用于在 Prompt 间恢复各自的群对话线程
+    _group_threads: dict[str, str] = {}
     _thread_store_file: str = ""
     _env_consistency_checked: bool = False  # 本次运行仅检查一次
     # 群 -> 持久记忆命名空间 映射，与线程隔离相似
@@ -978,15 +978,17 @@ class QQBotHandler(BaseHTTPRequestHandler):
 
     @classmethod
     def setup_thread_store(cls, path: str, current_env_tid: str) -> None:
-        """设置并加载群线程映射配置文件；仅首次执行环境一致性检查。
+        """设置并加载群与 Prompt 的线程映射；仅首次执行环境一致性检查。
 
         当发现任何保存的线程ID与当前环境线程前缀不一致时，清空并覆盖保存文件。
+        旧版纯群号键会迁移到启动时正在使用的 Prompt。
 
         Args:
             path (str): 配置文件路径
             current_env_tid (str): 当前环境变量提供的线程前缀（agent._config.thread_id）
         """
         cls._thread_store_file = path
+        cls._group_threads = {}
         try:
             if os.path.isfile(path):
                 # 兼容空文件：当内容为空或仅空白时按空映射处理
@@ -994,10 +996,32 @@ class QQBotHandler(BaseHTTPRequestHandler):
                     raw = f.read()
                 data = {} if not (raw and raw.strip()) else json.loads(raw)
                 if isinstance(data, dict):
-                    m: dict[int, str] = {}
+                    current_prompt_name = cls._current_prompt_name()
+                    migrated_legacy_key = False
+                    m: dict[str, str] = {}
                     for k, v in data.items():
-                        if str(k).isdigit() and isinstance(v, (str, int)):
-                            m[int(k)] = str(v)
+                        raw_key = str(k).strip()
+                        if not isinstance(v, (str, int)):
+                            continue
+                        if raw_key.isdigit() and int(raw_key) > 0:
+                            normalized_key = cls._thread_store_key(
+                                int(raw_key), current_prompt_name
+                            )
+                            migrated_legacy_key = True
+                        else:
+                            group_part, separator, prompt_name = raw_key.partition("/")
+                            if (
+                                not separator
+                                or not group_part.isdigit()
+                                or int(group_part) <= 0
+                                or not prompt_name.strip()
+                                or "/" in prompt_name
+                            ):
+                                continue
+                            normalized_key = cls._thread_store_key(
+                                int(group_part), prompt_name
+                            )
+                        m[normalized_key] = str(v)
                     # 一致性检查：仅在本次运行的第一次做
                     if not cls._env_consistency_checked:
 
@@ -1013,7 +1037,9 @@ class QQBotHandler(BaseHTTPRequestHandler):
                             return tail
 
                         mismatch = False
-                        for gid, tid in m.items():
+                        for thread_key, tid in m.items():
+                            group_part, _, _ = thread_key.partition("/")
+                            gid = int(group_part)
                             env_part = _env_part_from_full(gid, tid)
                             if env_part and env_part != current_env_tid:
                                 mismatch = True
@@ -1028,20 +1054,22 @@ class QQBotHandler(BaseHTTPRequestHandler):
                         else:
                             cls._group_threads = m
                             cls._env_consistency_checked = True
+                            if migrated_legacy_key:
+                                cls.save_thread_store()
                             print(
-                                f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [QQBot] Loaded group threads from {path}: {len(m)} groups"
+                                f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [QQBot] Loaded group prompt threads from {path}: {len(m)} entries"
                             )
                     else:
                         cls._group_threads = m
                         print(
-                            f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [QQBot] Loaded group threads from {path}: {len(m)} groups (env check skipped)"
+                            f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [QQBot] Loaded group prompt threads from {path}: {len(m)} entries (env check skipped)"
                         )
         except Exception as e:
             sys.stderr.write(f"[QQBot] Load group threads failed: {e}\n")
 
     @classmethod
     def save_thread_store(cls) -> None:
-        """将 `_group_threads` 字典保存到配置文件（若已设置路径）。"""
+        """将群与 Prompt 的线程映射保存到配置文件（若已设置路径）。"""
         if not cls._thread_store_file:
             return
         try:
@@ -1593,8 +1621,77 @@ class QQBotHandler(BaseHTTPRequestHandler):
         self._send_no_content()
 
     # ---- 命令与线程工具 ----
+    @staticmethod
+    def _current_prompt_name() -> str:
+        """返回当前系统 Prompt 的文件名。
+
+        Returns:
+            str: 不含扩展名的 Prompt 文件名。
+
+        Raises:
+            AssertionError: 当 `SYS_MSG_FILE` 未配置或文件名为空时抛出。
+        """
+        prompt_file = os.environ.get("SYS_MSG_FILE", "").strip()
+        assert prompt_file, "SYS_MSG_FILE 不能为空"
+        prompt_name = os.path.splitext(os.path.basename(prompt_file))[0].strip()
+        assert prompt_name, "Prompt 文件名不能为空"
+        return prompt_name
+
+    @staticmethod
+    def _thread_store_key(group_id: int, prompt_name: str) -> str:
+        """构造群号与 Prompt 对应的线程映射键。
+
+        Args:
+            group_id (int): 群号。
+            prompt_name (str): 不含扩展名的 Prompt 名称。
+
+        Returns:
+            str: `群号/Prompt` 格式的线程映射键。
+
+        Raises:
+            AssertionError: 当群号或 Prompt 名称非法时抛出。
+        """
+        assert isinstance(group_id, int) and group_id > 0, "group_id 必须为正整数"
+        normalized_prompt_name = prompt_name.strip()
+        assert normalized_prompt_name, "prompt_name 不能为空"
+        assert "/" not in normalized_prompt_name, "prompt_name 不能包含斜杠"
+        return f"{group_id}/{normalized_prompt_name}"
+
+    @classmethod
+    def _current_thread_store_key(cls, group_id: int) -> str:
+        """构造当前 Prompt 对应的群线程映射键。
+
+        Args:
+            group_id (int): 群号。
+
+        Returns:
+            str: 当前 Prompt 使用的线程映射键。
+
+        Raises:
+            AssertionError: 当群号或 Prompt 配置非法时抛出。
+        """
+        return cls._thread_store_key(group_id, cls._current_prompt_name())
+
+    @classmethod
+    def _new_group_thread_id(cls, group_id: int) -> str:
+        """为指定群创建属于当前母线程的唯一线程 ID。
+
+        Args:
+            group_id (int): 群号。
+
+        Returns:
+            str: 包含群号、母线程和纳秒时间戳的新线程 ID。
+
+        Raises:
+            AssertionError: 当群号或母线程 ID 非法时抛出。
+        """
+        assert isinstance(group_id, int) and group_id > 0, "group_id 必须为正整数"
+        mother_thread_id = cls.agent._config.thread_id.strip()
+        assert mother_thread_id, "母线程 ID 不能为空"
+        return f"thread-{group_id}-{mother_thread_id}-{time.time_ns()}"
+
     def _thread_id_for(self, group_id: int) -> str:
-        """返回当前群使用的线程 ID；若缺失则创建与 /clear 相同规则的标准线程并保存。
+        """返回当前群与 Prompt 使用的线程 ID，缺失时创建并保存。
 
         Args:
             group_id (int): 群号
@@ -1602,10 +1699,11 @@ class QQBotHandler(BaseHTTPRequestHandler):
         Returns:
             str: 线程ID
         """
-        if group_id in self._group_threads:
-            return self._group_threads[group_id]
-        new_tid = f"thread-{group_id}-{self.agent._config.thread_id}-{int(time.time())}"
-        self._group_threads[group_id] = new_tid
+        thread_key = self._current_thread_store_key(group_id)
+        if thread_key in self._group_threads:
+            return self._group_threads[thread_key]
+        new_tid = self._new_group_thread_id(group_id)
+        self._group_threads[thread_key] = new_tid
         QQBotHandler.save_thread_store()
         return new_tid
 
@@ -2166,7 +2264,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
         - /imageprovider      → 在 Gemini/OpenAI 生图服务商之间切换
         - /xtrans             → 循环切换 XMonitor 推文翻译模式
         - /xlink <url>        → 解析指定 X 推文链接并按当前翻译模式发图
-        - /clear              → 为当前群新建线程
+        - /clear              → 为当前群的当前 Prompt 新建线程
         - /whoami             → 先回当前系统提示词，再基于“你是谁”生成一条消息
         - /token              → 统计当前群对应线程的消息 token 数
         - /summary            → 查看当前线程的上下文压缩摘要
@@ -2225,7 +2323,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 "1) /cmd — 命令列表\n"
                 "2) /switch — 可用 prompts\n"
                 "3) /switch <name> — 切换prompt\n"
-                "4) /clear — 清除当前群聊全部记忆\n"
+                "4) /clear — 重置当前Prompt线程及当前群长期记忆\n"
                 "5) /whoami — 你是？\n"
                 "6) /token — 输出当前 token 数\n"
                 "7) /forget - 清空当前线程历史\n"
@@ -2311,7 +2409,11 @@ class QQBotHandler(BaseHTTPRequestHandler):
             os.environ["SYS_MSG_FILE"] = path
             try:
                 self.rebuild_agent()
-                msg = f"已切换到 {name} 并重建 Agent。需要清除记忆请使用/forget 命令。"
+                thread_id = self._thread_id_for(group_id)
+                msg = (
+                    f"已切换到 {name} 并恢复对应线程：{thread_id}。"
+                    "需要清除记忆请使用/forget 命令。"
+                )
             except AssertionError as e:
                 msg = f"切换失败：{e}"
             except Exception as e:
@@ -2413,10 +2515,9 @@ class QQBotHandler(BaseHTTPRequestHandler):
             return True
 
         if cmd in {"/clear", "让我忘记一切吧"} and len(parts) == 1:
-            new_tid = (
-                f"thread-{group_id}-{self.agent._config.thread_id}-{int(time.time())}"
-            )
-            self._group_threads[group_id] = new_tid
+            thread_key = self._current_thread_store_key(group_id)
+            new_tid = self._new_group_thread_id(group_id)
+            self._group_threads[thread_key] = new_tid
             QQBotHandler.save_thread_store()
             # 同时新建长期记忆命名空间
             new_ns = (
