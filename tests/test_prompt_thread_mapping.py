@@ -186,7 +186,7 @@ def test_switch_command_applies_tracked_account_profile(
     avatar_dir.mkdir(parents=True)
     (prompts_dir / "藤田ことね.txt").write_text("prompt", encoding="utf-8")
     (avatar_dir / "藤田ことね.png").write_bytes(b"avatar")
-    profile_config = prompts_dir / "account_profiles.json"
+    profile_config = avatar_dir / "account_profiles.json"
     profile_config.write_text(
         json.dumps(
             {
@@ -246,9 +246,10 @@ def test_switch_command_validates_tracked_profile_before_rebuild(
         None: 测试用例不主动抛出异常。
     """
     prompts_dir = tmp_path / "prompts"
-    prompts_dir.mkdir()
+    avatar_dir = prompts_dir / "avatars"
+    avatar_dir.mkdir(parents=True)
     (prompts_dir / "tracked.txt").write_text("prompt", encoding="utf-8")
-    profile_config = prompts_dir / "account_profiles.json"
+    profile_config = avatar_dir / "account_profiles.json"
     profile_config.write_text(
         json.dumps(
             {
@@ -266,7 +267,7 @@ def test_switch_command_validates_tracked_profile_before_rebuild(
     QQBotHandler.agent = agent
     QQBotHandler.account_profile_manager = PromptAccountProfileManager(
         profile_config,
-        prompts_dir / "avatars",
+        avatar_dir,
     )
 
     with mock.patch.object(
@@ -305,7 +306,7 @@ def test_switch_command_reports_avatar_partial_failure(
     avatar_dir.mkdir(parents=True)
     (prompts_dir / "tracked.txt").write_text("prompt", encoding="utf-8")
     (avatar_dir / "tracked.png").write_bytes(b"avatar")
-    profile_config = prompts_dir / "account_profiles.json"
+    profile_config = avatar_dir / "account_profiles.json"
     profile_config.write_text(
         json.dumps(
             {

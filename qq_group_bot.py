@@ -2865,7 +2865,7 @@ def main() -> None:
     QQBotHandler.agent = agent
     QQBotHandler.image_storage = image_manager
     QQBotHandler.account_profile_manager = PromptAccountProfileManager(
-        config_path=Path("prompts/account_profiles.json"),
+        config_path=Path("prompts/avatars/account_profiles.json"),
         avatar_dir=Path("prompts/avatars"),
     )
     meru_store = os.environ.get("MERU_WATCH_STORE", ".meru_watch.json")

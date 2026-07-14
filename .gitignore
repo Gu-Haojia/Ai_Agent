@@ -47,7 +47,9 @@ prompt/
 prompts/
 !prompts/
 prompts/*
-!prompts/account_profiles.json
+!prompts/avatars/
+prompts/avatars/*
+!prompts/avatars/account_profiles.json
 AGENTS.md
 
 # Excutable scripts
