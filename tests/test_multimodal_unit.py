@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 import image_storage
-from image_storage import ImageStorageManager, StoredImage
+from image_storage import ImageStorageManager, StoredImage, StoredVideo
 from PIL import Image
 
 try:
@@ -132,6 +132,33 @@ class MultimodalUnitTest(unittest.TestCase):
             content[1]["type"],
             "text",
         )
+
+    @unittest.skipUnless(_QQ_MODULE_AVAILABLE, "缺少 langgraph 依赖，跳过 QQ 解析逻辑测试")
+    def test_format_video_part_preserves_duration_for_token_count(self) -> None:
+        """
+        视频消息块应保存时长，同时保持 Gemini media 输入结构。
+
+        Returns:
+            None: 测试无返回值。
+
+        Raises:
+            None: 断言失败时由 unittest 报告。
+        """
+        stored = StoredVideo(
+            path=Path("video.mp4"),
+            mime_type="video/mp4",
+            base64_data=base64.b64encode(b"video").decode("ascii"),
+            duration_seconds=12.4,
+        )
+
+        part = QQBotHandler._format_video_part(
+            stored, "google_genai:gemini-3.5-flash"
+        )
+
+        self.assertEqual(part["type"], "media")
+        self.assertEqual(part["mime_type"], "video/mp4")
+        self.assertEqual(part["data"], b"video")
+        self.assertEqual(part["duration_seconds"], 12.4)
 
     @unittest.skipUnless(_QQ_MODULE_AVAILABLE, "缺少 langgraph 依赖，跳过 QQ 解析逻辑测试")
     def test_compose_group_message_appends_cq_codes(self) -> None:
@@ -283,6 +310,68 @@ class MultimodalUnitTest(unittest.TestCase):
             get_mock.call_args.kwargs["headers"]["User-Agent"],
             "Mozilla/5.0",
         )
+
+    def test_save_remote_video_records_probed_duration(self) -> None:
+        """
+        远程视频保存后应记录 ffprobe 返回的时长。
+
+        Returns:
+            None: 测试无返回值。
+
+        Raises:
+            None: 断言失败时由 unittest 报告。
+        """
+        response = mock.Mock()
+        response.status_code = 200
+        response.headers = {"Content-Type": "video/mp4"}
+        response.iter_content.return_value = [b"fake-video"]
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            manager = ImageStorageManager(tmp_dir)
+            with (
+                mock.patch.object(
+                    image_storage.requests, "get", return_value=response
+                ),
+                mock.patch.object(
+                    manager, "_guess_video_mime", return_value="video/mp4"
+                ),
+                mock.patch.object(
+                    manager, "_probe_video_duration_seconds", return_value=9.6
+                ) as probe_duration,
+            ):
+                stored = manager.save_remote_video(
+                    "https://example.com/video.mp4"
+                )
+
+        self.assertEqual(stored.duration_seconds, 9.6)
+        probe_duration.assert_called_once_with(stored.path)
+        response.close.assert_called_once_with()
+
+    def test_probe_video_duration_uses_ffprobe(self) -> None:
+        """
+        视频时长探测应调用 ffprobe 并解析秒数。
+
+        Returns:
+            None: 测试无返回值。
+
+        Raises:
+            None: 断言失败时由 unittest 报告。
+        """
+        completed = SimpleNamespace(returncode=0, stdout="7.25\n", stderr="")
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            video_path = Path(tmp_dir) / "video.mp4"
+            video_path.write_bytes(b"fake-video")
+            with mock.patch.object(
+                image_storage.subprocess, "run", return_value=completed
+            ) as run_mock:
+                duration = ImageStorageManager._probe_video_duration_seconds(
+                    video_path
+                )
+
+        self.assertEqual(duration, 7.25)
+        command = run_mock.call_args.args[0]
+        self.assertEqual(command[0], "ffprobe")
+        self.assertEqual(command[-1], str(video_path))
 
     def test_is_generated_path_handles_generated_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

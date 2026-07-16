@@ -77,6 +77,7 @@ from src.checkpoint_retention import (
     CheckpointRetentionError,
     RetainingPostgresSaver,
 )
+from src.context_token_counter import ContextTokenCounter, ContextTokenEstimate
 from src.x_monitor import XMonitorToolError
 from src.x_monitor_tool import (
     build_x_monitor_permission_failure,
@@ -447,29 +448,6 @@ def _normalize_blocked_ai_message(message: AIMessage) -> AIMessage:
     )
 
 
-def _extract_text_for_token_count(message: Any) -> str:
-    """
-    提取用于 token 统计的文本。
-
-    优先复用 ``_extract_text_content``（遇到纯工具调用时会返回 None），
-    当未取到文本时回退为格式化后的字符串化结果，避免 join 时出现 None。
-
-    Args:
-        message (Any): LangChain 消息对象。
-
-    Returns:
-        str: 可用于 token 统计的文本。
-    """
-
-    text = _extract_text_content(message)
-    if text is not None and text != "":
-        return _sanitize_context_text(text)
-    content = getattr(message, "content", None)
-    if isinstance(content, str) and content.strip():
-        return _sanitize_context_text(_apply_format(content))
-    return _sanitize_context_text(_apply_format(str(message)))
-
-
 def _infer_model_provider(model_name: str) -> str:
     """
     推断模型提供方前缀。
@@ -589,13 +567,14 @@ class ContextCompressionConfig:
     群聊上下文压缩配置。
 
     Args:
-        trigger_text_tokens (int): 触发压缩的文本 token 阈值。
-        keep_recent_text_tokens (int): 压缩后尽量保留的最近原文 token 数。
+        trigger_text_tokens (int): 触发压缩的上下文 token 阈值。
+        keep_recent_text_tokens (int): 压缩后尽量保留的最近原文 token 数，
+            包含文本、图片和视频。
         min_keep_recent_messages (int): 无论 token 数如何都至少保留的最近消息数；
             若消息数边界落在轮次中间，则向前扩展到完整轮次。
         max_summary_text_tokens (int): 群聊摘要允许的最大文本 token 数。
         min_compressible_text_tokens (int): 可压缩旧上下文至少达到该 token
-            数时才调用摘要模型。
+            数时才调用摘要模型，包含文本、图片和视频。
         print_summary (bool): 是否在控制台输出压缩摘要正文。
 
     Returns:
@@ -671,7 +650,7 @@ class ContextTurn:
 
     Args:
         messages (list): 本轮包含的消息列表。
-        text_tokens (int): 本轮按文本内容估算的 token 数。
+        text_tokens (int): 本轮文本与媒体的 token 估算总数。
 
     Returns:
         None: dataclass 初始化不返回额外值。
@@ -705,6 +684,7 @@ class ContextCompressor:
         config (ContextCompressionConfig): 压缩阈值配置。
         summary_model (Any): 具备 ``invoke`` 方法的摘要模型。
         token_encoder (Any | None): 可选 token 编码器；为空时使用 tiktoken。
+        token_counter (ContextTokenCounter | None): 可选的共享上下文统计器。
 
     Returns:
         None: 类初始化不返回额外值。
@@ -718,33 +698,35 @@ class ContextCompressor:
         config: ContextCompressionConfig,
         summary_model: Any,
         token_encoder: Any | None = None,
+        token_counter: ContextTokenCounter | None = None,
     ) -> None:
+        """
+        初始化群聊上下文压缩器。
+
+        Args:
+            config (ContextCompressionConfig): 压缩阈值配置。
+            summary_model (Any): 具备 ``invoke`` 方法的摘要模型。
+            token_encoder (Any | None): 可选文本编码器。
+            token_counter (ContextTokenCounter | None): 可选共享统计器。
+
+        Returns:
+            None: 无返回值。
+
+        Raises:
+            AssertionError: 当配置、摘要模型或统计器参数冲突时抛出。
+        """
         assert isinstance(config, ContextCompressionConfig), "config 类型非法"
         invoke = getattr(summary_model, "invoke", None)
         assert callable(invoke), "summary_model 必须提供 invoke 方法"
+        assert not (
+            token_encoder is not None and token_counter is not None
+        ), "token_encoder 与 token_counter 不能同时提供"
         self._config = config
         self._summary_model = summary_model
-        self._encoder = token_encoder or self._build_token_encoder()
-
-    @staticmethod
-    def _build_token_encoder() -> Any:
-        """
-        初始化 tiktoken 编码器。
-
-        Returns:
-            Any: cl100k_base 编码器。
-
-        Raises:
-            AssertionError: 当 tiktoken 缺失或编码器初始化失败时抛出。
-        """
-        try:
-            import tiktoken  # type: ignore
-        except ImportError as exc:  # pragma: no cover
-            raise AssertionError("缺少依赖：请先安装 tiktoken。") from exc
-        try:
-            return tiktoken.get_encoding("cl100k_base")
-        except Exception as exc:  # pragma: no cover
-            raise AssertionError("无法初始化 tiktoken 编码器 cl100k_base。") from exc
+        self._token_counter = token_counter or ContextTokenCounter(
+            text_sanitizer=_sanitize_context_text,
+            token_encoder=token_encoder,
+        )
 
     def count_text_tokens(self, text: str) -> int:
         """
@@ -759,29 +741,22 @@ class ContextCompressor:
         Raises:
             AssertionError: 当文本类型非法或编码失败时抛出。
         """
-        assert isinstance(text, str), "text 必须是字符串"
-        sanitized = _sanitize_context_text(text)
-        try:
-            return len(self._encoder.encode(sanitized))
-        except Exception as exc:  # pragma: no cover
-            raise AssertionError("上下文 token 编码失败。") from exc
+        return self._token_counter.count_text_tokens(text)
 
-    def count_messages_text_tokens(self, messages: Sequence[Any]) -> int:
+    def count_messages_tokens(self, messages: Sequence[Any]) -> int:
         """
-        统计消息列表的文本 token 数，不统计图片视觉 token。
+        统计消息列表的文本、图片和视频 token。
 
         Args:
             messages (Sequence[Any]): LangChain 消息序列。
 
         Returns:
-            int: 消息文本 token 总数。
+            int: 消息 token 总数。
 
         Raises:
             AssertionError: 当消息序列非法或 token 编码失败时抛出。
         """
-        assert isinstance(messages, Sequence), "messages 必须是序列"
-        text = "\n".join(self.message_to_summary_text(message) for message in messages)
-        return self.count_text_tokens(text)
+        return self._token_counter.count_messages(messages).total_tokens
 
     def compress(self, state: dict[str, Any]) -> dict[str, Any]:
         """
@@ -799,9 +774,7 @@ class ContextCompressor:
         assert isinstance(state, dict), "state 必须是字典"
         messages = list(state.get("messages") or [])
         summary = str(state.get("group_context_summary") or "").strip()
-        total_tokens = self.count_text_tokens(summary) + self.count_messages_text_tokens(
-            messages
-        )
+        total_tokens = self._token_counter.count_state(summary, messages).total_tokens
         if total_tokens <= self._config.trigger_text_tokens:
             return {}
 
@@ -867,8 +840,8 @@ class ContextCompressor:
 
         Args:
             round_number (int): 本次压缩后的累计轮次。
-            total_tokens_before (int): 压缩触发前的文本 token 总数。
-            compressible_tokens (int): 本次被压缩旧上下文的文本 token 数。
+            total_tokens_before (int): 压缩触发前的上下文 token 总数。
+            compressible_tokens (int): 本次被压缩旧上下文的 token 总数。
             removed_messages (int): 本次被移出原文上下文的消息数。
             kept_messages (int): 压缩后保留的最近消息数。
             kept_turns (int): 压缩后保留的最近完整轮次数。
@@ -920,7 +893,7 @@ class ContextCompressor:
                 turns.append(
                     ContextTurn(
                         messages=current,
-                        text_tokens=self.count_messages_text_tokens(current),
+                        text_tokens=self.count_messages_tokens(current),
                     )
                 )
                 current = [message]
@@ -930,7 +903,7 @@ class ContextCompressor:
             turns.append(
                 ContextTurn(
                     messages=current,
-                    text_tokens=self.count_messages_text_tokens(current),
+                    text_tokens=self.count_messages_tokens(current),
                 )
             )
         return turns
@@ -1050,7 +1023,7 @@ class ContextCompressor:
 
     def message_to_summary_text(self, message: Any) -> str:
         """
-        将单条消息转换为可统计和可摘要的安全文本。
+        将单条消息转换为可供摘要模型使用的安全文本。
 
         Args:
             message (Any): LangChain 消息对象或兼容对象。
@@ -1106,13 +1079,13 @@ class ContextCompressor:
 
     def content_to_safe_text(self, content: Any) -> str:
         """
-        将消息 content 转换为安全文本，忽略图片视觉 token。
+        将消息 content 转换为不含媒体原始数据的摘要文本。
 
         Args:
             content (Any): 消息 content 字段。
 
         Returns:
-            str: 可用于 token 统计和摘要的文本。
+            str: 可用于摘要 Prompt 的安全文本。
 
         Raises:
             None: 未知结构使用脱敏后的字符串表示。
@@ -1148,7 +1121,9 @@ class ContextCompressor:
         if isinstance(block, dict):
             block_type = str(block.get("type") or "").lower()
             if block_type == "text":
-                return _sanitize_context_text(_apply_format(str(block.get("text") or "")))
+                return _sanitize_context_text(
+                    _apply_format(str(block.get("text") or ""))
+                )
             if block_type == "image_url":
                 return "[图片已省略]"
             if block_type in {"media", "video"}:
@@ -1157,10 +1132,14 @@ class ContextCompressor:
             sanitized = dict(block)
             if "data" in sanitized:
                 sanitized["data"] = "[BINARY_OMITTED]"
-            return _sanitize_context_text(json.dumps(sanitized, ensure_ascii=False, default=str))
+            return _sanitize_context_text(
+                json.dumps(sanitized, ensure_ascii=False, default=str)
+            )
         block_type = str(getattr(block, "type", "") or "").lower()
         if block_type == "text":
-            return _sanitize_context_text(_apply_format(str(getattr(block, "text", "") or "")))
+            return _sanitize_context_text(
+                _apply_format(str(getattr(block, "text", "") or ""))
+            )
         if block_type == "image_url":
             return "[图片已省略]"
         return _sanitize_context_text(str(block))
@@ -1826,6 +1805,9 @@ class SQLCheckpointAgentStreamingPlus:
         self._image_manager: Optional[ImageStorageManager] = None
         self._generated_images: list[GeneratedImage] = []
         self._playwright_runner = PlaywrightBrowserThreadRunner()
+        self._context_token_counter = ContextTokenCounter(
+            text_sanitizer=_sanitize_context_text
+        )
         self._context_compressor = self._build_context_compressor()
 
         self._graph = self._build_graph()
@@ -1962,7 +1944,11 @@ class SQLCheckpointAgentStreamingPlus:
         """
         config = ContextCompressionConfig.from_env()
         summary_model = self._build_context_summary_model()
-        return ContextCompressor(config=config, summary_model=summary_model)
+        return ContextCompressor(
+            config=config,
+            summary_model=summary_model,
+            token_counter=self._context_token_counter,
+        )
 
     def _build_context_summary_model(self) -> Any:
         """
@@ -3356,13 +3342,30 @@ class SQLCheckpointAgentStreamingPlus:
         assert isinstance(summary, str), "group_context_summary 类型非法"
         return summary
 
+    def estimate_tokens(
+        self, thread_id: Optional[str] = None
+    ) -> ContextTokenEstimate:
+        """
+        统计指定线程最新上下文的 token 明细。
+
+        Args:
+            thread_id (Optional[str]): 线程 ID，默认读取当前配置中的线程。
+
+        Returns:
+            ContextTokenEstimate: 文本、图片和视频 token 明细。
+
+        Raises:
+            AssertionError: 当 state、消息或媒体元数据非法时抛出。
+        """
+        values = self.get_latest_state_values(thread_id)
+        messages = list(values.get("messages", []))
+        summary = values.get("group_context_summary") or ""
+        assert isinstance(summary, str), "group_context_summary 非法"
+        return self._context_token_counter.count_state(summary, messages)
+
     def count_tokens(self, thread_id: Optional[str] = None) -> tuple[int, int]:
         """
-        统计指定线程最新消息列表的 token 数。
-
-        说明：
-        - 为避免与不同模型的聊天消息打包细节强耦合，这里采用将消息文本内容串联后用
-          tiktoken 的 `cl100k_base` 编码估算 token 数；若未安装 tiktoken 则抛出断言。
+        统计指定线程最新上下文的 token 总数和消息数。
 
         Args:
             thread_id (Optional[str]): 线程 ID，默认读取当前配置中的线程。
@@ -3371,38 +3374,10 @@ class SQLCheckpointAgentStreamingPlus:
             tuple[int, int]: (token_total, message_count)
 
         Raises:
-            AssertionError: 当未安装 tiktoken 或统计过程中发生异常时抛出。
+            AssertionError: 当 state、消息或媒体元数据非法时抛出。
         """
-        try:
-            import tiktoken  # type: ignore
-        except Exception as e:  # pragma: no cover
-            raise AssertionError("缺少依赖：请先安装 tiktoken 用于 token 统计。") from e
-
-        values = self.get_latest_state_values(thread_id)
-        messages = list(values.get("messages", []))
-        summary = values.get("group_context_summary") or ""
-        assert isinstance(summary, str), "group_context_summary 类型非法"
-        if not messages and not summary:
-            return (0, 0)
-
-        parts: list[str] = []
-        if summary:
-            parts.append(_sanitize_context_text(summary))
-        for m in messages:
-            parts.append(_extract_text_for_token_count(m))
-        text = "\n".join(parts)
-
-        try:
-            enc = tiktoken.get_encoding("cl100k_base")
-        except Exception as e:  # pragma: no cover
-            raise AssertionError("无法初始化 tiktoken 编码器 cl100k_base。") from e
-
-        try:
-            tokens = enc.encode(text)
-        except Exception as e:  # pragma: no cover
-            raise AssertionError("tiktoken 编码失败。") from e
-
-        return (len(tokens), len(messages))
+        estimate = self.estimate_tokens(thread_id)
+        return (estimate.total_tokens, estimate.message_count)
 
     # --------------- 历史/回放 ---------------
     @staticmethod

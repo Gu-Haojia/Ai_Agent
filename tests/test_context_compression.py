@@ -294,6 +294,8 @@ def test_context_compressor_keeps_group_chat_context_and_tool_summary(
     assert "kept_messages=" in output
     assert "kept_turns=" in output
     assert "summary_tokens=" in output
+    assert "image_tokens_before=" not in output
+    assert "video_tokens_before=" not in output
     assert "摘要正文" not in output
     assert "群友在聊演唱会抽选" not in output
     assert update["compression_round"] == 1

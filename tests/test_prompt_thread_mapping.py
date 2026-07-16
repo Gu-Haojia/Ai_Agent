@@ -418,14 +418,22 @@ def test_whoami_and_token_use_current_prompt_thread() -> None:
     agent = _agent()
     agent.set_token_printer = mock.Mock()
     agent.chat_once_stream = mock.Mock(return_value="我是当前 Prompt。")
-    agent.count_tokens = mock.Mock(return_value=(123, 4))
+    agent.estimate_tokens = mock.Mock(
+        return_value=SimpleNamespace(
+            message_count=4,
+            total_tokens=2463,
+            text_tokens=123,
+            image_tokens=1120,
+            video_tokens=1220,
+        )
+    )
     QQBotHandler.agent = agent
     QQBotHandler._group_threads = {
         "10001/default": "thread-10001-mother-101",
         "10001/kotone": "thread-10001-mother-202",
     }
 
-    with mock.patch.object(qq_group_bot, "_send_group_msg"):
+    with mock.patch.object(qq_group_bot, "_send_group_msg") as send_group_msg:
         whoami_handled = handler._handle_commands(10001, 20002, "/whoami")
         token_handled = handler._handle_commands(10001, 20002, "/token")
 
@@ -435,9 +443,14 @@ def test_whoami_and_token_use_current_prompt_thread() -> None:
         "你是谁",
         thread_id="thread-10001-mother-101",
     )
-    agent.count_tokens.assert_called_once_with(
+    agent.estimate_tokens.assert_called_once_with(
         thread_id="thread-10001-mother-101"
     )
+    token_message = send_group_msg.call_args_list[-1].args[2]
+    assert "估算 tokens=2463" in token_message
+    assert "文本=123，图片=1120，视频=1220" in token_message
+    assert "统计口径" not in token_message
+    assert "费用" not in token_message
 
 
 def test_setup_thread_store_migrates_legacy_group_key(tmp_path: Path) -> None:
