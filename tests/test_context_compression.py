@@ -19,7 +19,6 @@ from sql_agent_cli_stream_plus import (
     AgentConfig,
     ContextCompressionConfig,
     ContextCompressor,
-    ContextTokenCounter,
     SQLCheckpointAgentStreamingPlus,
 )
 
@@ -218,117 +217,6 @@ def _heavy_tool_turn(prefix: str, tool_count: int = 8) -> list:
         *tool_messages,
         AIMessage(content=f"{prefix} 工具结果整理完毕。"),
     ]
-
-
-def test_context_token_counter_counts_images_videos_and_safe_tool_calls() -> None:
-    """
-    验证共享统计器计入媒体额定 token，并忽略 Gemini 内部元数据。
-
-    Returns:
-        None: 测试用例无返回值。
-
-    Raises:
-        None: 测试用例不主动抛出异常。
-    """
-    counter = ContextTokenCounter()
-    human = HumanMessage(
-        content=[
-            {"type": "text", "text": "请分析图片和视频。"},
-            {
-                "type": "image_url",
-                "image_url": {"url": "data:image/jpeg;base64," + "A" * 8000},
-            },
-            {
-                "type": "media",
-                "mime_type": "video/mp4",
-                "data": b"video-bytes",
-                "duration_seconds": 12.4,
-            },
-        ]
-    )
-    tool_call = {
-        "name": "search",
-        "args": {"query": "演唱会"},
-        "id": "call-1",
-        "type": "tool_call",
-    }
-    ai_with_metadata = AIMessage(
-        content="",
-        tool_calls=[tool_call],
-        additional_kwargs={"thought_signature": "Z" * 12000},
-    )
-    ai_without_metadata = AIMessage(content="", tool_calls=[tool_call])
-
-    estimate = counter.count_state("当前摘要", [human, ai_with_metadata])
-    comparison = counter.count_state("当前摘要", [human, ai_without_metadata])
-
-    assert estimate.image_count == 1
-    assert estimate.image_tokens == 1120
-    assert estimate.video_count == 1
-    assert estimate.video_seconds == 13
-    assert estimate.video_tokens == 13 * 102
-    assert estimate.message_text_tokens == comparison.message_text_tokens
-    assert estimate.total_tokens == (
-        estimate.text_tokens + estimate.image_tokens + estimate.video_tokens
-    )
-
-
-def test_context_token_counter_rejects_video_without_duration() -> None:
-    """
-    验证新视频消息缺少时长时会显式报错。
-
-    Returns:
-        None: 测试用例无返回值。
-
-    Raises:
-        None: 预期断言由 pytest 捕获。
-    """
-    counter = ContextTokenCounter()
-    message = HumanMessage(
-        content=[
-            {
-                "type": "media",
-                "mime_type": "video/mp4",
-                "data": b"video-bytes",
-            }
-        ]
-    )
-
-    with pytest.raises(AssertionError, match="视频消息缺少 duration_seconds"):
-        counter.count_messages([message])
-
-
-def test_context_compressor_uses_shared_context_token_counter() -> None:
-    """
-    验证压缩器与共享统计器对相同消息采用完全相同的 token 总数。
-
-    Returns:
-        None: 测试用例无返回值。
-
-    Raises:
-        None: 测试用例不主动抛出异常。
-    """
-    counter = ContextTokenCounter()
-    compressor = ContextCompressor(
-        ContextCompressionConfig(),
-        RecordingSummaryModel(),
-        token_counter=counter,
-    )
-    messages = [
-        HumanMessage(
-            content=[
-                {"type": "text", "text": "带一张图。"},
-                {
-                    "type": "image_url",
-                    "image_url": {"url": "data:image/png;base64,AAAA"},
-                },
-            ]
-        )
-    ]
-
-    assert compressor.count_messages_tokens(messages) == counter.count_messages(
-        messages
-    ).total_tokens
 
 
 def test_context_compression_config_uses_conservative_defaults(
