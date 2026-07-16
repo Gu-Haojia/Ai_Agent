@@ -68,7 +68,10 @@ def test_datetime_system_reminder_switches_legacy_system_date(
             if enabled
             else "你好"
         )
-        result = agent.chat_once_stream(user_input)
+        result = agent.chat_once_stream(
+            user_input,
+            thread_id=f"test-datetime-reminder-{enabled}",
+        )
         model_messages = list(invoke_mock.call_args.args[0])
         system_message = model_messages[0]
         human_messages = [

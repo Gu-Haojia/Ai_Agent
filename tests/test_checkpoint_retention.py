@@ -312,6 +312,56 @@ def test_agent_prunes_only_after_graph_stream_completes() -> None:
     agent._prune_completed_thread.assert_called_once_with("target-thread")
 
 
+def test_agent_uses_stateless_graph_without_thread_id() -> None:
+    """
+    验证未传入线程 ID 时使用无 checkpoint Graph。
+
+    Returns:
+        None: 测试无返回值。
+
+    Raises:
+        None: 断言失败时由 pytest 报告。
+    """
+    persistent_graph = mock.Mock()
+    stateless_graph = mock.Mock()
+    stateless_graph.stream.return_value = iter(
+        [{"messages": [AIMessage(content="无状态完成")]}]
+    )
+    agent = object.__new__(SQLCheckpointAgentStreamingPlus)
+    agent._graph = persistent_graph
+    agent._stateless_graph = stateless_graph
+    agent._config = AgentConfig(model_name="fake:echo", thread_id="default-thread")
+    agent._prune_completed_thread = mock.Mock()
+
+    with mock.patch("builtins.print"):
+        answer = agent.chat_once_stream("你好")
+
+    assert answer == "无状态完成"
+    persistent_graph.stream.assert_not_called()
+    stateless_graph.stream.assert_called_once_with(
+        {"messages": [{"role": "user", "content": "你好"}]},
+        {"configurable": {}},
+        stream_mode="values",
+    )
+    agent._prune_completed_thread.assert_not_called()
+
+
+def test_agent_rejects_explicit_empty_thread_id() -> None:
+    """
+    验证显式空线程 ID 不会被当作无状态调用。
+
+    Returns:
+        None: 测试无返回值。
+
+    Raises:
+        None: 断言失败时由 pytest 报告。
+    """
+    agent = object.__new__(SQLCheckpointAgentStreamingPlus)
+
+    with pytest.raises(AssertionError, match="thread_id 不能为空"):
+        agent.chat_once_stream("你好", thread_id="   ")
+
+
 def test_agent_does_not_prune_when_graph_stream_fails() -> None:
     """
     验证 graph 异常退出时保留中间 checkpoint，不执行清理。

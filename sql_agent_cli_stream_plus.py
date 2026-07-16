@@ -3055,6 +3055,7 @@ class SQLCheckpointAgentStreamingPlus:
             self._store = InMemoryStore(
                 index={"dims": embed_dims, "embed": embed_model}
             )
+            self._stateless_graph = builder.compile(store=self._store)
             return builder.compile(checkpointer=self._saver, store=self._store)
 
         try:
@@ -3083,6 +3084,7 @@ class SQLCheckpointAgentStreamingPlus:
         except Exception as exc:
             raise RuntimeError(f"Postgres 初始化失败：{exc}")
 
+        self._stateless_graph = builder.compile(store=self._store)
         return builder.compile(checkpointer=self._saver, store=self._store)
 
     # --------------- 外部 API ---------------
@@ -3113,23 +3115,33 @@ class SQLCheckpointAgentStreamingPlus:
         Args:
             user_input (Union[str, Sequence[dict[str, Any]], HumanMessage]):
                 用户输入内容，可为纯文本、LangChain HumanMessage，或多模态内容列表。
-            thread_id (Optional[str]): LangGraph 线程 ID，默认使用配置中的线程。
+            thread_id (Optional[str]): LangGraph 线程 ID。传入 None 时执行
+                不保存 checkpoint 的无状态调用。
 
         Returns:
             str: 聚合后的最终文本回复。
 
         Raises:
-            AssertionError: 当输入类型不受支持时抛出。
+            AssertionError: 当输入类型不受支持，或显式传入空线程 ID 时抛出。
         """
         # 每轮初始化
         self._printed_in_round = False
         self._agent_header_printed = False
         self._generated_images = []
-        cfg = {"configurable": {"thread_id": thread_id or self._config.thread_id}}
+        configurable: dict[str, Any] = {}
+        persistent_thread_id: Optional[str] = None
+        if thread_id is None:
+            graph = self._stateless_graph
+        else:
+            persistent_thread_id = thread_id.strip()
+            assert persistent_thread_id, "thread_id 不能为空"
+            configurable["thread_id"] = persistent_thread_id
+            graph = self._graph
         # 为 langmem 工具提供命名空间占位符值
         ns = getattr(self, "_memory_namespace", "").strip()
         if ns:
-            cfg["configurable"]["langgraph_user_id"] = ns
+            configurable["langgraph_user_id"] = ns
+        cfg = {"configurable": configurable}
         last_text = ""
         tool_notified = False
         stream_completed = False
@@ -3151,7 +3163,7 @@ class SQLCheckpointAgentStreamingPlus:
             raise AssertionError("user_input 类型不受支持")
 
         try:
-            for ev in self._graph.stream(
+            for ev in graph.stream(
                 payload,
                 cfg,
                 stream_mode="values",
@@ -3179,8 +3191,8 @@ class SQLCheckpointAgentStreamingPlus:
                 print(f"Agent: {last_text}")
             if self._printed_in_round:
                 print("")
-        if stream_completed:
-            self._prune_completed_thread(str(cfg["configurable"]["thread_id"]))
+        if stream_completed and persistent_thread_id is not None:
+            self._prune_completed_thread(persistent_thread_id)
         return last_text
 
     def _prune_completed_thread(self, thread_id: str) -> None:
@@ -3539,7 +3551,7 @@ def run_repl(agent: SQLCheckpointAgentStreamingPlus) -> None:
             print(f"已新建并切换到线程：{agent._config.thread_id}")
             continue
 
-        agent.chat_once_stream(text)
+        agent.chat_once_stream(text, thread_id=agent._config.thread_id)
 
 
 # ------------------------- 假模型：流式 Echo -------------------------
@@ -3700,7 +3712,10 @@ if __name__ == "__main__":
         cfg.use_memory_ckpt = True
         agent = SQLCheckpointAgentStreamingPlus(cfg)
         agent.set_token_printer(lambda s: print(s, end="", flush=True))
-        agent.chat_once_stream("测试 echo 模型 是否按词流式输出")
+        agent.chat_once_stream(
+            "测试 echo 模型 是否按词流式输出",
+            thread_id=agent._config.thread_id,
+        )
     else:
         config = _read_env_config()
         agent = SQLCheckpointAgentStreamingPlus(config)
