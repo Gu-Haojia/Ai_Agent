@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 import json
+import math
 import os
 import re
 import sys
@@ -447,29 +448,6 @@ def _normalize_blocked_ai_message(message: AIMessage) -> AIMessage:
     )
 
 
-def _extract_text_for_token_count(message: Any) -> str:
-    """
-    提取用于 token 统计的文本。
-
-    优先复用 ``_extract_text_content``（遇到纯工具调用时会返回 None），
-    当未取到文本时回退为格式化后的字符串化结果，避免 join 时出现 None。
-
-    Args:
-        message (Any): LangChain 消息对象。
-
-    Returns:
-        str: 可用于 token 统计的文本。
-    """
-
-    text = _extract_text_content(message)
-    if text is not None and text != "":
-        return _sanitize_context_text(text)
-    content = getattr(message, "content", None)
-    if isinstance(content, str) and content.strip():
-        return _sanitize_context_text(_apply_format(content))
-    return _sanitize_context_text(_apply_format(str(message)))
-
-
 def _infer_model_provider(model_name: str) -> str:
     """
     推断模型提供方前缀。
@@ -584,18 +562,440 @@ def _read_positive_int_env(name: str, default: int) -> int:
 
 
 @dataclass(frozen=True)
+class ContextTokenEstimate:
+    """
+    保存群聊上下文的本地 token 估算明细。
+
+    Args:
+        summary_text_tokens (int): 群聊摘要的文本 token 数。
+        message_text_tokens (int): 当前消息列表的文本 token 数。
+        image_tokens (int): 当前消息列表的图片额定 token 数。
+        video_tokens (int): 当前消息列表的视频额定 token 数。
+        image_count (int): 当前消息列表中的图片数量。
+        video_count (int): 当前消息列表中的视频数量。
+        video_seconds (int): 按每个视频向上取整后的累计计费秒数。
+        message_count (int): 当前消息数量。
+
+    Returns:
+        None: dataclass 初始化不返回额外值。
+
+    Raises:
+        AssertionError: 当任一统计值为负数时抛出。
+    """
+
+    summary_text_tokens: int = 0
+    message_text_tokens: int = 0
+    image_tokens: int = 0
+    video_tokens: int = 0
+    image_count: int = 0
+    video_count: int = 0
+    video_seconds: int = 0
+    message_count: int = 0
+
+    def __post_init__(self) -> None:
+        """
+        校验 token 估算明细。
+
+        Returns:
+            None: 无返回值。
+
+        Raises:
+            AssertionError: 当任一统计值为负数时抛出。
+        """
+        values = (
+            self.summary_text_tokens,
+            self.message_text_tokens,
+            self.image_tokens,
+            self.video_tokens,
+            self.image_count,
+            self.video_count,
+            self.video_seconds,
+            self.message_count,
+        )
+        assert all(value >= 0 for value in values), "token 估算值不能为负数"
+
+    @property
+    def text_tokens(self) -> int:
+        """
+        返回摘要和消息正文的文本 token 总数。
+
+        Returns:
+            int: 文本 token 总数。
+
+        Raises:
+            None: 本属性不主动抛出异常。
+        """
+        return self.summary_text_tokens + self.message_text_tokens
+
+    @property
+    def total_tokens(self) -> int:
+        """
+        返回文本、图片和视频的 token 总数。
+
+        Returns:
+            int: 上下文 token 总数。
+
+        Raises:
+            None: 本属性不主动抛出异常。
+        """
+        return self.text_tokens + self.image_tokens + self.video_tokens
+
+
+class ContextTokenCounter:
+    """
+    统一估算群聊文本与多模态上下文 token。
+
+    Args:
+        token_encoder (Any | None): 可选的文本 token 编码器；为空时使用
+            ``cl100k_base``。
+
+    Returns:
+        None: 初始化不返回额外值。
+
+    Raises:
+        AssertionError: 当文本编码器无法初始化时抛出。
+    """
+
+    IMAGE_TOKENS_PER_ITEM: int = 1120
+    VIDEO_TOKENS_PER_SECOND: int = 102
+
+    def __init__(self, token_encoder: Any | None = None) -> None:
+        """
+        初始化统一上下文 token 统计器。
+
+        Args:
+            token_encoder (Any | None): 可选的文本 token 编码器。
+
+        Returns:
+            None: 无返回值。
+
+        Raises:
+            AssertionError: 当文本编码器无法初始化时抛出。
+        """
+        self._encoder = token_encoder or self._build_token_encoder()
+
+    @staticmethod
+    def _build_token_encoder() -> Any:
+        """
+        初始化文本 token 编码器。
+
+        Returns:
+            Any: ``cl100k_base`` 编码器。
+
+        Raises:
+            AssertionError: 当 tiktoken 缺失或编码器初始化失败时抛出。
+        """
+        try:
+            import tiktoken  # type: ignore
+        except ImportError as exc:  # pragma: no cover
+            raise AssertionError("缺少依赖：请先安装 tiktoken。") from exc
+        try:
+            return tiktoken.get_encoding("cl100k_base")
+        except Exception as exc:  # pragma: no cover
+            raise AssertionError("无法初始化 tiktoken 编码器 cl100k_base。") from exc
+
+    def count_text_tokens(self, text: str) -> int:
+        """
+        统计安全文本的 token 数。
+
+        Args:
+            text (str): 待统计文本。
+
+        Returns:
+            int: 文本 token 数。
+
+        Raises:
+            AssertionError: 当文本类型非法或编码失败时抛出。
+        """
+        assert isinstance(text, str), "text 必须是字符串"
+        sanitized = _sanitize_context_text(text)
+        try:
+            return len(self._encoder.encode(sanitized))
+        except Exception as exc:  # pragma: no cover
+            raise AssertionError("上下文 token 编码失败。") from exc
+
+    def count_state(
+        self, summary: str, messages: Sequence[Any]
+    ) -> ContextTokenEstimate:
+        """
+        统计摘要与消息组成的完整上下文。
+
+        Args:
+            summary (str): 当前群聊摘要。
+            messages (Sequence[Any]): 当前 LangChain 消息序列。
+
+        Returns:
+            ContextTokenEstimate: 完整上下文 token 明细。
+
+        Raises:
+            AssertionError: 当摘要或消息序列类型非法时抛出。
+        """
+        assert isinstance(summary, str), "summary 必须是字符串"
+        message_estimate = self.count_messages(messages)
+        return ContextTokenEstimate(
+            summary_text_tokens=self.count_text_tokens(summary),
+            message_text_tokens=message_estimate.message_text_tokens,
+            image_tokens=message_estimate.image_tokens,
+            video_tokens=message_estimate.video_tokens,
+            image_count=message_estimate.image_count,
+            video_count=message_estimate.video_count,
+            video_seconds=message_estimate.video_seconds,
+            message_count=message_estimate.message_count,
+        )
+
+    def count_messages(self, messages: Sequence[Any]) -> ContextTokenEstimate:
+        """
+        统计消息列表的文本、图片和视频 token。
+
+        Args:
+            messages (Sequence[Any]): 当前 LangChain 消息序列。
+
+        Returns:
+            ContextTokenEstimate: 消息列表 token 明细。
+
+        Raises:
+            AssertionError: 当消息序列或视频时长非法时抛出。
+        """
+        assert isinstance(messages, Sequence), "messages 必须是序列"
+        message_list = list(messages)
+        text = "\n".join(
+            self.message_to_text(message, include_media_placeholders=False)
+            for message in message_list
+        )
+        image_count = 0
+        video_count = 0
+        video_seconds = 0
+        for message in message_list:
+            content = getattr(message, "content", None)
+            current_images, current_videos, current_seconds = self.count_content_media(
+                content
+            )
+            image_count += current_images
+            video_count += current_videos
+            video_seconds += current_seconds
+        return ContextTokenEstimate(
+            message_text_tokens=self.count_text_tokens(text),
+            image_tokens=image_count * self.IMAGE_TOKENS_PER_ITEM,
+            video_tokens=video_seconds * self.VIDEO_TOKENS_PER_SECOND,
+            image_count=image_count,
+            video_count=video_count,
+            video_seconds=video_seconds,
+            message_count=len(message_list),
+        )
+
+    def message_to_text(
+        self, message: Any, include_media_placeholders: bool
+    ) -> str:
+        """
+        将单条消息转换为安全文本。
+
+        Args:
+            message (Any): LangChain 消息对象或兼容对象。
+            include_media_placeholders (bool): 是否为摘要输入保留媒体占位符。
+
+        Returns:
+            str: 不含媒体原始数据和模型内部元数据的安全文本。
+
+        Raises:
+            AssertionError: 当占位符开关不是布尔值时抛出。
+        """
+        assert isinstance(include_media_placeholders, bool), "占位符开关必须为布尔值"
+        parts = [f"[{self.message_role(message)}]"]
+        content_text = self.content_to_safe_text(
+            getattr(message, "content", None),
+            include_media_placeholders=include_media_placeholders,
+        )
+        if content_text:
+            parts.append(content_text)
+        if isinstance(message, AIMessage) and message.tool_calls:
+            calls = _sanitize_context_text(
+                json.dumps(message.tool_calls, ensure_ascii=False, default=str)
+            )
+            parts.append(f"工具调用: {calls}")
+        if isinstance(message, ToolMessage):
+            tool_name = str(getattr(message, "name", "") or "").strip()
+            if tool_name:
+                parts.append(f"工具名: {tool_name}")
+        return "\n".join(parts)
+
+    @staticmethod
+    def message_role(message: Any) -> str:
+        """
+        获取消息角色名称。
+
+        Args:
+            message (Any): LangChain 消息对象。
+
+        Returns:
+            str: 用于统计和摘要的中文角色名称。
+
+        Raises:
+            None: 未知类型返回 ``消息``。
+        """
+        if isinstance(message, HumanMessage):
+            return "用户"
+        if isinstance(message, AIMessage):
+            return "Agent"
+        if isinstance(message, ToolMessage):
+            return "工具"
+        if isinstance(message, SystemMessage):
+            return "系统"
+        return "消息"
+
+    def content_to_safe_text(
+        self, content: Any, include_media_placeholders: bool
+    ) -> str:
+        """
+        将消息 content 转换为不含媒体原始数据的安全文本。
+
+        Args:
+            content (Any): 消息 content 字段。
+            include_media_placeholders (bool): 是否保留媒体占位符。
+
+        Returns:
+            str: 可用于统计或摘要的安全文本。
+
+        Raises:
+            AssertionError: 当占位符开关不是布尔值时抛出。
+        """
+        assert isinstance(include_media_placeholders, bool), "占位符开关必须为布尔值"
+        if content is None:
+            return ""
+        if isinstance(content, str):
+            return _sanitize_context_text(_apply_format(content))
+        if isinstance(content, (bytes, bytearray)):
+            return f"[二进制内容已省略 len={len(content)}]"
+        if isinstance(content, Sequence) and not isinstance(
+            content, (str, bytes, bytearray)
+        ):
+            blocks = [
+                self.block_to_safe_text(block, include_media_placeholders)
+                for block in content
+            ]
+            return "\n".join(item for item in blocks if item)
+        return _sanitize_context_text(str(content))
+
+    def block_to_safe_text(
+        self, block: Any, include_media_placeholders: bool
+    ) -> str:
+        """
+        将单个内容块转换为安全文本。
+
+        Args:
+            block (Any): 多模态内容块。
+            include_media_placeholders (bool): 是否保留媒体占位符。
+
+        Returns:
+            str: 安全文本、媒体占位符或空字符串。
+
+        Raises:
+            AssertionError: 当占位符开关不是布尔值时抛出。
+        """
+        assert isinstance(include_media_placeholders, bool), "占位符开关必须为布尔值"
+        if isinstance(block, dict):
+            block_type = str(block.get("type") or "").lower()
+            if block_type == "text":
+                return _sanitize_context_text(_apply_format(str(block.get("text") or "")))
+            if block_type == "image_url":
+                return "[图片已省略]" if include_media_placeholders else ""
+            if block_type in {"media", "video"}:
+                if not include_media_placeholders:
+                    return ""
+                mime = str(block.get("mime_type") or "").strip()
+                return f"[媒体已省略 mime={mime or 'unknown'}]"
+            sanitized = dict(block)
+            if "data" in sanitized:
+                sanitized["data"] = "[BINARY_OMITTED]"
+            return _sanitize_context_text(
+                json.dumps(sanitized, ensure_ascii=False, default=str)
+            )
+        block_type = str(getattr(block, "type", "") or "").lower()
+        if block_type == "text":
+            return _sanitize_context_text(
+                _apply_format(str(getattr(block, "text", "") or ""))
+            )
+        if block_type == "image_url":
+            return "[图片已省略]" if include_media_placeholders else ""
+        return _sanitize_context_text(str(block))
+
+    def count_content_media(self, content: Any) -> tuple[int, int, int]:
+        """
+        统计 content 中的图片数、视频数和视频计费秒数。
+
+        Args:
+            content (Any): LangChain 消息 content 字段。
+
+        Returns:
+            tuple[int, int, int]: 图片数、视频数、视频计费秒数。
+
+        Raises:
+            AssertionError: 当视频缺少合法时长或媒体类型不受支持时抛出。
+        """
+        if not isinstance(content, Sequence) or isinstance(
+            content, (str, bytes, bytearray)
+        ):
+            return (0, 0, 0)
+        image_count = 0
+        video_count = 0
+        video_seconds = 0
+        for block in content:
+            images, videos, seconds = self.count_block_media(block)
+            image_count += images
+            video_count += videos
+            video_seconds += seconds
+        return (image_count, video_count, video_seconds)
+
+    def count_block_media(self, block: Any) -> tuple[int, int, int]:
+        """
+        统计单个内容块的媒体额定量。
+
+        Args:
+            block (Any): 多模态内容块。
+
+        Returns:
+            tuple[int, int, int]: 图片数、视频数、视频计费秒数。
+
+        Raises:
+            AssertionError: 当视频缺少合法时长或媒体类型不受支持时抛出。
+        """
+        if not isinstance(block, dict):
+            block_type = str(getattr(block, "type", "") or "").lower()
+            if block_type == "image_url":
+                return (1, 0, 0)
+            return (0, 0, 0)
+        block_type = str(block.get("type") or "").lower()
+        if block_type == "image_url":
+            return (1, 0, 0)
+        if block_type not in {"media", "video"}:
+            return (0, 0, 0)
+        mime_type = str(block.get("mime_type") or "").lower()
+        if mime_type.startswith("image/"):
+            return (1, 0, 0)
+        assert block_type == "video" or mime_type.startswith(
+            "video/"
+        ), f"不支持的媒体 token 统计类型: {mime_type or 'unknown'}"
+        duration = block.get("duration_seconds")
+        assert isinstance(duration, (int, float)) and not isinstance(
+            duration, bool
+        ), "视频消息缺少 duration_seconds"
+        assert math.isfinite(float(duration)) and float(duration) > 0, "视频时长必须为正数"
+        return (0, 1, math.ceil(float(duration)))
+
+
+@dataclass(frozen=True)
 class ContextCompressionConfig:
     """
     群聊上下文压缩配置。
 
     Args:
-        trigger_text_tokens (int): 触发压缩的文本 token 阈值。
-        keep_recent_text_tokens (int): 压缩后尽量保留的最近原文 token 数。
+        trigger_text_tokens (int): 触发压缩的上下文 token 阈值。
+        keep_recent_text_tokens (int): 压缩后尽量保留的最近原文 token 数，
+            包含文本、图片和视频。
         min_keep_recent_messages (int): 无论 token 数如何都至少保留的最近消息数；
             若消息数边界落在轮次中间，则向前扩展到完整轮次。
         max_summary_text_tokens (int): 群聊摘要允许的最大文本 token 数。
         min_compressible_text_tokens (int): 可压缩旧上下文至少达到该 token
-            数时才调用摘要模型。
+            数时才调用摘要模型，包含文本、图片和视频。
         print_summary (bool): 是否在控制台输出压缩摘要正文。
 
     Returns:
@@ -671,7 +1071,7 @@ class ContextTurn:
 
     Args:
         messages (list): 本轮包含的消息列表。
-        text_tokens (int): 本轮按文本内容估算的 token 数。
+        text_tokens (int): 本轮文本与媒体的 token 估算总数。
 
     Returns:
         None: dataclass 初始化不返回额外值。
@@ -705,6 +1105,7 @@ class ContextCompressor:
         config (ContextCompressionConfig): 压缩阈值配置。
         summary_model (Any): 具备 ``invoke`` 方法的摘要模型。
         token_encoder (Any | None): 可选 token 编码器；为空时使用 tiktoken。
+        token_counter (ContextTokenCounter | None): 可选的共享上下文统计器。
 
     Returns:
         None: 类初始化不返回额外值。
@@ -718,33 +1119,32 @@ class ContextCompressor:
         config: ContextCompressionConfig,
         summary_model: Any,
         token_encoder: Any | None = None,
+        token_counter: ContextTokenCounter | None = None,
     ) -> None:
+        """
+        初始化群聊上下文压缩器。
+
+        Args:
+            config (ContextCompressionConfig): 压缩阈值配置。
+            summary_model (Any): 具备 ``invoke`` 方法的摘要模型。
+            token_encoder (Any | None): 可选文本编码器。
+            token_counter (ContextTokenCounter | None): 可选共享统计器。
+
+        Returns:
+            None: 无返回值。
+
+        Raises:
+            AssertionError: 当配置、摘要模型或统计器参数冲突时抛出。
+        """
         assert isinstance(config, ContextCompressionConfig), "config 类型非法"
         invoke = getattr(summary_model, "invoke", None)
         assert callable(invoke), "summary_model 必须提供 invoke 方法"
+        assert not (
+            token_encoder is not None and token_counter is not None
+        ), "token_encoder 与 token_counter 不能同时提供"
         self._config = config
         self._summary_model = summary_model
-        self._encoder = token_encoder or self._build_token_encoder()
-
-    @staticmethod
-    def _build_token_encoder() -> Any:
-        """
-        初始化 tiktoken 编码器。
-
-        Returns:
-            Any: cl100k_base 编码器。
-
-        Raises:
-            AssertionError: 当 tiktoken 缺失或编码器初始化失败时抛出。
-        """
-        try:
-            import tiktoken  # type: ignore
-        except ImportError as exc:  # pragma: no cover
-            raise AssertionError("缺少依赖：请先安装 tiktoken。") from exc
-        try:
-            return tiktoken.get_encoding("cl100k_base")
-        except Exception as exc:  # pragma: no cover
-            raise AssertionError("无法初始化 tiktoken 编码器 cl100k_base。") from exc
+        self._token_counter = token_counter or ContextTokenCounter(token_encoder)
 
     def count_text_tokens(self, text: str) -> int:
         """
@@ -759,29 +1159,22 @@ class ContextCompressor:
         Raises:
             AssertionError: 当文本类型非法或编码失败时抛出。
         """
-        assert isinstance(text, str), "text 必须是字符串"
-        sanitized = _sanitize_context_text(text)
-        try:
-            return len(self._encoder.encode(sanitized))
-        except Exception as exc:  # pragma: no cover
-            raise AssertionError("上下文 token 编码失败。") from exc
+        return self._token_counter.count_text_tokens(text)
 
-    def count_messages_text_tokens(self, messages: Sequence[Any]) -> int:
+    def count_messages_tokens(self, messages: Sequence[Any]) -> int:
         """
-        统计消息列表的文本 token 数，不统计图片视觉 token。
+        统计消息列表的文本、图片和视频 token。
 
         Args:
             messages (Sequence[Any]): LangChain 消息序列。
 
         Returns:
-            int: 消息文本 token 总数。
+            int: 消息 token 总数。
 
         Raises:
             AssertionError: 当消息序列非法或 token 编码失败时抛出。
         """
-        assert isinstance(messages, Sequence), "messages 必须是序列"
-        text = "\n".join(self.message_to_summary_text(message) for message in messages)
-        return self.count_text_tokens(text)
+        return self._token_counter.count_messages(messages).total_tokens
 
     def compress(self, state: dict[str, Any]) -> dict[str, Any]:
         """
@@ -799,9 +1192,7 @@ class ContextCompressor:
         assert isinstance(state, dict), "state 必须是字典"
         messages = list(state.get("messages") or [])
         summary = str(state.get("group_context_summary") or "").strip()
-        total_tokens = self.count_text_tokens(summary) + self.count_messages_text_tokens(
-            messages
-        )
+        total_tokens = self._token_counter.count_state(summary, messages).total_tokens
         if total_tokens <= self._config.trigger_text_tokens:
             return {}
 
@@ -867,8 +1258,8 @@ class ContextCompressor:
 
         Args:
             round_number (int): 本次压缩后的累计轮次。
-            total_tokens_before (int): 压缩触发前的文本 token 总数。
-            compressible_tokens (int): 本次被压缩旧上下文的文本 token 数。
+            total_tokens_before (int): 压缩触发前的上下文 token 总数。
+            compressible_tokens (int): 本次被压缩旧上下文的 token 总数。
             removed_messages (int): 本次被移出原文上下文的消息数。
             kept_messages (int): 压缩后保留的最近消息数。
             kept_turns (int): 压缩后保留的最近完整轮次数。
@@ -920,7 +1311,7 @@ class ContextCompressor:
                 turns.append(
                     ContextTurn(
                         messages=current,
-                        text_tokens=self.count_messages_text_tokens(current),
+                        text_tokens=self.count_messages_tokens(current),
                     )
                 )
                 current = [message]
@@ -930,7 +1321,7 @@ class ContextCompressor:
             turns.append(
                 ContextTurn(
                     messages=current,
-                    text_tokens=self.count_messages_text_tokens(current),
+                    text_tokens=self.count_messages_tokens(current),
                 )
             )
         return turns
@@ -1061,24 +1452,9 @@ class ContextCompressor:
         Raises:
             None: 本方法对未知消息类型使用字符串表示。
         """
-        role = self.message_role(message)
-        parts = [f"[{role}]"]
-        content = getattr(message, "content", None)
-        content_text = self.content_to_safe_text(content)
-        if content_text:
-            parts.append(content_text)
-        if isinstance(message, AIMessage) and message.tool_calls:
-            calls = _sanitize_context_text(
-                json.dumps(message.tool_calls, ensure_ascii=False, default=str)
-            )
-            parts.append(f"工具调用: {calls}")
-        if isinstance(message, ToolMessage):
-            tool_name = str(getattr(message, "name", "") or "").strip()
-            if tool_name:
-                parts.append(f"工具名: {tool_name}")
-        if len(parts) == 1:
-            parts.append(_sanitize_context_text(str(message)))
-        return "\n".join(parts)
+        return self._token_counter.message_to_text(
+            message, include_media_placeholders=True
+        )
 
     @staticmethod
     def message_role(message: Any) -> str:
@@ -1094,15 +1470,7 @@ class ContextCompressor:
         Raises:
             None: 未知类型返回 ``消息``。
         """
-        if isinstance(message, HumanMessage):
-            return "用户"
-        if isinstance(message, AIMessage):
-            return "Agent"
-        if isinstance(message, ToolMessage):
-            return "工具"
-        if isinstance(message, SystemMessage):
-            return "系统"
-        return "消息"
+        return ContextTokenCounter.message_role(message)
 
     def content_to_safe_text(self, content: Any) -> str:
         """
@@ -1117,20 +1485,9 @@ class ContextCompressor:
         Raises:
             None: 未知结构使用脱敏后的字符串表示。
         """
-        if content is None:
-            return ""
-        if isinstance(content, str):
-            return _sanitize_context_text(_apply_format(content))
-        if isinstance(content, (bytes, bytearray)):
-            return f"[二进制内容已省略 len={len(content)}]"
-        if isinstance(content, Sequence) and not isinstance(
-            content, (str, bytes, bytearray)
-        ):
-            blocks: list[str] = []
-            for block in content:
-                blocks.append(self.block_to_safe_text(block))
-            return "\n".join(item for item in blocks if item)
-        return _sanitize_context_text(str(content))
+        return self._token_counter.content_to_safe_text(
+            content, include_media_placeholders=True
+        )
 
     def block_to_safe_text(self, block: Any) -> str:
         """
@@ -1145,25 +1502,9 @@ class ContextCompressor:
         Raises:
             None: 未知结构使用脱敏后的字符串表示。
         """
-        if isinstance(block, dict):
-            block_type = str(block.get("type") or "").lower()
-            if block_type == "text":
-                return _sanitize_context_text(_apply_format(str(block.get("text") or "")))
-            if block_type == "image_url":
-                return "[图片已省略]"
-            if block_type in {"media", "video"}:
-                mime = str(block.get("mime_type") or "").strip()
-                return f"[媒体已省略 mime={mime or 'unknown'}]"
-            sanitized = dict(block)
-            if "data" in sanitized:
-                sanitized["data"] = "[BINARY_OMITTED]"
-            return _sanitize_context_text(json.dumps(sanitized, ensure_ascii=False, default=str))
-        block_type = str(getattr(block, "type", "") or "").lower()
-        if block_type == "text":
-            return _sanitize_context_text(_apply_format(str(getattr(block, "text", "") or "")))
-        if block_type == "image_url":
-            return "[图片已省略]"
-        return _sanitize_context_text(str(block))
+        return self._token_counter.block_to_safe_text(
+            block, include_media_placeholders=True
+        )
 
     @staticmethod
     def extract_response_text(response: Any) -> str:
@@ -1826,6 +2167,7 @@ class SQLCheckpointAgentStreamingPlus:
         self._image_manager: Optional[ImageStorageManager] = None
         self._generated_images: list[GeneratedImage] = []
         self._playwright_runner = PlaywrightBrowserThreadRunner()
+        self._context_token_counter = ContextTokenCounter()
         self._context_compressor = self._build_context_compressor()
 
         self._graph = self._build_graph()
@@ -1962,7 +2304,11 @@ class SQLCheckpointAgentStreamingPlus:
         """
         config = ContextCompressionConfig.from_env()
         summary_model = self._build_context_summary_model()
-        return ContextCompressor(config=config, summary_model=summary_model)
+        return ContextCompressor(
+            config=config,
+            summary_model=summary_model,
+            token_counter=self._context_token_counter,
+        )
 
     def _build_context_summary_model(self) -> Any:
         """
@@ -3356,13 +3702,30 @@ class SQLCheckpointAgentStreamingPlus:
         assert isinstance(summary, str), "group_context_summary 类型非法"
         return summary
 
+    def estimate_tokens(
+        self, thread_id: Optional[str] = None
+    ) -> ContextTokenEstimate:
+        """
+        统计指定线程最新上下文的 token 明细。
+
+        Args:
+            thread_id (Optional[str]): 线程 ID，默认读取当前配置中的线程。
+
+        Returns:
+            ContextTokenEstimate: 文本、图片和视频 token 明细。
+
+        Raises:
+            AssertionError: 当 state、消息或媒体元数据非法时抛出。
+        """
+        values = self.get_latest_state_values(thread_id)
+        messages = list(values.get("messages", []))
+        summary = values.get("group_context_summary") or ""
+        assert isinstance(summary, str), "group_context_summary 非法"
+        return self._context_token_counter.count_state(summary, messages)
+
     def count_tokens(self, thread_id: Optional[str] = None) -> tuple[int, int]:
         """
-        统计指定线程最新消息列表的 token 数。
-
-        说明：
-        - 为避免与不同模型的聊天消息打包细节强耦合，这里采用将消息文本内容串联后用
-          tiktoken 的 `cl100k_base` 编码估算 token 数；若未安装 tiktoken 则抛出断言。
+        统计指定线程最新上下文的 token 总数和消息数。
 
         Args:
             thread_id (Optional[str]): 线程 ID，默认读取当前配置中的线程。
@@ -3371,38 +3734,10 @@ class SQLCheckpointAgentStreamingPlus:
             tuple[int, int]: (token_total, message_count)
 
         Raises:
-            AssertionError: 当未安装 tiktoken 或统计过程中发生异常时抛出。
+            AssertionError: 当 state、消息或媒体元数据非法时抛出。
         """
-        try:
-            import tiktoken  # type: ignore
-        except Exception as e:  # pragma: no cover
-            raise AssertionError("缺少依赖：请先安装 tiktoken 用于 token 统计。") from e
-
-        values = self.get_latest_state_values(thread_id)
-        messages = list(values.get("messages", []))
-        summary = values.get("group_context_summary") or ""
-        assert isinstance(summary, str), "group_context_summary 类型非法"
-        if not messages and not summary:
-            return (0, 0)
-
-        parts: list[str] = []
-        if summary:
-            parts.append(_sanitize_context_text(summary))
-        for m in messages:
-            parts.append(_extract_text_for_token_count(m))
-        text = "\n".join(parts)
-
-        try:
-            enc = tiktoken.get_encoding("cl100k_base")
-        except Exception as e:  # pragma: no cover
-            raise AssertionError("无法初始化 tiktoken 编码器 cl100k_base。") from e
-
-        try:
-            tokens = enc.encode(text)
-        except Exception as e:  # pragma: no cover
-            raise AssertionError("tiktoken 编码失败。") from e
-
-        return (len(tokens), len(messages))
+        estimate = self.estimate_tokens(thread_id)
+        return (estimate.total_tokens, estimate.message_count)
 
     # --------------- 历史/回放 ---------------
     @staticmethod

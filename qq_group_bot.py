@@ -1055,13 +1055,16 @@ class QQBotHandler(BaseHTTPRequestHandler):
             AssertionError: 当视频缺少必要信息或模型不支持视频时抛出。
         """
         assert isinstance(video, StoredVideo), "video 类型非法"
-        assert video.base64_data and video.mime_type, "视频缺少必要信息"
+        assert (
+            video.base64_data and video.mime_type and video.duration_seconds > 0
+        ), "视频缺少必要信息"
         normalized_model = (model_name or "").lower()
         if "gemini" in normalized_model or "google_genai" in normalized_model:
             return {
                 "type": "media",
                 "mime_type": video.mime_type,
                 "data": base64.b64decode(video.base64_data),
+                "duration_seconds": video.duration_seconds,
             }
         raise AssertionError("当前模型不支持视频输入，请切换到 Gemini 多模态模型。")
 
@@ -2378,7 +2381,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
         - /xlink <url>        → 解析指定 X 推文链接并按当前翻译模式发图
         - /clear              → 为当前群的当前 Prompt 新建线程
         - /whoami             → 先回当前系统提示词，再基于“你是谁”生成一条消息
-        - /token              → 统计当前群对应线程的消息 token 数
+        - /token              → 统计当前群对应线程的上下文 token 数
         - /summary            → 查看当前线程的上下文压缩摘要
         - /forget             → 清空当前线程的全部历史消息
         - /apicheck           → 使用当前模型自检 API 调用耗时
@@ -2729,13 +2732,16 @@ class QQBotHandler(BaseHTTPRequestHandler):
             return True
 
         if cmd == "/token" and len(parts) == 1:
-            # 统计当前群对应线程的消息 token 数
+            # 统计当前群对应线程的上下文 token 数
             try:
                 tid = self._thread_id_for(group_id)
-                tok, cnt = self.agent.count_tokens(thread_id=tid)
-                SINGLE_PRICE = 2  # cl100k_base 每 1M tokens 价格，单位美元
-                PRICE = tok / 1000000 * SINGLE_PRICE
-                msg = f"当前线程消息条数={cnt}，估算 tokens={tok} (cl100k_base)，下次输入费用约为 ${PRICE:.4f}"
+                estimate = self.agent.estimate_tokens(thread_id=tid)
+                msg = (
+                    f"当前线程消息条数={estimate.message_count}，"
+                    f"估算 tokens={estimate.total_tokens}\n"
+                    f"文本={estimate.text_tokens}，图片={estimate.image_tokens}，"
+                    f"视频={estimate.video_tokens}"
+                )
             except AssertionError as e:
                 msg = f"统计失败：{e}"
             except Exception as e:

@@ -8,8 +8,10 @@
 from __future__ import annotations
 
 import base64
+import math
 import mimetypes
 import os
+import subprocess
 import threading
 from io import BytesIO
 import time
@@ -75,11 +77,43 @@ class GeneratedImage:
 
 @dataclass(frozen=True)
 class StoredVideo:
-    """本地化保存后的入站视频信息。"""
+    """
+    本地化保存后的入站视频信息。
+
+    Args:
+        path (Path): 视频本地路径。
+        mime_type (str): 视频 MIME 类型。
+        base64_data (str): 视频 Base64 内容。
+        duration_seconds (float): 视频时长，单位秒。
+
+    Returns:
+        None: dataclass 初始化不返回额外值。
+
+    Raises:
+        AssertionError: 当视频元数据缺失或时长非法时抛出。
+    """
 
     path: Path
     mime_type: str
     base64_data: str
+    duration_seconds: float
+
+    def __post_init__(self) -> None:
+        """
+        校验视频存储信息。
+
+        Returns:
+            None: 无返回值。
+
+        Raises:
+            AssertionError: 当视频元数据缺失或时长非法时抛出。
+        """
+        assert isinstance(self.path, Path), "视频路径类型非法"
+        assert self.mime_type.startswith("video/"), "视频 MIME 类型非法"
+        assert self.base64_data, "视频 Base64 内容不能为空"
+        assert (
+            math.isfinite(self.duration_seconds) and self.duration_seconds > 0
+        ), "视频时长必须为正数"
 
     def inline_media(self) -> dict[str, object]:
         """
@@ -92,7 +126,11 @@ class StoredVideo:
             AssertionError: 当缺少必要字段时抛出。
         """
         assert self.mime_type and self.base64_data, "视频缺少必要元数据"
-        return {"mime_type": self.mime_type, "data": self.base64_data}
+        return {
+            "mime_type": self.mime_type,
+            "data": self.base64_data,
+            "duration_seconds": self.duration_seconds,
+        }
 
 
 class ImageStorageManager:
@@ -515,6 +553,47 @@ class ImageStorageManager:
             filename_hint = os.path.basename(urlparse(chosen_url).path)
         return self._store_image_bytes(data, mime, filename_hint)
 
+    @staticmethod
+    def _probe_video_duration_seconds(path: Path) -> float:
+        """
+        使用 ffprobe 读取视频时长。
+
+        Args:
+            path (Path): 已保存的视频文件路径。
+
+        Returns:
+            float: 视频时长，单位秒。
+
+        Raises:
+            AssertionError: 当文件不存在、ffprobe 执行失败或时长非法时抛出。
+        """
+        assert isinstance(path, Path) and path.is_file(), "视频文件不存在"
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(path),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, (
+            "ffprobe 读取视频时长失败: " + result.stderr.strip()
+        )
+        raw_duration = result.stdout.strip()
+        assert raw_duration, "ffprobe 未返回视频时长"
+        duration_seconds = float(raw_duration)
+        assert (
+            math.isfinite(duration_seconds) and duration_seconds > 0
+        ), "视频时长必须为正数"
+        return duration_seconds
+
     def save_remote_video(
         self, url: str, filename_hint: Optional[str] = None
     ) -> StoredVideo:
@@ -573,7 +652,13 @@ class ImageStorageManager:
         assert suffix, "无法确定视频文件扩展名"
         path = self._write_bytes(self._incoming_video_dir, data, suffix)
         b64 = base64.b64encode(data).decode("ascii")
-        return StoredVideo(path=path, mime_type=mime, base64_data=b64)
+        duration_seconds = self._probe_video_duration_seconds(path)
+        return StoredVideo(
+            path=path,
+            mime_type=mime,
+            base64_data=b64,
+            duration_seconds=duration_seconds,
+        )
 
     def save_generated_image(self, b64_data: str, prompt: str, mime_type: str) -> GeneratedImage:
         """
@@ -731,7 +816,13 @@ class ImageStorageManager:
             else self._guess_video_mime(guessed or "", str(target), normalized, data_bytes[:512])
         )
         encoded = base64.b64encode(data_bytes).decode("ascii")
-        return StoredVideo(path=target, mime_type=mime, base64_data=encoded)
+        duration_seconds = self._probe_video_duration_seconds(target)
+        return StoredVideo(
+            path=target,
+            mime_type=mime,
+            base64_data=encoded,
+            duration_seconds=duration_seconds,
+        )
 
     def resolve_video_path(self, filename: str) -> Path:
         """
