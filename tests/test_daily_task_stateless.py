@@ -7,7 +7,9 @@ from unittest import mock
 
 import pytest
 
+import qq_group_bot
 from daily_task import DailyTicketTask, DailyWeatherTask
+from qq_group_bot import QQBotHandler
 from sql_agent_cli_stream_plus import AgentConfig, SQLCheckpointAgentStreamingPlus
 
 
@@ -151,3 +153,66 @@ def test_daily_ticket_task_calls_agent_without_thread_id() -> None:
     query.run.assert_called_once_with("check")
     chat_once_stream.assert_called_once_with("整理抽選更新")
     send_func.assert_called_once_with(10001, "🎟️ 抽選内容")
+
+
+def test_daily_tasks_resolve_latest_shared_agent_on_each_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """验证任务创建后仍会在每次执行时取得最新共享 Agent。
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): pytest 属性替换工具。
+
+    Returns:
+        None: 测试通过时无返回值。
+
+    Raises:
+        None: 断言失败时由 pytest 报告。
+    """
+    old_agent = object.__new__(SQLCheckpointAgentStreamingPlus)
+    new_agent = object.__new__(SQLCheckpointAgentStreamingPlus)
+    used_agents: list[SQLCheckpointAgentStreamingPlus] = []
+
+    def _chat_once_stream(
+        agent: SQLCheckpointAgentStreamingPlus,
+        question: str,
+    ) -> str:
+        """记录执行任务时实际使用的 Agent。
+
+        Args:
+            agent (SQLCheckpointAgentStreamingPlus): 当前共享 Agent。
+            question (str): 定时任务问题。
+
+        Returns:
+            str: 用于完成任务发送的测试文本。
+        """
+        assert question.strip(), "question 不能为空"
+        used_agents.append(agent)
+        return "任务内容"
+
+    monkeypatch.setattr(
+        SQLCheckpointAgentStreamingPlus,
+        "chat_once_stream",
+        _chat_once_stream,
+    )
+    monkeypatch.setattr(QQBotHandler, "agent", old_agent, raising=False)
+    weather_task = DailyWeatherTask(
+        mock.Mock(),
+        [10001],
+        agent_provider=qq_group_bot._get_shared_agent,
+    )
+    query = mock.Mock()
+    query.run.return_value = '{"has_update": true}'
+    ticket_task = DailyTicketTask(
+        mock.Mock(),
+        [10001],
+        query=query,
+        agent_provider=qq_group_bot._get_shared_agent,
+    )
+
+    weather_task._execute_once()
+    QQBotHandler.agent = new_agent
+    weather_task._execute_once()
+    ticket_task._execute_once()
+
+    assert used_agents == [old_agent, new_agent, new_agent]

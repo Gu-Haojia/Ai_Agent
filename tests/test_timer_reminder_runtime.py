@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import gc
 import json
+import threading
 import time
+import weakref
 from pathlib import Path
 from unittest import mock
 
@@ -303,3 +306,58 @@ def test_rebuild_agent_keeps_old_agent_when_new_build_fails(
     assert QQBotHandler.agent is old_agent
     shutdown_mock.assert_not_called()
     reminder_manager.stop.assert_not_called()
+
+
+def test_repeated_rebuilds_release_old_agents_and_playwright_threads(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """验证连续重建不会保留旧 Agent 或 Playwright 工作线程。
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): pytest 环境与属性替换工具。
+        tmp_path (Path): pytest 临时目录。
+
+    Returns:
+        None: 测试通过时无返回值。
+
+    Raises:
+        None: 断言失败时由 pytest 报告。
+    """
+    prompt_file = tmp_path / "prompt.txt"
+    prompt_file.write_text("你是测试助手。", encoding="utf-8")
+    monkeypatch.setenv("SKIP_VENV_CHECK", "1")
+    monkeypatch.setenv("DRY_RUN", "1")
+    monkeypatch.setenv("ENABLE_TOOLS", "0")
+    monkeypatch.setenv("MODEL_NAME", "fake:echo")
+    monkeypatch.setenv("STORE_ID", "rebuild-leak-check")
+    monkeypatch.setenv("SYS_MSG_FILE", str(prompt_file))
+    monkeypatch.setenv("CONTEXT_SUMMARY_MODEL", "fake:summary")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    reminder_manager = mock.Mock(spec=TimerReminderManager)
+    image_manager = object.__new__(ImageStorageManager)
+    monkeypatch.setattr(
+        QQBotHandler, "reminder_manager", reminder_manager, raising=False
+    )
+    monkeypatch.setattr(QQBotHandler, "image_storage", image_manager, raising=False)
+    first_agent = qq_group_bot._build_agent_from_env(reminder_manager)
+    monkeypatch.setattr(QQBotHandler, "agent", first_agent, raising=False)
+    del first_agent
+    old_agent_references: list[
+        weakref.ReferenceType[SQLCheckpointAgentStreamingPlus]
+    ] = []
+
+    try:
+        for _ in range(20):
+            old_agent_references.append(weakref.ref(QQBotHandler.agent))
+            QQBotHandler.rebuild_agent()
+        gc.collect()
+
+        assert all(reference() is None for reference in old_agent_references)
+        assert not any(
+            thread.name.startswith("playwright-browser")
+            for thread in threading.enumerate()
+        )
+        assert reminder_manager.restore_pending.call_count == 0
+    finally:
+        QQBotHandler.agent.shutdown()
