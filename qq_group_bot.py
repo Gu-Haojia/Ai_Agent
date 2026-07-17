@@ -2927,6 +2927,11 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 account_profile = profile_manager.resolve(name)
                 os.environ["SYS_MSG_FILE"] = path
                 self.rebuild_agent()
+                print(
+                    f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m "
+                    f"\033[33m[QQBot]\033[0m /switch 已应用 Prompt：{name}，Agent 已重建。",
+                    flush=True,
+                )
                 thread_id = self._thread_id_for(group_id)
                 switch_msg = (
                     f"已切换到 {name} 并恢复对应线程：{thread_id}。"
@@ -3051,6 +3056,11 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 )
                 os.environ["MODEL_NAME"] = next_model
                 self.rebuild_agent()
+                print(
+                    f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m "
+                    f"\033[33m[QQBot]\033[0m /boost 已切换模型：{current_model} -> {next_model}，Agent 已重建。",
+                    flush=True,
+                )
                 msg = f"模型已切换：{current_model} -> {next_model}，Agent 已重建。"
             except AssertionError as e:
                 msg = f"切换失败：{e}"
