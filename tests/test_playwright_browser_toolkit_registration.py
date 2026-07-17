@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 import json
 import unittest
 from types import SimpleNamespace
+from unittest import mock
 
 import sql_agent_cli_stream_plus as agent_module
 from pydantic import BaseModel
@@ -167,12 +168,14 @@ class PlaywrightBrowserToolkitRegistrationTests(unittest.TestCase):
             agent_module.SQLCheckpointAgentStreamingPlus
         )
         runner = _FakePlaywrightRunner([])
+        reminder_manager = mock.Mock()
         agent._playwright_runner = runner
-        agent._reminder_scheduler = object()
+        agent._reminder_manager = reminder_manager
 
         agent.shutdown()
 
         self.assertTrue(runner.closed)
+        reminder_manager.stop.assert_not_called()
 
     def test_proxy_tool_returns_error_json_on_exception(self) -> None:
         """
@@ -213,7 +216,7 @@ class PlaywrightBrowserToolkitRegistrationTests(unittest.TestCase):
             agent_module.SQLCheckpointAgentStreamingPlus
         )
         agent._playwright_runner = PlaywrightBrowserThreadRunner()
-        agent._reminder_scheduler = object()
+        agent._reminder_manager = mock.Mock()
 
         try:
             tools = {

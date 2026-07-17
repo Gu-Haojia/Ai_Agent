@@ -21,7 +21,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Callable, Iterable, Match, Optional, Sequence, Union, Any
 from zoneinfo import ZoneInfo
-import threading
 import requests
 from pylatexenc.latex2text import LatexNodes2Text
 
@@ -1642,135 +1641,14 @@ class AgentConfig:
     store_id: str = ""
 
 
-class _ReminderStore:
-    """
-    简单的提醒持久化存储（JSON 文件）。
-
-    结构：列表，每个元素为字典：
-        {"ts": int, "group_id": int, "user_id": int, "description": str}
-
-    文件路径可通过环境变量 `REMINDER_STORE_FILE` 覆盖，默认 `.qq_reminders.json`。
-    所有操作具备进程内线程安全（基于 `threading.Lock`）。
-    """
-
-    _LOCK = threading.Lock()
-
-    def __init__(self, path: str) -> None:
-        assert isinstance(path, str) and path.strip(), "持久化文件路径无效"
-        self._path = os.path.abspath(path)
-
-    def _read_all(self) -> list[dict]:
-        """读取全部记录；不存在返回空列表，格式异常抛出断言。"""
-        if not os.path.isfile(self._path):
-            return []
-        with open(self._path, "r", encoding="utf-8") as f:
-            raw = f.read()
-        if not raw.strip():
-            return []
-        data = json.loads(raw)
-        assert isinstance(data, list), "提醒存储文件格式应为列表"
-        return data
-
-    def _write_all(self, items: list[dict]) -> None:
-        """原子写入全部记录。"""
-        tmp = self._path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(items, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, self._path)
-
-    @staticmethod
-    def _validate(rec: dict) -> None:
-        ts = rec.get("ts")
-        gid = rec.get("group_id")
-        uid = rec.get("user_id")
-        desc = rec.get("description")
-        ans = rec.get("answer")
-        assert isinstance(ts, int) and ts > 0, "ts 必须为正整数时间戳"
-        assert isinstance(gid, int) and gid > 0, "group_id 必须为正整数"
-        assert isinstance(uid, int) and uid > 0, "user_id 必须为正整数"
-        assert isinstance(desc, str) and desc.strip(), "description 不能为空"
-        assert isinstance(ans, str) and ans.strip(), "answer 不能为空"
-
-    def add(self, rec: dict) -> None:
-        """追加一条提醒记录。"""
-        self._validate(rec)
-        with self._LOCK:
-            items = self._read_all()
-            items.append(
-                {
-                    "ts": int(rec["ts"]),
-                    "group_id": int(rec["group_id"]),
-                    "user_id": int(rec["user_id"]),
-                    "description": str(rec["description"]),
-                    "answer": str(rec["answer"]),
-                }
-            )
-            self._write_all(items)
-
-    def prune_and_get_active(self, now_ts: int) -> list[dict]:
-        """清理过期项并返回未过期记录（ts > now_ts）。"""
-        assert isinstance(now_ts, int) and now_ts >= 0
-        with self._LOCK:
-            skip_num = 0
-            items = self._read_all()
-            active: list[dict] = []
-            for r in items:
-                try:
-                    self._validate(r)
-                except AssertionError:
-                    # 跳过非法项
-                    continue
-                if int(r["ts"]) > now_ts:
-                    active.append(
-                        {
-                            "ts": int(r["ts"]),
-                            "group_id": int(r["group_id"]),
-                            "user_id": int(r["user_id"]),
-                            "description": str(r["description"]),
-                            "answer": str(r["answer"]),
-                        }
-                    )
-                else:
-                    skip_num += 1
-
-            print(
-                f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m "
-                f"\033[33m[TimerStore]\033[0m 已清理过期提醒 {skip_num} 条，剩余有效提醒 {len(active)} 条。",
-                flush=True,
-            )
-            # 覆盖写入仅保留有效项
-            self._write_all(active)
-            return active
-
-    def remove_one(
-        self, ts: int, group_id: int, user_id: int, description: str, answer: str
-    ) -> None:
-        """移除第一条与参数完全匹配的记录（若不存在则忽略）。"""
-        with self._LOCK:
-            items = self._read_all()
-            idx = -1
-            for i, r in enumerate(items):
-                try:
-                    if (
-                        int(r.get("ts")) == int(ts)
-                        and int(r.get("group_id")) == int(group_id)
-                        and int(r.get("user_id")) == int(user_id)
-                        and str(r.get("description")) == str(description)
-                        and str(r.get("answer")) == str(answer)
-                    ):
-                        idx = i
-                        break
-                except Exception:
-                    continue
-            if idx >= 0:
-                items.pop(idx)
-                self._write_all(items)
-
-
 class SQLCheckpointAgentStreamingPlus:
     """多轮工具 + 强化综合 的流式 Agent。"""
 
-    def __init__(self, config: AgentConfig) -> None:
+    def __init__(
+        self,
+        config: AgentConfig,
+        reminder_manager: TimerReminderManager | None = None,
+    ) -> None:
         # 仅首次进行通用环境校验
         _ensure_common_env_once()
 
@@ -1796,11 +1674,7 @@ class SQLCheckpointAgentStreamingPlus:
 
         # 预先读取并缓存系统提示内容（从外部文件），避免每轮重复IO
         self._sys_msg_content: str = self._load_sys_msg_content()
-        # 提醒存储：用于计时器持久化
-        self._reminder_store = _ReminderStore(
-            os.environ.get("REMINDER_STORE_FILE", ".qq_reminders.json")
-        )
-        self._reminder_scheduler = TimerReminderManager(self._reminder_store)
+        self._reminder_manager = reminder_manager
         self._asobi_query = AsobiTicketQuery()
         self._image_manager: Optional[ImageStorageManager] = None
         self._generated_images: list[GeneratedImage] = []
@@ -1814,12 +1688,10 @@ class SQLCheckpointAgentStreamingPlus:
         self._printed_in_round: bool = False
         # 当前持久记忆命名空间（供 langmem 工具使用）；由外部在请求前设置
         self._memory_namespace: str = ""
-        # Agent 启动时恢复并调度尚未过期的提醒
-        self._reminder_scheduler.restore_pending()
 
     def shutdown(self) -> None:
         """
-        停止 Agent 的后台调度资源并释放 Playwright 浏览器。
+        释放 Agent 自身持有的 Playwright 浏览器。
 
         Returns:
             None: 函数无返回值。
@@ -1827,8 +1699,6 @@ class SQLCheckpointAgentStreamingPlus:
         Raises:
             None.
         """
-        if isinstance(self._reminder_scheduler, TimerReminderManager):
-            self._reminder_scheduler.stop()
         if isinstance(self._playwright_runner, PlaywrightBrowserThreadRunner):
             self._playwright_runner.close()
 
@@ -2595,57 +2465,57 @@ class SQLCheckpointAgentStreamingPlus:
 
                 tools.append(datetime_now)
 
-                # 计时器：群内 @ 提醒（异步非阻塞）
-                @tool
-                def set_timer(
-                    time: str,
-                    group_id: int,
-                    user_id: int,
-                    description: str,
-                    answer: str,
-                ) -> str:
-                    """
-                    设置一个异步计时器，在指定时刻于当前群内 @ 当前用户并发送提醒文本。
-                    默认时间基准：东京时间 (UTC+09:00)，内部通过独立调度器实现。
+                # 计时器由 QQ Bot 生命周期持有；其他入口不注册该工具。
+                if self._reminder_manager is not None:
 
-                    Args:
-                        time (str): 时间表达式，支持
-                            - `at:YYYY-MM-DDTHH:MM`
-                            - `after:Xd-Xh-Xm-Xs`（可缺省任意片段，但必须携带单位）。
-                        group_id (int): 当前Group。
-                        user_id (int): 当前User_id。
-                        description (str): 提供给工具的简要的提醒概括。
-                        answer (str): 提醒到时间后预定发送给用户的，符合当前说话风格的提醒内容。
+                    @tool
+                    def set_timer(
+                        time: str,
+                        group_id: int,
+                        user_id: int,
+                        description: str,
+                        answer: str,
+                    ) -> str:
+                        """
+                        设置一个异步计时器，在指定时刻于当前群内 @ 当前用户并发送提醒文本。
+                        默认时间基准：东京时间 (UTC+09:00)，内部通过独立调度器实现。
 
-                    Returns:
-                        str: 是否创建成功的提示信息。
+                        Args:
+                            time (str): at/after 格式的时间表达式。
+                            group_id (int): 当前群号。
+                            user_id (int): 当前用户号。
+                            description (str): 提醒概括。
+                            answer (str): 预定发送的提醒文本。
 
-                    Raises:
-                        AssertionError: 当参数不合法时抛出。
-                    """
-                    # 参数校验（显式断言，禁止模糊降级）
-                    assert isinstance(time, str) and time.strip(), "time 不能为空"
-                    assert (
-                        isinstance(group_id, int) and group_id > 0
-                    ), "group_id 必须为正整数"
-                    assert (
-                        isinstance(user_id, int) and user_id > 0
-                    ), "user_id 必须为正整数"
-                    assert (
-                        isinstance(description, str) and description.strip()
-                    ), "description 不能为空"
-                    assert isinstance(answer, str) and answer.strip(), "answer 不能为空"
+                        Returns:
+                            str: 创建成功的提示信息。
 
-                    time_expr = time.strip()
-                    return self._reminder_scheduler.create_timer(
-                        time_expr,
-                        group_id,
-                        user_id,
-                        description,
-                        answer,
-                    )
+                        Raises:
+                            AssertionError: 当参数不合法时抛出。
+                        """
+                        assert isinstance(time, str) and time.strip(), "time 不能为空"
+                        assert (
+                            isinstance(group_id, int) and group_id > 0
+                        ), "group_id 必须为正整数"
+                        assert (
+                            isinstance(user_id, int) and user_id > 0
+                        ), "user_id 必须为正整数"
+                        assert (
+                            isinstance(description, str) and description.strip()
+                        ), "description 不能为空"
+                        assert (
+                            isinstance(answer, str) and answer.strip()
+                        ), "answer 不能为空"
+                        time_expr = time.strip()
+                        return self._reminder_manager.create_timer(
+                            time_expr,
+                            group_id,
+                            user_id,
+                            description,
+                            answer,
+                        )
 
-                tools.append(set_timer)
+                    tools.append(set_timer)
 
                 asobi_ticket_query = self._asobi_query
 

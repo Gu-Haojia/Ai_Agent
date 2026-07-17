@@ -6,12 +6,15 @@
 
 from __future__ import annotations
 
+import json
+import os
 import re
 import sys
 import threading
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Protocol, Sequence
+from typing import Any, Callable, Protocol
 from zoneinfo import ZoneInfo
 
 import schedule
@@ -19,6 +22,64 @@ import schedule
 _RELATIVE_TIME_TOKEN_PATTERN = re.compile(
     r"^(?P<value>\d+)(?P<unit>[dhms])$", re.IGNORECASE
 )
+
+SendReminder = Callable[[int, int, str], None]
+
+
+@dataclass(frozen=True)
+class ReminderPruneResult:
+    """描述持久化提醒清理结果。
+
+    Args:
+        active_records (tuple[dict[str, Any], ...]): 仍需恢复的有效记录。
+        expired_count (int): 已删除的过期记录数。
+        invalid_count (int): 已删除的非法记录数。
+    """
+
+    active_records: tuple[dict[str, Any], ...]
+    expired_count: int
+    invalid_count: int
+
+
+@dataclass(frozen=True)
+class ReminderRestoreResult:
+    """描述启动时的提醒恢复结果。
+
+    Args:
+        restored_count (int): 已成功注册的提醒数。
+        failed_count (int): 注册失败的提醒数。
+        expired_count (int): 已清理的过期记录数。
+        invalid_count (int): 已清理的非法记录数。
+    """
+
+    restored_count: int
+    failed_count: int
+    expired_count: int
+    invalid_count: int
+
+    def display(self) -> str:
+        """生成启动摘要文本。
+
+        Returns:
+            str: 提醒恢复与清理统计。
+
+        Raises:
+            AssertionError: 当任一统计值为负数时抛出。
+        """
+        values = (
+            self.restored_count,
+            self.failed_count,
+            self.expired_count,
+            self.invalid_count,
+        )
+        assert all(value >= 0 for value in values), "提醒统计值不能为负数"
+        result = f"已恢复 {self.restored_count} 个"
+        if self.failed_count:
+            result += f" · 失败 {self.failed_count} 个"
+        result += f" · 已清理 {self.expired_count} 个"
+        if self.invalid_count:
+            result += f" · 无效 {self.invalid_count} 个"
+        return result
 
 
 class ReminderStoreProtocol(Protocol):
@@ -55,7 +116,7 @@ class ReminderStoreProtocol(Protocol):
             answer (str): 提醒文本。
         """
 
-    def prune_and_get_active(self, now_ts: int) -> Sequence[dict[str, Any]]:
+    def prune_and_get_active(self, now_ts: int) -> ReminderPruneResult:
         """
         清理过期提醒并返回仍需触发的提醒列表。
 
@@ -63,9 +124,196 @@ class ReminderStoreProtocol(Protocol):
             now_ts (int): 当前 Unix 时间戳。
 
         Returns:
-            str: 描述当前任务状态的提示信息。
-            Sequence[dict[str, Any]]: 尚未过期的提醒集合。
+            ReminderPruneResult: 有效提醒及清理统计。
         """
+
+
+class JsonReminderStore:
+    """使用 JSON 文件持久化提醒记录。
+
+    Args:
+        path (str): 提醒文件路径。
+    """
+
+    _LOCK = threading.Lock()
+
+    def __init__(self, path: str) -> None:
+        """初始化 JSON 提醒存储。
+
+        Args:
+            path (str): 提醒文件路径。
+
+        Raises:
+            AssertionError: 当路径为空时抛出。
+        """
+        assert isinstance(path, str) and path.strip(), "持久化文件路径无效"
+        self._path = os.path.abspath(path)
+
+    def _read_all(self) -> list[dict[str, Any]]:
+        """读取全部提醒记录。
+
+        Returns:
+            list[dict[str, Any]]: 文件中的提醒记录。
+
+        Raises:
+            AssertionError: 当文件根节点不是列表时抛出。
+            json.JSONDecodeError: 当 JSON 内容损坏时抛出。
+        """
+        if not os.path.isfile(self._path):
+            return []
+        with open(self._path, "r", encoding="utf-8") as file:
+            raw = file.read()
+        if not raw.strip():
+            return []
+        data = json.loads(raw)
+        assert isinstance(data, list), "提醒存储文件格式应为列表"
+        return data
+
+    def _write_all(self, items: list[dict[str, Any]]) -> None:
+        """原子写入全部提醒记录。
+
+        Args:
+            items (list[dict[str, Any]]): 需要保存的提醒记录。
+
+        Returns:
+            None: 无返回值。
+        """
+        temporary_path = self._path + ".tmp"
+        with open(temporary_path, "w", encoding="utf-8") as file:
+            json.dump(items, file, ensure_ascii=False, indent=2)
+        os.replace(temporary_path, self._path)
+
+    @staticmethod
+    def _validate(record: dict[str, Any]) -> None:
+        """校验单条提醒记录。
+
+        Args:
+            record (dict[str, Any]): 待校验的提醒记录。
+
+        Raises:
+            AssertionError: 当字段缺失或类型不合法时抛出。
+        """
+        assert isinstance(record, dict), "提醒记录必须为对象"
+        ts = record.get("ts")
+        group_id = record.get("group_id")
+        user_id = record.get("user_id")
+        description = record.get("description")
+        answer = record.get("answer")
+        assert isinstance(ts, int) and ts > 0, "ts 必须为正整数时间戳"
+        assert isinstance(group_id, int) and group_id > 0, "group_id 必须为正整数"
+        assert isinstance(user_id, int) and user_id > 0, "user_id 必须为正整数"
+        assert isinstance(description, str) and description.strip(), "description 不能为空"
+        assert isinstance(answer, str) and answer.strip(), "answer 不能为空"
+
+    @staticmethod
+    def _normalize(record: dict[str, Any]) -> dict[str, Any]:
+        """生成兼容既有文件格式的规范记录。
+
+        Args:
+            record (dict[str, Any]): 已通过校验的提醒记录。
+
+        Returns:
+            dict[str, Any]: 仅包含既有五个字段的记录。
+        """
+        return {
+            "ts": int(record["ts"]),
+            "group_id": int(record["group_id"]),
+            "user_id": int(record["user_id"]),
+            "description": str(record["description"]),
+            "answer": str(record["answer"]),
+        }
+
+    def add(self, record: dict[str, Any]) -> None:
+        """追加一条提醒记录。
+
+        Args:
+            record (dict[str, Any]): 待保存的提醒记录。
+
+        Returns:
+            None: 无返回值。
+
+        Raises:
+            AssertionError: 当提醒记录不合法时抛出。
+        """
+        self._validate(record)
+        with self._LOCK:
+            items = self._read_all()
+            items.append(self._normalize(record))
+            self._write_all(items)
+
+    def prune_and_get_active(self, now_ts: int) -> ReminderPruneResult:
+        """删除过期或非法记录并返回有效提醒。
+
+        Args:
+            now_ts (int): 当前 Unix 时间戳。
+
+        Returns:
+            ReminderPruneResult: 有效提醒及清理统计。
+
+        Raises:
+            AssertionError: 当当前时间戳不合法时抛出。
+        """
+        assert isinstance(now_ts, int) and now_ts >= 0, "now_ts 必须为非负整数"
+        with self._LOCK:
+            items = self._read_all()
+            active: list[dict[str, Any]] = []
+            expired_count = 0
+            invalid_count = 0
+            for record in items:
+                try:
+                    self._validate(record)
+                except AssertionError:
+                    invalid_count += 1
+                    continue
+                if int(record["ts"]) > now_ts:
+                    active.append(self._normalize(record))
+                else:
+                    expired_count += 1
+            self._write_all(active)
+        return ReminderPruneResult(
+            active_records=tuple(active),
+            expired_count=expired_count,
+            invalid_count=invalid_count,
+        )
+
+    def remove_one(
+        self,
+        ts: int,
+        group_id: int,
+        user_id: int,
+        description: str,
+        answer: str,
+    ) -> None:
+        """移除第一条完全匹配的提醒记录。
+
+        Args:
+            ts (int): 触发时间戳。
+            group_id (int): 群号。
+            user_id (int): 用户号。
+            description (str): 提醒描述。
+            answer (str): 提醒文本。
+
+        Returns:
+            None: 无返回值；记录不存在时不修改文件。
+        """
+        with self._LOCK:
+            items = self._read_all()
+            matched_index: int | None = None
+            for index, record in enumerate(items):
+                if not isinstance(record, dict):
+                    continue
+                if (
+                    record.get("ts") == ts
+                    and record.get("group_id") == group_id
+                    and record.get("user_id") == user_id
+                    and record.get("description") == description
+                    and record.get("answer") == answer
+                ):
+                    matched_index = index
+                    break
+            if matched_index is not None:
+                items.pop(matched_index)
+                self._write_all(items)
 
 
 class TimerReminderManager:
@@ -76,6 +324,7 @@ class TimerReminderManager:
     def __init__(
         self,
         reminder_store: ReminderStoreProtocol,
+        send_reminder: SendReminder,
         timezone: ZoneInfo | None = None,
     ) -> None:
         """
@@ -83,13 +332,16 @@ class TimerReminderManager:
 
         Args:
             reminder_store (ReminderStoreProtocol): 提醒持久化存储实现。
+            send_reminder (SendReminder): QQ 提醒发送函数。
             timezone (ZoneInfo | None): 目标时区，默认使用东京时间。
 
         Raises:
             AssertionError: 当 `reminder_store` 缺失时抛出。
         """
         assert reminder_store is not None, "reminder_store 不能为空"
+        assert callable(send_reminder), "send_reminder 必须可调用"
         self._store = reminder_store
+        self._send_reminder = send_reminder
         self._tz = timezone or ZoneInfo("Asia/Tokyo")
         self._scheduler = schedule.Scheduler()
         self._lock = threading.Lock()
@@ -162,18 +414,21 @@ class TimerReminderManager:
         )
         return message
 
-    def restore_pending(self, log_prefix: str = "[TimerStore]") -> None:
+    def restore_pending(self, log_prefix: str = "[TimerStore]") -> ReminderRestoreResult:
         """
         恢复尚未触发的提醒任务。
 
         Args:
             log_prefix (str): 日志前缀，用于区分初始化恢复。
+
+        Returns:
+            ReminderRestoreResult: 本次恢复及清理统计。
         """
         now_ts = int(time.time())
-        active = self._store.prune_and_get_active(now_ts)
-        if not active:
-            return
-        for record in active:
+        prune_result = self._store.prune_and_get_active(now_ts)
+        restored_count = 0
+        failed_count = 0
+        for record in prune_result.active_records:
             try:
                 self._schedule_job(
                     trigger_ts=int(record.get("ts")),
@@ -184,8 +439,16 @@ class TimerReminderManager:
                     log_prefix=log_prefix,
                     action="restore",
                 )
-            except AssertionError as err:
+                restored_count += 1
+            except (AssertionError, TypeError, ValueError) as err:
+                failed_count += 1
                 sys.stderr.write(f"{log_prefix} 恢复计时器失败：{err}\n")
+        return ReminderRestoreResult(
+            restored_count=restored_count,
+            failed_count=failed_count,
+            expired_count=prune_result.expired_count,
+            invalid_count=prune_result.invalid_count,
+        )
 
     def _run_loop(self) -> None:
         """
@@ -303,17 +566,8 @@ class TimerReminderManager:
         def _job() -> Any:
             """到达触发时间后发送提醒并删除持久化记录。"""
             try:
-                from qq_group_bot import BotConfig, _send_group_at_message
-
-                cfg = BotConfig.from_env()
                 text = f"📣[提醒]：{answer}"
-                _send_group_at_message(
-                    cfg.api_base,
-                    group_id,
-                    user_id,
-                    text,
-                    cfg.access_token,
-                )
+                self._send_reminder(group_id, user_id, text)
                 print(
                     f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m "
                     f"\033[33m{log_prefix}\033[0m 计时器触发，已在群 {group_id} 内提醒 @({user_id})：{description}",
@@ -345,12 +599,12 @@ class TimerReminderManager:
             f"{action_text}：预计 {readable_time} ({offset_text}) "
             f"将在群 {group_id} 内提醒 @({user_id})：{description}，约 {remain_seconds} 秒后触发。"
         )
-        prefix = "\n" if action != "restore" else ""
-        print(
-            f"{prefix}\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m "
-            f"\033[33m{log_prefix}\033[0m {message}",
-            flush=True,
-        )
+        if action != "restore":
+            print(
+                f"\n\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m "
+                f"\033[33m{log_prefix}\033[0m {message}",
+                flush=True,
+            )
         return message
 
     def _format_offset(self, dt: datetime) -> str:

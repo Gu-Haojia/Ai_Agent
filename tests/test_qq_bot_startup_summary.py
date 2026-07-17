@@ -50,6 +50,7 @@ def _summary() -> QQBotStartupSummary:
         ticket_groups=(10001,),
         restored_meru_tasks=3,
         restored_x_tasks=2,
+        reminder_status="已恢复 13 个 · 已清理 0 个",
         started_at=datetime(2026, 7, 17, 5, 32, 8, tzinfo=timezone.utc),
         startup_seconds=1.234,
     )
@@ -78,6 +79,7 @@ def test_startup_summary_renders_clear_runtime_state_without_secrets() -> None:
     assert "Ticket 检查   12:00、22:05 · 1 个群" in output
     assert "Meru 监控     已恢复 3 个" in output
     assert "X 监控        已恢复 2 个" in output
+    assert "定时提醒      已恢复 13 个 · 已清理 0 个" in output
     assert "线程映射      .qq_group_threads.json · 已加载 10 条" in output
     assert "记忆映射      .qq_group_memnames.json · 已加载 8 个群" in output
     assert "access-secret" not in output

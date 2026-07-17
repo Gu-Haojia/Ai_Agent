@@ -208,6 +208,7 @@ from src.google_reverse_image_tool import ReverseImageUploader
 from src.meru_monitor import DEFAULT_LIMIT, MeruMonitorManager, MeruSearchResult
 from src.meru_watch_media import send_meru_message_with_images
 from src.napcat_account_profile import PromptAccountProfileManager
+from src.timer_reminder import JsonReminderStore, TimerReminderManager
 from src.x_monitor import (
     DEFAULT_LIMIT as X_DEFAULT_LIMIT,
     XMonitorManager,
@@ -424,6 +425,7 @@ class QQBotStartupSummary:
         ticket_groups (tuple[int, ...]): Ticket 检查目标群。
         restored_meru_tasks (int): 已恢复的 Meru 监控数。
         restored_x_tasks (int): 已恢复的 X 监控数。
+        reminder_status (str): 定时提醒恢复与清理状态。
         started_at (datetime): 摘要生成时间。
         startup_seconds (float): 启动耗时秒数。
     """
@@ -446,6 +448,7 @@ class QQBotStartupSummary:
     ticket_groups: tuple[int, ...]
     restored_meru_tasks: int
     restored_x_tasks: int
+    reminder_status: str
     started_at: datetime
     startup_seconds: float
 
@@ -557,6 +560,7 @@ class QQBotStartupSummary:
         assert self.startup_seconds >= 0, "startup_seconds 不能为负数"
         assert self.restored_meru_tasks >= 0, "restored_meru_tasks 不能为负数"
         assert self.restored_x_tasks >= 0, "restored_x_tasks 不能为负数"
+        assert self.reminder_status.strip(), "reminder_status 不能为空"
         assert self.prompt_character_count > 0, "prompt_character_count 必须为正整数"
 
         ready = self._color("● READY", "1;92", use_color)
@@ -625,6 +629,7 @@ class QQBotStartupSummary:
             ),
             self._row("Meru 监控", f"已恢复 {self.restored_meru_tasks} 个"),
             self._row("X 监控", f"已恢复 {self.restored_x_tasks} 个"),
+            self._row("定时提醒", self.reminder_status),
             "│",
             f"│  {self._color('本地存储', '1;96', use_color)}",
             self._row("线程映射", self.thread_store),
@@ -813,6 +818,31 @@ def _send_group_at_message(
     # 复用发送群消息接口，使用 CQ 码进行 @
     msg = f"[CQ:at,qq={at_qq}] {text}"
     _send_group_msg(api_base, group_id, msg, access_token)
+
+
+def _send_timer_reminder(group_id: int, user_id: int, text: str) -> None:
+    """使用触发时的最新 OneBot 配置发送 QQ 提醒。
+
+    Args:
+        group_id (int): 目标群号。
+        user_id (int): 需要被 @ 的用户号。
+        text (str): 已格式化的提醒文本。
+
+    Returns:
+        None: 无返回值。
+
+    Raises:
+        AssertionError: 当环境中的 Bot 配置不合法时抛出。
+        RuntimeError: 当 OneBot 消息发送失败时抛出。
+    """
+    config = BotConfig.from_env()
+    _send_group_at_message(
+        config.api_base,
+        group_id,
+        user_id,
+        text,
+        config.access_token,
+    )
 
 
 def _build_group_video_message(video_path: Path) -> list[dict[str, dict[str, str]]]:
@@ -1194,6 +1224,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
     # 共享对象（由主程序注入）
     bot_cfg: BotConfig
     agent: SQLCheckpointAgentStreamingPlus
+    reminder_manager: TimerReminderManager
     image_storage: Optional[ImageStorageManager] = None
     meru_monitor: Optional[MeruMonitorManager] = None
     x_monitor: Optional[XMonitorManager] = None
@@ -2217,15 +2248,18 @@ class QQBotHandler(BaseHTTPRequestHandler):
             AssertionError: 当图像存储管理器未初始化时抛出。
             Exception: 构建 Agent 或注入依赖时的其他异常。
         """
+        reminder_manager = cls.reminder_manager
+        assert isinstance(
+            reminder_manager, TimerReminderManager
+        ), "定时提醒管理器尚未初始化"
         old_agent = getattr(cls, "agent", None)
-        if isinstance(old_agent, SQLCheckpointAgentStreamingPlus):
-            # 停止旧 Agent 的后台调度线程，避免提醒任务重复触发
-            old_agent.shutdown()
-        new_agent = _build_agent_from_env()
+        new_agent = _build_agent_from_env(reminder_manager)
         image_mgr = cls.image_storage
         assert isinstance(image_mgr, ImageStorageManager), "图像存储管理器尚未初始化"
         new_agent.set_image_manager(image_mgr)
         cls.agent = new_agent
+        if isinstance(old_agent, SQLCheckpointAgentStreamingPlus):
+            old_agent.shutdown()
         return new_agent
 
     def _run_api_check(self, model_name: str) -> tuple[str, float]:
@@ -3166,8 +3200,23 @@ class QQBotHandler(BaseHTTPRequestHandler):
         return False
 
 
-def _build_agent_from_env() -> SQLCheckpointAgentStreamingPlus:
-    """从环境变量构建 SQL Agent（NapCat 适配，保持与主程序一致约束）。"""
+def _build_agent_from_env(
+    reminder_manager: TimerReminderManager,
+) -> SQLCheckpointAgentStreamingPlus:
+    """从环境变量构建使用共享提醒管理器的 SQL Agent。
+
+    Args:
+        reminder_manager (TimerReminderManager): QQ Bot 持有的共享提醒管理器。
+
+    Returns:
+        SQLCheckpointAgentStreamingPlus: 已初始化的 QQ Agent。
+
+    Raises:
+        AssertionError: 当持久记忆或提醒管理器配置缺失时抛出。
+    """
+    assert isinstance(
+        reminder_manager, TimerReminderManager
+    ), "reminder_manager 类型无效"
     model = os.environ.get("MODEL_NAME", "openai:gpt-4o-mini")
     pg = os.environ.get("LANGGRAPH_PG", "")
     thread = os.environ.get("THREAD_ID", "qq-napcat-demo")
@@ -3181,7 +3230,7 @@ def _build_agent_from_env() -> SQLCheckpointAgentStreamingPlus:
         use_memory_ckpt=use_memory,
         store_id=store_id,
     )
-    agent = SQLCheckpointAgentStreamingPlus(cfg)
+    agent = SQLCheckpointAgentStreamingPlus(cfg, reminder_manager=reminder_manager)
     return agent
 
 
@@ -3210,7 +3259,19 @@ def main() -> None:
     )or in_docker or skip_check, "必须先激活虚拟环境 (.venv)。"
     startup_started = time.monotonic()
     bot_cfg = BotConfig.from_env()
-    agent = _build_agent_from_env()
+    reminder_store = JsonReminderStore(
+        os.environ.get("REMINDER_STORE_FILE", ".qq_reminders.json")
+    )
+    reminder_manager = TimerReminderManager(
+        reminder_store,
+        send_reminder=_send_timer_reminder,
+    )
+    try:
+        reminder_restore_result = reminder_manager.restore_pending()
+        agent = _build_agent_from_env(reminder_manager)
+    except Exception:
+        reminder_manager.stop()
+        raise
     image_dir = os.environ.get(
         "QQ_IMAGE_DIR",
         os.path.join(os.getcwd(), "images"),
@@ -3234,6 +3295,7 @@ def main() -> None:
 
     QQBotHandler.bot_cfg = bot_cfg
     QQBotHandler.agent = agent
+    QQBotHandler.reminder_manager = reminder_manager
     QQBotHandler.image_storage = image_manager
     QQBotHandler.account_profile_manager = PromptAccountProfileManager(
         config_path=Path("prompts/avatars/account_profiles.json"),
@@ -3451,6 +3513,7 @@ def main() -> None:
         ticket_groups=ticket_groups,
         restored_meru_tasks=restored,
         restored_x_tasks=x_restored,
+        reminder_status=reminder_restore_result.display(),
         started_at=datetime.now().astimezone(),
         startup_seconds=time.monotonic() - startup_started,
     ).print_to_console()
@@ -3463,6 +3526,10 @@ def main() -> None:
             f"\n\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [QQBot] stopped."
         )
     finally:
+        current_agent = getattr(QQBotHandler, "agent", None)
+        if isinstance(current_agent, SQLCheckpointAgentStreamingPlus):
+            current_agent.shutdown()
+        reminder_manager.stop()
         try:
             server.server_close()
         except Exception:
