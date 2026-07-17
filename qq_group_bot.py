@@ -41,6 +41,7 @@ import re
 import shlex
 import sys
 import time
+import unicodedata
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from datetime import datetime
 from pathlib import Path
@@ -338,6 +339,246 @@ class BotConfig:
         # 基础校验
         assert cfg.api_base, "缺少 ONEBOT_API_BASE，例如 http://127.0.0.1:3000"
         return cfg
+
+
+@dataclass(frozen=True)
+class QQBotStartupSummary:
+    """渲染 QQ Bot 启动完成后的控制台摘要。
+
+    Args:
+        bot_config (BotConfig): QQ Bot 网络与访问控制配置。
+        model_name (str): 当前 Agent 模型名称。
+        use_memory_checkpoint (bool): 是否使用内存检查点。
+        thread_id (str): 默认会话线程 ID。
+        thread_store (str): 群聊线程映射文件。
+        memory_id (str): 默认持久记忆 ID。
+        memory_store (str): 群聊记忆映射文件。
+        prompt_name (str): 当前 Prompt 名称。
+        image_directory (str): 本次运行的图片存储目录。
+        daily_time (str): 每日简报时间。
+        daily_groups (tuple[int, ...]): 每日简报目标群。
+        nightly_time (str): 晚间简报时间。
+        nightly_groups (tuple[int, ...]): 晚间简报目标群。
+        ticket_times (tuple[str, ...]): Ticket 检查时间。
+        ticket_groups (tuple[int, ...]): Ticket 检查目标群。
+        restored_meru_tasks (int): 已恢复的 Meru 监控数。
+        restored_x_tasks (int): 已恢复的 X 监控数。
+        started_at (datetime): 摘要生成时间。
+        startup_seconds (float): 启动耗时秒数。
+    """
+
+    bot_config: BotConfig
+    model_name: str
+    use_memory_checkpoint: bool
+    thread_id: str
+    thread_store: str
+    memory_id: str
+    memory_store: str
+    prompt_name: str
+    image_directory: str
+    daily_time: str
+    daily_groups: tuple[int, ...]
+    nightly_time: str
+    nightly_groups: tuple[int, ...]
+    ticket_times: tuple[str, ...]
+    ticket_groups: tuple[int, ...]
+    restored_meru_tasks: int
+    restored_x_tasks: int
+    started_at: datetime
+    startup_seconds: float
+
+    @staticmethod
+    def _display_width(value: str) -> int:
+        """计算包含中日韩字符的终端显示宽度。
+
+        Args:
+            value (str): 需要计算宽度的文本。
+
+        Returns:
+            int: 文本在等宽终端中的预计显示宽度。
+
+        Raises:
+            AssertionError: 当 value 不是字符串时抛出。
+        """
+        assert isinstance(value, str), "value 必须为字符串"
+        return sum(
+            2 if unicodedata.east_asian_width(char) in {"W", "F"} else 1
+            for char in value
+        )
+
+    @classmethod
+    def _row(cls, label: str, value: str) -> str:
+        """生成一个对齐后的摘要字段。
+
+        Args:
+            label (str): 字段标签。
+            value (str): 字段内容。
+
+        Returns:
+            str: 带左侧边框的单行摘要。
+
+        Raises:
+            AssertionError: 当标签或内容为空时抛出。
+        """
+        assert label.strip(), "label 不能为空"
+        assert value.strip(), "value 不能为空"
+        padding = max(1, 14 - cls._display_width(label))
+        return f"│   {label}{' ' * padding}{value}"
+
+    @staticmethod
+    def _group_policy(groups: tuple[int, ...], empty_value: str) -> str:
+        """格式化群号或用户号策略。
+
+        Args:
+            groups (tuple[int, ...]): 待展示的号码集合。
+            empty_value (str): 集合为空时展示的文本。
+
+        Returns:
+            str: 逗号分隔的号码或空集合说明。
+
+        Raises:
+            AssertionError: 当 empty_value 为空时抛出。
+        """
+        assert empty_value.strip(), "empty_value 不能为空"
+        return ", ".join(str(group_id) for group_id in groups) or empty_value
+
+    @staticmethod
+    def _schedule(times: tuple[str, ...], groups: tuple[int, ...]) -> str:
+        """格式化定时任务状态。
+
+        Args:
+            times (tuple[str, ...]): 每日执行时间。
+            groups (tuple[int, ...]): 接收任务消息的群号。
+
+        Returns:
+            str: 开启状态与群数量，未配置群时返回“关闭”。
+
+        Raises:
+            AssertionError: 当任务已启用但没有执行时间时抛出。
+        """
+        if not groups:
+            return "关闭"
+        assert times, "已启用的定时任务必须配置执行时间"
+        return f"{'、'.join(times)} · {len(groups)} 个群"
+
+    @staticmethod
+    def _color(text: str, code: str, enabled: bool) -> str:
+        """按需为文本添加 ANSI 颜色。
+
+        Args:
+            text (str): 原始文本。
+            code (str): ANSI 样式代码。
+            enabled (bool): 是否启用颜色。
+
+        Returns:
+            str: 原始文本或带 ANSI 样式的文本。
+
+        Raises:
+            AssertionError: 当文本或样式代码为空时抛出。
+        """
+        assert text, "text 不能为空"
+        assert code, "code 不能为空"
+        return f"\033[{code}m{text}\033[0m" if enabled else text
+
+    def render(self, use_color: bool = False) -> str:
+        """生成完整的启动摘要文本。
+
+        Args:
+            use_color (bool): 是否输出 ANSI 颜色。
+
+        Returns:
+            str: 可直接写入控制台的多行摘要。
+
+        Raises:
+            AssertionError: 当启动耗时或恢复任务数为负数时抛出。
+        """
+        assert self.startup_seconds >= 0, "startup_seconds 不能为负数"
+        assert self.restored_meru_tasks >= 0, "restored_meru_tasks 不能为负数"
+        assert self.restored_x_tasks >= 0, "restored_x_tasks 不能为负数"
+
+        ready = self._color("● READY", "1;92", use_color)
+        checkpoint = "内存（非持久化）" if self.use_memory_checkpoint else "PostgreSQL"
+        auth = (
+            f"Access Token {'✓' if self.bot_config.access_token else '—'} · "
+            f"Signature {'✓' if self.bot_config.secret else '—'}"
+        )
+        started_at = self.started_at.astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
+        image_mode = "Base64" if self.bot_config.use_local_image_base64 else "公网 URL"
+        startup_timing = f"{started_at} · 启动耗时 {self.startup_seconds:.2f}s"
+
+        lines = [
+            f"╭─ QQ Bot · {ready}",
+            f"│  {self._color(startup_timing, '2', use_color)}",
+            "│",
+            f"│  {self._color('服务', '1;96', use_color)}",
+            self._row(
+                "回调监听",
+                f"http://{self.bot_config.host}:{self.bot_config.port} · 已监听",
+            ),
+            self._row("OneBot API", f"{self.bot_config.api_base} · 已配置，未探测"),
+            self._row("认证", auth),
+            "│",
+            f"│  {self._color('Agent', '1;96', use_color)}",
+            self._row("模型", self.model_name),
+            self._row("当前 Prompt", self.prompt_name),
+            self._row("检查点", checkpoint),
+            self._row("默认线程", self.thread_id),
+            self._row("持久记忆", self.memory_id),
+            self._row("图片输入", image_mode),
+            "│",
+            f"│  {self._color('访问控制', '1;96', use_color)}",
+            self._row(
+                "群聊白名单",
+                self._group_policy(self.bot_config.allowed_groups, "ALL"),
+            ),
+            self._row(
+                "群聊黑名单",
+                self._group_policy(self.bot_config.blacklist_groups, "NONE"),
+            ),
+            self._row(
+                "限制群",
+                self._group_policy(self.bot_config.limitlist_groups, "NONE"),
+            ),
+            self._row(
+                "命令用户",
+                self._group_policy(self.bot_config.cmd_allowed_users, "ALL"),
+            ),
+            "│",
+            f"│  {self._color('自动任务', '1;96', use_color)}",
+            self._row(
+                "每日简报",
+                self._schedule((self.daily_time,), self.daily_groups),
+            ),
+            self._row(
+                "晚间简报",
+                self._schedule((self.nightly_time,), self.nightly_groups),
+            ),
+            self._row(
+                "Ticket 检查",
+                self._schedule(self.ticket_times, self.ticket_groups),
+            ),
+            self._row("Meru 监控", f"已恢复 {self.restored_meru_tasks} 个"),
+            self._row("X 监控", f"已恢复 {self.restored_x_tasks} 个"),
+            "│",
+            f"│  {self._color('本地存储', '1;96', use_color)}",
+            self._row("线程映射", self.thread_store),
+            self._row("记忆映射", self.memory_store),
+            self._row("图片目录", self.image_directory),
+            f"╰─ {self._color('按 Ctrl+C 安全停止', '2', use_color)}",
+        ]
+        return "\n".join(lines)
+
+    def print_to_console(self) -> None:
+        """将启动摘要输出到标准输出。
+
+        Returns:
+            None: 本方法仅负责输出。
+
+        Raises:
+            AssertionError: 当摘要字段不符合渲染要求时抛出。
+        """
+        use_color = sys.stdout.isatty() and "NO_COLOR" not in os.environ
+        print(self.render(use_color=use_color), flush=True)
 
 
 def _verify_signature(secret: str, body: bytes, signature: str) -> bool:
@@ -2844,10 +3085,7 @@ def main() -> None:
     assert os.environ.get("VIRTUAL_ENV") or sys.prefix.endswith(
         ".venv"
     )or in_docker or skip_check, "必须先激活虚拟环境 (.venv)。"
-
-    print(
-        "------------------------------------------------------------------------------------------------------------------"
-    )
+    startup_started = time.monotonic()
     bot_cfg = BotConfig.from_env()
     agent = _build_agent_from_env()
     image_dir = os.environ.get(
@@ -2903,7 +3141,7 @@ def main() -> None:
         run_time=daily_time,
         agent_provider=_get_shared_agent,
     )
-    daily_task.start()
+    daily_task.start(announce=False)
 
     nightly_question = "这是一个晚间简报任务，请只要突出简报的关键信息，不要说太多其他内容，默认使用中文和阿拉伯数字表述。你需要包含：1.现在是几点几分，明天是星期几，明天是否是重要节假日（中国/日本/世界通用）[没有就不回答，不要声明不是节日，不要提示非常不重要的节日，不是节日就跳过这一段][分段]；2.明天京都的天气预报如何（配上对应的emoji，必须有气温，如果下雨需要精确到小时，查询使用京都市中京区）[分段]；3.以及想说的话，一句话即可。\n总字数控制在大于180字，250字以内。"
     nightly_env = os.environ.get("NIGHTLY_TASK", "").strip()
@@ -2916,7 +3154,7 @@ def main() -> None:
         run_time=nightly_time,
         agent_provider=_get_shared_agent,
     )
-    nightly_task.start()
+    nightly_task.start(announce=False)
 
     ticket_env = os.environ.get("TICKET_TASK", "").strip()
     ticket_time_raw = os.environ.get("TICKET_TASK_TIME", "22:05").strip()
@@ -2928,7 +3166,7 @@ def main() -> None:
         run_time=ticket_times,
         agent_provider=_get_shared_agent,
     )
-    ticket_task.start()
+    ticket_task.start(announce=False)
 
     def _build_meru_callbacks(
         group_id: int | None, user_id: int | None, _record: dict[str, object]
@@ -2997,11 +3235,6 @@ def main() -> None:
         return _notify, price_cb, _notify_media, price_media_cb
 
     restored = meru_monitor.restore_tasks(_build_meru_callbacks)
-    if restored:
-        print(
-            f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [Meru] 已恢复 {restored} 个监控任务",
-            flush=True,
-        )
 
     def _build_x_callbacks(
         group_id: int | None, _user_id: int | None, _record: dict[str, object]
@@ -3068,35 +3301,31 @@ def main() -> None:
         return _notify, _notify_media
 
     x_restored = x_monitor.restore_tasks(_build_x_callbacks)
-    if x_restored:
-        print(
-            f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [XMonitor] 已恢复 {x_restored} 个监控任务",
-            flush=True,
-        )
 
     server = ThreadingHTTPServer((bot_cfg.host, bot_cfg.port), QQBotHandler)
-    print(
-        f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [QQBot] Listening http://{bot_cfg.host}:{bot_cfg.port} api={bot_cfg.api_base}"
-    )
-    print(
-        f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [QQBot] Group whitelist={bot_cfg.allowed_groups or 'ALL'} blacklist={bot_cfg.blacklist_groups or 'NONE'} limitlist={bot_cfg.limitlist_groups or 'NONE'}"
-    )
-    print(
-        f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [QQBot] Model provided by={agent._config.model_name} storage_type={'RAM' if agent._config.use_memory_ckpt else 'ROM'} use_image_base64={bot_cfg.use_local_image_base64}"
-    )
-    print(
-        f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [QQBot] Memory thread_id={agent._config.thread_id} thread_store={thread_store} mem_id={agent._config.store_id} mem_store={ns_store}"
-    )
-    print(
-        f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [QQBot] Allowed command users:",
-        bot_cfg.cmd_allowed_users or "ALL",
-    )
-    print(
-        f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [QQBot] Bot now started, press Ctrl+C to stop."
-    )
-    print(
-        "------------------------------------------------------------------------------------------------------------------"
-    )
+    prompt_file = os.environ.get("SYS_MSG_FILE", "").strip()
+    prompt_name = Path(prompt_file).stem if prompt_file else "未配置"
+    QQBotStartupSummary(
+        bot_config=bot_cfg,
+        model_name=agent._config.model_name,
+        use_memory_checkpoint=agent._config.use_memory_ckpt,
+        thread_id=agent._config.thread_id,
+        thread_store=thread_store,
+        memory_id=agent._config.store_id,
+        memory_store=ns_store,
+        prompt_name=prompt_name,
+        image_directory=image_dir,
+        daily_time=daily_time,
+        daily_groups=daily_groups,
+        nightly_time=nightly_time,
+        nightly_groups=nightly_groups,
+        ticket_times=ticket_times,
+        ticket_groups=ticket_groups,
+        restored_meru_tasks=restored,
+        restored_x_tasks=x_restored,
+        started_at=datetime.now().astimezone(),
+        startup_seconds=time.monotonic() - startup_started,
+    ).print_to_console()
     # 释放局部对 Agent 的引用，避免 /boost 重建后旧实例因本地变量滞留无法回收
     del agent
     try:

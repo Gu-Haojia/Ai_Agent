@@ -141,30 +141,38 @@ class DailyWeatherTask:
         self._thread: Optional[Thread] = None
         self._started = False
 
-    def start(self) -> None:
+    def start(self, *, announce: bool = True) -> None:
         """
         启动调度线程（若未配置群号则直接返回）。
+
+        Args:
+            announce (bool): 是否向控制台输出启动状态。
+
+        Returns:
+            None: 本方法仅负责启动调度器。
 
         Raises:
             AssertionError: 当调度器已启动时重复调用。
         """
         if not self._group_ids:
-            print(
-                f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m "
-                "[DailyTask] 未配置 DAILY_TASK，跳过自动提问。",
-                flush=True,
-            )
+            if announce:
+                print(
+                    f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m "
+                    "[DailyTask] 未配置 DAILY_TASK，跳过自动提问。",
+                    flush=True,
+                )
             return
         assert not self._started, "调度器已启动，请勿重复调用 start()"
         self._scheduler.every().day.at(self._run_time).do(self._execute_once)
         self._thread = Thread(target=self._run_loop, name="daily-weather-task", daemon=True)
         self._started = True
         self._thread.start()
-        print(
-            f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m "
-            f"[DailyTask] 调度已启动，将在每日 {self._run_time} 提问。目标群：{self._group_ids}",
-            flush=True,
-        )
+        if announce:
+            print(
+                f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m "
+                f"[DailyTask] 调度已启动，将在每日 {self._run_time} 提问。目标群：{self._group_ids}",
+                flush=True,
+            )
 
     def _run_loop(self) -> None:
         """运行调度循环，通过动态等待避免频繁唤醒。"""
@@ -270,19 +278,26 @@ class DailyTicketTask:
         self._thread: Optional[Thread] = None
         self._started = False
 
-    def start(self) -> None:
+    def start(self, *, announce: bool = True) -> None:
         """
         启动调度线程（若未配置群号则直接返回）。
+
+        Args:
+            announce (bool): 是否向控制台输出启动状态。
+
+        Returns:
+            None: 本方法仅负责启动调度器。
 
         Raises:
             AssertionError: 当调度器已启动时重复调用。
         """
         if not self._group_ids:
-            print(
-                f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m "
-                "[TicketTask] 未配置 TICKET_TASK，跳过抽選检测。",
-                flush=True,
-            )
+            if announce:
+                print(
+                    f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m "
+                    "[TicketTask] 未配置 TICKET_TASK，跳过抽選检测。",
+                    flush=True,
+                )
             return
         assert not self._started, "调度器已启动，请勿重复调用 start()"
         for slot in self._run_times:
@@ -291,11 +306,12 @@ class DailyTicketTask:
         self._started = True
         self._thread.start()
         times_display = "、".join(self._run_times)
-        print(
-            f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m "
-            f"[TicketTask] 调度已启动，将在每日 {times_display} 检测抽選更新。目标群：{self._group_ids}",
-            flush=True,
-        )
+        if announce:
+            print(
+                f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m "
+                f"[TicketTask] 调度已启动，将在每日 {times_display} 检测抽選更新。目标群：{self._group_ids}",
+                flush=True,
+            )
 
     def _run_loop(self) -> None:
         """运行调度循环，通过动态等待避免频繁唤醒。"""

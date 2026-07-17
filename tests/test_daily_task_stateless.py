@@ -11,6 +11,40 @@ from daily_task import DailyTicketTask, DailyWeatherTask
 from sql_agent_cli_stream_plus import AgentConfig, SQLCheckpointAgentStreamingPlus
 
 
+def test_daily_tasks_can_suppress_startup_announcement(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """验证 QQ Bot 可以将定时任务状态收进统一启动摘要。
+
+    Args:
+        capsys (pytest.CaptureFixture[str]): pytest 标准输出捕获工具。
+
+    Returns:
+        None: 测试无返回值。
+
+    Raises:
+        None: 断言失败时由 pytest 报告。
+    """
+    agent_provider = mock.Mock()
+    weather_task = DailyWeatherTask(
+        mock.Mock(),
+        [],
+        agent_provider=agent_provider,
+    )
+    ticket_task = DailyTicketTask(
+        mock.Mock(),
+        [],
+        agent_provider=agent_provider,
+    )
+
+    weather_task.start(announce=False)
+    ticket_task.start(announce=False)
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+
+
 def test_agent_builds_stateless_graph_with_shared_store(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
