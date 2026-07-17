@@ -643,31 +643,7 @@ class QQBotStartupSummary:
         Raises:
             AssertionError: 当摘要字段不符合渲染要求时抛出。
         """
-        use_color = self._should_use_color(
-            is_terminal=sys.stdout.isatty(),
-            running_in_docker=os.path.exists("/.dockerenv"),
-            no_color="NO_COLOR" in os.environ,
-        )
-        print(self.render(use_color=use_color), flush=True)
-
-    @staticmethod
-    def _should_use_color(
-        *, is_terminal: bool, running_in_docker: bool, no_color: bool
-    ) -> bool:
-        """判断启动摘要是否应启用 ANSI 配色。
-
-        Args:
-            is_terminal (bool): 标准输出是否连接交互终端。
-            running_in_docker (bool): 当前进程是否运行在 Docker 容器内。
-            no_color (bool): 环境中是否存在 NO_COLOR。
-
-        Returns:
-            bool: 交互终端或 Docker 默认启用颜色，NO_COLOR 强制关闭。
-
-        Raises:
-            None: 本方法不主动抛出异常。
-        """
-        return not no_color and (is_terminal or running_in_docker)
+        print(self.render(use_color=True), flush=True)
 
 
 def _verify_signature(secret: str, body: bytes, signature: str) -> bool:

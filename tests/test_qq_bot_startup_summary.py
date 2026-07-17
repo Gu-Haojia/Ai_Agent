@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-import qq_group_bot
 from qq_group_bot import BotConfig, QQBotStartupSummary
 from sql_agent_cli_stream_plus import SQLCheckpointAgentStreamingPlus
 
@@ -131,54 +130,12 @@ def test_startup_summary_adds_color_only_when_requested() -> None:
     assert "access-secret" not in output
 
 
-@pytest.mark.parametrize(
-    ("is_terminal", "running_in_docker", "no_color", "expected"),
-    [
-        (True, False, False, True),
-        (False, True, False, True),
-        (False, False, False, False),
-        (True, False, True, False),
-        (False, True, True, False),
-    ],
-)
-def test_startup_summary_color_policy(
-    is_terminal: bool,
-    running_in_docker: bool,
-    no_color: bool,
-    expected: bool,
-) -> None:
-    """验证终端、Docker、重定向和 NO_COLOR 的颜色优先级。
-
-    Args:
-        is_terminal (bool): 是否连接交互终端。
-        running_in_docker (bool): 是否运行在 Docker 容器内。
-        no_color (bool): 是否显式禁用颜色。
-        expected (bool): 预期是否启用颜色。
-
-    Returns:
-        None: 测试无返回值。
-
-    Raises:
-        None: 断言失败时由 pytest 报告。
-    """
-    assert (
-        QQBotStartupSummary._should_use_color(
-            is_terminal=is_terminal,
-            running_in_docker=running_in_docker,
-            no_color=no_color,
-        )
-        is expected
-    )
-
-
-def test_startup_summary_prints_color_in_docker_logs(
-    monkeypatch: pytest.MonkeyPatch,
+def test_startup_summary_always_prints_color(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """验证非 TTY 的 Docker stdout 默认仍输出 ANSI 配色。
+    """验证启动摘要始终输出 ANSI 配色。
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): pytest 属性与环境替换工具。
         capsys (pytest.CaptureFixture[str]): pytest 标准输出捕获工具。
 
     Returns:
@@ -187,13 +144,6 @@ def test_startup_summary_prints_color_in_docker_logs(
     Raises:
         None: 断言失败时由 pytest 报告。
     """
-    monkeypatch.delenv("NO_COLOR", raising=False)
-    monkeypatch.setattr(
-        qq_group_bot.os.path,
-        "exists",
-        lambda path: path == "/.dockerenv",
-    )
-
     _summary().print_to_console()
 
     output = capsys.readouterr().out
