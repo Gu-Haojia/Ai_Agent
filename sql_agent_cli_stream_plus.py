@@ -1901,15 +1901,21 @@ class SQLCheckpointAgentStreamingPlus:
         assert os.path.isfile(abs_path), f"系统提示文件不存在: {abs_path}"
         with open(abs_path, "r", encoding="utf-8") as f:
             content = f.read()
-            print(
-                f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [SysInfo] 已加载文件: {abs_path}，长度 {len(content)} 字符。"
-            )
-            # 打印头尾各50字符,仅输出文本不要格式符号
-            print(
-                f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [SysInfo] Prompt内容预览: {content[:50].replace(chr(10), ' ')} ... {content[-50:].replace(chr(10), ' ')}"
-            )
         assert content and content.strip(), "系统提示文件内容为空。"
         return content
+
+    @property
+    def system_prompt_character_count(self) -> int:
+        """返回当前已加载系统 Prompt 的字符数量。
+
+        Returns:
+            int: 系统 Prompt 的字符数量。
+
+        Raises:
+            AssertionError: 当系统 Prompt 尚未加载或内容为空时抛出。
+        """
+        assert self._sys_msg_content, "系统 Prompt 尚未加载"
+        return len(self._sys_msg_content)
 
     def _build_playwright_browser_tools(self) -> list[BaseTool]:
         """

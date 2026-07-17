@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
+
+import pytest
 
 from qq_group_bot import BotConfig, QQBotStartupSummary
+from sql_agent_cli_stream_plus import SQLCheckpointAgentStreamingPlus
 
 
 def _summary() -> QQBotStartupSummary:
@@ -32,10 +36,11 @@ def _summary() -> QQBotStartupSummary:
         model_name="google_genai:gemini-test",
         use_memory_checkpoint=False,
         thread_id="qq-default",
-        thread_store=".qq_group_threads.json",
+        thread_store=".qq_group_threads.json · 已加载 10 条",
         memory_id="shared-memory",
-        memory_store=".qq_group_memnames.json",
+        memory_store=".qq_group_memnames.json · 已加载 8 个群",
         prompt_name="default",
+        prompt_character_count=18426,
         image_directory="/tmp/qq-images/20260717~run",
         daily_time="09:00",
         daily_groups=(10001, 10002),
@@ -66,16 +71,47 @@ def test_startup_summary_renders_clear_runtime_state_without_secrets() -> None:
     assert "http://127.0.0.1:3001 · 已配置，未探测" in output
     assert "Access Token ✓ · Signature ✓" in output
     assert "google_genai:gemini-test" in output
-    assert "当前 Prompt   default" in output
+    assert "当前 Prompt   default · 18,426 字符" in output
     assert "检查点        PostgreSQL" in output
     assert "每日简报      09:00 · 2 个群" in output
     assert "晚间简报      关闭" in output
     assert "Ticket 检查   12:00、22:05 · 1 个群" in output
     assert "Meru 监控     已恢复 3 个" in output
     assert "X 监控        已恢复 2 个" in output
+    assert "线程映射      .qq_group_threads.json · 已加载 10 条" in output
+    assert "记忆映射      .qq_group_memnames.json · 已加载 8 个群" in output
     assert "access-secret" not in output
     assert "signature-secret" not in output
     assert "\033[" not in output
+
+
+def test_prompt_loader_does_not_print_prompt_content(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """验证 Prompt 加载不再产生启动面板之外的直接输出。
+
+    Args:
+        tmp_path (Path): pytest 临时目录。
+        monkeypatch (pytest.MonkeyPatch): pytest 环境变量替换工具。
+        capsys (pytest.CaptureFixture[str]): pytest 标准输出捕获工具。
+
+    Returns:
+        None: 测试无返回值。
+
+    Raises:
+        None: 断言失败时由 pytest 报告。
+    """
+    prompt_file = tmp_path / "persona.txt"
+    prompt_file.write_text("不能进入启动日志的 Prompt 正文", encoding="utf-8")
+    monkeypatch.setenv("SYS_MSG_FILE", str(prompt_file))
+    agent = object.__new__(SQLCheckpointAgentStreamingPlus)
+
+    content = agent._load_sys_msg_content()
+
+    assert content == "不能进入启动日志的 Prompt 正文"
+    assert capsys.readouterr().out == ""
 
 
 def test_startup_summary_adds_color_only_when_requested() -> None:

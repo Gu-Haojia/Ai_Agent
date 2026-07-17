@@ -342,6 +342,66 @@ class BotConfig:
 
 
 @dataclass(frozen=True)
+class MappingStoreLoadResult:
+    """描述线程或记忆映射文件的启动加载结果。
+
+    Args:
+        path (str): 映射文件路径。
+        loaded_count (int): 成功加载的映射数量。
+        status (str): 加载状态，支持 loaded、missing、reset、error。
+        migrated_legacy (bool): 是否迁移了旧版映射键。
+        error_message (str): 加载失败时的错误信息。
+    """
+
+    path: str
+    loaded_count: int
+    status: str
+    migrated_legacy: bool = False
+    error_message: str = ""
+
+    def __post_init__(self) -> None:
+        """校验加载结果字段。
+
+        Returns:
+            None: 校验通过后不返回额外值。
+
+        Raises:
+            AssertionError: 当路径、数量、状态或错误信息不合法时抛出。
+        """
+        assert self.path.strip(), "path 不能为空"
+        assert self.loaded_count >= 0, "loaded_count 不能为负数"
+        assert self.status in {"loaded", "missing", "reset", "error"}, (
+            "status 必须是 loaded、missing、reset 或 error"
+        )
+        if self.status == "error":
+            assert self.error_message.strip(), "error 状态必须提供 error_message"
+
+    def display(self, unit: str) -> str:
+        """生成适合启动摘要展示的映射状态。
+
+        Args:
+            unit (str): 数量单位，例如“条”或“个群”。
+
+        Returns:
+            str: 文件路径和加载结果组成的摘要文本。
+
+        Raises:
+            AssertionError: 当 unit 为空时抛出。
+        """
+        assert unit.strip(), "unit 不能为空"
+        if self.status == "missing":
+            return f"{self.path} · 等待首次写入"
+        if self.status == "reset":
+            return f"{self.path} · 环境不一致，已重置"
+        if self.status == "error":
+            return f"{self.path} · 加载失败：{self.error_message}"
+        result = f"{self.path} · 已加载 {self.loaded_count} {unit}"
+        if self.migrated_legacy:
+            result += " · 已迁移旧格式"
+        return result
+
+
+@dataclass(frozen=True)
 class QQBotStartupSummary:
     """渲染 QQ Bot 启动完成后的控制台摘要。
 
@@ -354,6 +414,7 @@ class QQBotStartupSummary:
         memory_id (str): 默认持久记忆 ID。
         memory_store (str): 群聊记忆映射文件。
         prompt_name (str): 当前 Prompt 名称。
+        prompt_character_count (int): 当前 Prompt 字符数量。
         image_directory (str): 本次运行的图片存储目录。
         daily_time (str): 每日简报时间。
         daily_groups (tuple[int, ...]): 每日简报目标群。
@@ -375,6 +436,7 @@ class QQBotStartupSummary:
     memory_id: str
     memory_store: str
     prompt_name: str
+    prompt_character_count: int
     image_directory: str
     daily_time: str
     daily_groups: tuple[int, ...]
@@ -495,6 +557,7 @@ class QQBotStartupSummary:
         assert self.startup_seconds >= 0, "startup_seconds 不能为负数"
         assert self.restored_meru_tasks >= 0, "restored_meru_tasks 不能为负数"
         assert self.restored_x_tasks >= 0, "restored_x_tasks 不能为负数"
+        assert self.prompt_character_count > 0, "prompt_character_count 必须为正整数"
 
         ready = self._color("● READY", "1;92", use_color)
         checkpoint = "内存（非持久化）" if self.use_memory_checkpoint else "PostgreSQL"
@@ -520,7 +583,10 @@ class QQBotStartupSummary:
             "│",
             f"│  {self._color('Agent', '1;96', use_color)}",
             self._row("模型", self.model_name),
-            self._row("当前 Prompt", self.prompt_name),
+            self._row(
+                "当前 Prompt",
+                f"{self.prompt_name} · {self.prompt_character_count:,} 字符",
+            ),
             self._row("检查点", checkpoint),
             self._row("默认线程", self.thread_id),
             self._row("持久记忆", self.memory_id),
@@ -1333,7 +1399,9 @@ class QQBotHandler(BaseHTTPRequestHandler):
         return "\n".join(parts)
 
     @classmethod
-    def setup_thread_store(cls, path: str, current_env_tid: str) -> None:
+    def setup_thread_store(
+        cls, path: str, current_env_tid: str
+    ) -> MappingStoreLoadResult:
         """设置并加载群与 Prompt 的线程映射；仅首次执行环境一致性检查。
 
         当发现任何保存的线程ID与当前环境线程前缀不一致时，清空并覆盖保存文件。
@@ -1342,9 +1410,16 @@ class QQBotHandler(BaseHTTPRequestHandler):
         Args:
             path (str): 配置文件路径
             current_env_tid (str): 当前环境变量提供的线程前缀（agent._config.thread_id）
+
+        Returns:
+            MappingStoreLoadResult: 线程映射文件的加载结果。
+
+        Raises:
+            None: 加载错误通过返回结果显式报告。
         """
         cls._thread_store_file = path
         cls._group_threads = {}
+        result = MappingStoreLoadResult(path=path, loaded_count=0, status="missing")
         try:
             if os.path.isfile(path):
                 # 兼容空文件：当内容为空或仅空白时按空映射处理
@@ -1404,24 +1479,45 @@ class QQBotHandler(BaseHTTPRequestHandler):
                             cls._group_threads = {}
                             cls._env_consistency_checked = True
                             cls.save_thread_store()
-                            print(
-                                f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [QQBot] Thread store cleared due to env mismatch: {path}"
+                            result = MappingStoreLoadResult(
+                                path=path,
+                                loaded_count=0,
+                                status="reset",
                             )
                         else:
                             cls._group_threads = m
                             cls._env_consistency_checked = True
                             if migrated_legacy_key:
                                 cls.save_thread_store()
-                            print(
-                                f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [QQBot] Loaded group prompt threads from {path}: {len(m)} entries"
+                            result = MappingStoreLoadResult(
+                                path=path,
+                                loaded_count=len(m),
+                                status="loaded",
+                                migrated_legacy=migrated_legacy_key,
                             )
                     else:
                         cls._group_threads = m
-                        print(
-                            f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [QQBot] Loaded group prompt threads from {path}: {len(m)} entries (env check skipped)"
+                        result = MappingStoreLoadResult(
+                            path=path,
+                            loaded_count=len(m),
+                            status="loaded",
+                            migrated_legacy=migrated_legacy_key,
                         )
+                else:
+                    result = MappingStoreLoadResult(
+                        path=path,
+                        loaded_count=0,
+                        status="error",
+                        error_message="文件内容必须是 JSON 对象",
+                    )
         except Exception as e:
-            sys.stderr.write(f"[QQBot] Load group threads failed: {e}\n")
+            result = MappingStoreLoadResult(
+                path=path,
+                loaded_count=0,
+                status="error",
+                error_message=str(e),
+            )
+        return result
 
     @classmethod
     def save_thread_store(cls) -> None:
@@ -1438,7 +1534,9 @@ class QQBotHandler(BaseHTTPRequestHandler):
             sys.stderr.write(f"[QQBot] save group threads failed: {e}\n")
 
     @classmethod
-    def setup_namespace_store(cls, path: str, current_env_store_id: str) -> None:
+    def setup_namespace_store(
+        cls, path: str, current_env_store_id: str
+    ) -> MappingStoreLoadResult:
         """
         设置并加载群记忆命名空间映射配置；首次执行时做环境一致性检查。
 
@@ -1447,8 +1545,15 @@ class QQBotHandler(BaseHTTPRequestHandler):
         Args:
             path (str): 配置文件路径
             current_env_store_id (str): 当前环境变量提供的持久记忆 store_id
+
+        Returns:
+            MappingStoreLoadResult: 记忆映射文件的加载结果。
+
+        Raises:
+            None: 加载错误通过返回结果显式报告。
         """
         cls._ns_store_file = path
+        result = MappingStoreLoadResult(path=path, loaded_count=0, status="missing")
         try:
             if os.path.isfile(path):
                 with open(path, "r", encoding="utf-8") as f:
@@ -1481,22 +1586,41 @@ class QQBotHandler(BaseHTTPRequestHandler):
                             cls._group_namespaces = {}
                             cls._env_ns_checked = True
                             cls.save_namespace_store()
-                            print(
-                                f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [QQBot] Namespace store cleared due to env mismatch: {path}"
+                            result = MappingStoreLoadResult(
+                                path=path,
+                                loaded_count=0,
+                                status="reset",
                             )
                         else:
                             cls._group_namespaces = m
                             cls._env_ns_checked = True
-                            print(
-                                f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [QQBot] Loaded group namespaces from {path}: {len(m)} groups"
+                            result = MappingStoreLoadResult(
+                                path=path,
+                                loaded_count=len(m),
+                                status="loaded",
                             )
                     else:
                         cls._group_namespaces = m
-                        print(
-                            f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [QQBot] Loaded group namespaces from {path}: {len(m)} groups (env check skipped)"
+                        result = MappingStoreLoadResult(
+                            path=path,
+                            loaded_count=len(m),
+                            status="loaded",
                         )
+                else:
+                    result = MappingStoreLoadResult(
+                        path=path,
+                        loaded_count=0,
+                        status="error",
+                        error_message="文件内容必须是 JSON 对象",
+                    )
         except Exception as e:
-            sys.stderr.write(f"[QQBot] Load group namespaces failed: {e}\n")
+            result = MappingStoreLoadResult(
+                path=path,
+                loaded_count=0,
+                status="error",
+                error_message=str(e),
+            )
+        return result
 
     @classmethod
     def save_namespace_store(cls) -> None:
@@ -3100,10 +3224,14 @@ def main() -> None:
 
     # 启动时加载群线程映射配置（仅保存/加载 _group_threads 字典）
     thread_store = os.environ.get("THREAD_STORE_FILE", ".qq_group_threads.json")
-    QQBotHandler.setup_thread_store(thread_store, agent._config.thread_id)
+    thread_store_result = QQBotHandler.setup_thread_store(
+        thread_store, agent._config.thread_id
+    )
     # 启动时加载群持久记忆命名空间映射配置
     ns_store = os.environ.get("MEMORY_STORE_FILE", ".qq_group_memnames.json")
-    QQBotHandler.setup_namespace_store(ns_store, agent._config.store_id)
+    namespace_store_result = QQBotHandler.setup_namespace_store(
+        ns_store, agent._config.store_id
+    )
 
     QQBotHandler.bot_cfg = bot_cfg
     QQBotHandler.agent = agent
@@ -3310,10 +3438,11 @@ def main() -> None:
         model_name=agent._config.model_name,
         use_memory_checkpoint=agent._config.use_memory_ckpt,
         thread_id=agent._config.thread_id,
-        thread_store=thread_store,
+        thread_store=thread_store_result.display("条"),
         memory_id=agent._config.store_id,
-        memory_store=ns_store,
+        memory_store=namespace_store_result.display("个群"),
         prompt_name=prompt_name,
+        prompt_character_count=agent.system_prompt_character_count,
         image_directory=image_dir,
         daily_time=daily_time,
         daily_groups=daily_groups,

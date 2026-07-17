@@ -37,6 +37,7 @@ def reset_thread_mapping_state(
     monkeypatch.setattr(QQBotHandler, "_env_consistency_checked", False)
     monkeypatch.setattr(QQBotHandler, "_group_namespaces", {})
     monkeypatch.setattr(QQBotHandler, "_ns_store_file", str(tmp_path / "namespaces.json"))
+    monkeypatch.setattr(QQBotHandler, "_env_ns_checked", False)
     profile_config = tmp_path / "account_profiles.json"
     profile_config.write_text("{}", encoding="utf-8")
     monkeypatch.setattr(
@@ -453,11 +454,15 @@ def test_whoami_and_token_use_current_prompt_thread() -> None:
     assert "费用" not in token_message
 
 
-def test_setup_thread_store_migrates_legacy_group_key(tmp_path: Path) -> None:
+def test_setup_thread_store_migrates_legacy_group_key(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     """验证旧版纯群号映射迁移到启动 Prompt 且立即落盘。
 
     Args:
         tmp_path (Path): pytest 临时目录。
+        capsys (pytest.CaptureFixture[str]): pytest 标准输出捕获工具。
 
     Returns:
         None: 测试通过时无返回值。
@@ -471,18 +476,26 @@ def test_setup_thread_store_migrates_legacy_group_key(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    QQBotHandler.setup_thread_store(str(store_path), "mother")
+    result = QQBotHandler.setup_thread_store(str(store_path), "mother")
 
     expected = {"10001/default": "thread-10001-mother-101"}
     assert QQBotHandler._group_threads == expected
     assert json.loads(store_path.read_text(encoding="utf-8")) == expected
+    assert result.status == "loaded"
+    assert result.migrated_legacy is True
+    assert "已迁移旧格式" in result.display("条")
+    assert capsys.readouterr().out == ""
 
 
-def test_setup_thread_store_restores_composite_prompt_keys(tmp_path: Path) -> None:
+def test_setup_thread_store_restores_composite_prompt_keys(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     """验证重启加载时保留同一母线程下的全部 Prompt 映射。
 
     Args:
         tmp_path (Path): pytest 临时目录。
+        capsys (pytest.CaptureFixture[str]): pytest 标准输出捕获工具。
 
     Returns:
         None: 测试通过时无返回值。
@@ -497,16 +510,54 @@ def test_setup_thread_store_restores_composite_prompt_keys(tmp_path: Path) -> No
     }
     store_path.write_text(json.dumps(expected), encoding="utf-8")
 
-    QQBotHandler.setup_thread_store(str(store_path), "mother")
+    result = QQBotHandler.setup_thread_store(str(store_path), "mother")
 
     assert QQBotHandler._group_threads == expected
+    assert result.status == "loaded"
+    assert result.loaded_count == 2
+    assert result.display("条").endswith("已加载 2 条")
+    assert capsys.readouterr().out == ""
 
 
-def test_setup_thread_store_keeps_mother_thread_reset_behavior(tmp_path: Path) -> None:
+def test_setup_namespace_store_returns_summary_without_printing(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """验证记忆映射加载结果由启动摘要消费而非直接输出。
+
+    Args:
+        tmp_path (Path): pytest 临时目录。
+        capsys (pytest.CaptureFixture[str]): pytest 标准输出捕获工具。
+
+    Returns:
+        None: 测试通过时无返回值。
+
+    Raises:
+        None: 测试用例不主动抛出异常。
+    """
+    store_path = tmp_path / "namespaces.json"
+    store_path.write_text(
+        json.dumps({"10001": "store-10001-memory-101"}),
+        encoding="utf-8",
+    )
+
+    result = QQBotHandler.setup_namespace_store(str(store_path), "memory")
+
+    assert QQBotHandler._group_namespaces == {10001: "store-10001-memory-101"}
+    assert result.status == "loaded"
+    assert result.loaded_count == 1
+    assert capsys.readouterr().out == ""
+
+
+def test_setup_thread_store_keeps_mother_thread_reset_behavior(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     """验证母线程环境变量变化后仍清空全部群 Prompt 映射。
 
     Args:
         tmp_path (Path): pytest 临时目录。
+        capsys (pytest.CaptureFixture[str]): pytest 标准输出捕获工具。
 
     Returns:
         None: 测试通过时无返回值。
@@ -525,7 +576,10 @@ def test_setup_thread_store_keeps_mother_thread_reset_behavior(tmp_path: Path) -
         encoding="utf-8",
     )
 
-    QQBotHandler.setup_thread_store(str(store_path), "new-mother")
+    result = QQBotHandler.setup_thread_store(str(store_path), "new-mother")
 
     assert QQBotHandler._group_threads == {}
     assert json.loads(store_path.read_text(encoding="utf-8")) == {}
+    assert result.status == "reset"
+    assert result.display("条").endswith("环境不一致，已重置")
+    assert capsys.readouterr().out == ""
