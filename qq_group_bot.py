@@ -3526,9 +3526,6 @@ def main() -> None:
             f"\n\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [QQBot] stopped."
         )
     finally:
-        current_agent = getattr(QQBotHandler, "agent", None)
-        if isinstance(current_agent, SQLCheckpointAgentStreamingPlus):
-            current_agent.shutdown()
         reminder_manager.stop()
         try:
             server.server_close()
