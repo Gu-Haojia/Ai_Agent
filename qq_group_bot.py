@@ -1427,7 +1427,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
                     "type": "text",
                     "text": (
                         "<system_reminder>"
-                        f"Current datetime: {now.strftime('%Y-%m-%d %H:%M (%Z)')}, "
+                        f"Current datetime: {now.strftime('%Y-%m-%d %H:%M:%S (%Z)')}, "
                         f"Weekday: {now.strftime('%A')}"
                         "</system_reminder>"
                     ),
@@ -3379,6 +3379,19 @@ def _get_shared_agent() -> SQLCheckpointAgentStreamingPlus:
     return shared_agent
 
 
+def _print_startup_begin() -> None:
+    """输出 QQ Bot 开始启动的即时日志。
+
+    Returns:
+        None: 本函数仅向标准输出写入一行启动信息。
+
+    Raises:
+        None: 本函数不主动抛出异常。
+    """
+    timestamp = time.strftime("[%m-%d %H:%M:%S]", time.localtime())
+    print(f"\033[94m{timestamp}\033[0m [QQBot] Starting...", flush=True)
+
+
 def main() -> None:
     """启动 HTTP 服务器，接收 OneBot 回调并处理群消息。"""
     # 必须使用虚拟环境
@@ -3664,6 +3677,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    _print_startup_begin()
     # 可选：等待本机 Postgres/依赖准备（如需要）
     if os.environ.get("WAIT_PG") == "1":
         for _ in range(30):

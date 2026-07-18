@@ -193,7 +193,7 @@ class MultimodalUnitTest(unittest.TestCase):
         self.assertTrue(
             re.fullmatch(
                 r"<system_reminder>Current datetime: "
-                r"\d{4}-\d{2}-\d{2} \d{2}:\d{2} \(JST\), "
+                r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \(JST\), "
                 r"Weekday: [A-Za-z]+</system_reminder>",
                 str(content[1]["text"]),
             )

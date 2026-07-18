@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
-from qq_group_bot import BotConfig, QQBotStartupSummary
+from qq_group_bot import BotConfig, QQBotStartupSummary, _print_startup_begin
 from sql_agent_cli_stream_plus import SQLCheckpointAgentStreamingPlus
 
 
@@ -150,3 +151,27 @@ def test_startup_summary_always_prints_color(
 
     output = capsys.readouterr().out
     assert "\033[1;92m● READY\033[0m" in output
+
+
+def test_startup_begin_prints_timestamped_message(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """验证程序初始化前先输出包含秒级时间的启动信息。
+
+    Args:
+        capsys (pytest.CaptureFixture[str]): pytest 标准输出捕获工具。
+
+    Returns:
+        None: 测试无返回值。
+
+    Raises:
+        None: 断言失败时由 pytest 报告。
+    """
+    _print_startup_begin()
+
+    output = capsys.readouterr().out
+    assert re.fullmatch(
+        r"\x1b\[94m\[\d{2}-\d{2} \d{2}:\d{2}:\d{2}\]\x1b\[0m "
+        r"\[QQBot\] Starting\.\.\.\n",
+        output,
+    )
