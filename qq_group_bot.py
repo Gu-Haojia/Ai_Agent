@@ -3394,13 +3394,34 @@ def _print_startup_begin() -> None:
 
 def main() -> None:
     """启动 HTTP 服务器，接收 OneBot 回调并处理群消息。"""
+    startup_started = time.monotonic()
+    _print_startup_begin()
     # 必须使用虚拟环境
     in_docker = os.path.exists("/.dockerenv")
     skip_check = os.environ.get("SKIP_VENV_CHECK") == "1"
     assert os.environ.get("VIRTUAL_ENV") or sys.prefix.endswith(
         ".venv"
     )or in_docker or skip_check, "必须先激活虚拟环境 (.venv)。"
-    startup_started = time.monotonic()
+    if os.environ.get("WAIT_PG") == "1":
+        assert os.environ.get("LANGGRAPH_PG", "").strip(), (
+            "WAIT_PG=1 时必须配置 LANGGRAPH_PG"
+        )
+        check_started = time.monotonic()
+        for attempt in range(1, 31):
+            code = os.system('pg_isready -q -d "$LANGGRAPH_PG"')
+            if code == 0:
+                break
+            if attempt < 30:
+                time.sleep(1)
+        else:
+            elapsed = time.monotonic() - check_started
+            timestamp = time.strftime("[%m-%d %H:%M:%S]", time.localtime())
+            print(
+                f"\033[94m{timestamp}\033[0m [PostgreSQL] Not ready "
+                f"({elapsed:.2f}s, attempts=30)",
+                flush=True,
+            )
+            raise RuntimeError("PostgreSQL 未在限定时间内就绪")
     bot_cfg = BotConfig.from_env()
     reminder_store = JsonReminderStore(
         os.environ.get("REMINDER_STORE_FILE", ".qq_reminders.json")
@@ -3677,12 +3698,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    _print_startup_begin()
-    # 可选：等待本机 Postgres/依赖准备（如需要）
-    if os.environ.get("WAIT_PG") == "1":
-        for _ in range(30):
-            code = os.system("pg_isready -q")
-            if code == 0:
-                break
-            time.sleep(1)
     main()
