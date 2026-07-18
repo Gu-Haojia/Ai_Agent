@@ -102,7 +102,10 @@ def _group_human(index: int, body: str, with_image: bool = False) -> HumanMessag
     assert body.strip(), "body 不能为空"
     user_id = 2000 + index % 3
     user_name = f"群友{index % 3}"
-    text = f"Group_id: [10001]; User_id: [{user_id}]; User_name: {user_name}; Msg:\n[{body}]"
+    text = (
+        f"Group_id: [10001]; User_id: [{user_id}]; User_name: {user_name}\n"
+        f"<message>\n{body}\n</message>"
+    )
     if not with_image:
         return HumanMessage(content=text)
     return HumanMessage(
@@ -110,10 +113,7 @@ def _group_human(index: int, body: str, with_image: bool = False) -> HumanMessag
             {"type": "text", "text": text},
             {
                 "type": "text",
-                "text": (
-                    "第 1 张图像已经以内嵌 data URL 形式提供，"
-                    f"本地文件名为 live-{index}.jpg。"
-                ),
+                "text": f"[Image Attachment: index 1, name live-{index}.jpg]",
             },
             {
                 "type": "image_url",
@@ -211,7 +211,10 @@ def _heavy_tool_turn(prefix: str, tool_count: int = 8) -> list:
     ]
     return [
         HumanMessage(
-            content=f"Group_id: [10001]; User_id: [9001]; Msg:\n[{prefix} 重工具轮]"
+            content=(
+                "Group_id: [10001]; User_id: [9001]\n"
+                f"<message>\n{prefix} 重工具轮\n</message>"
+            )
         ),
         AIMessage(content="", tool_calls=tool_calls),
         *tool_messages,
@@ -426,7 +429,10 @@ def test_context_compressor_keeps_recent_messages_with_complete_turns() -> None:
             *_heavy_tool_turn("old", tool_count=8),
             *_heavy_tool_turn("new", tool_count=8),
             HumanMessage(
-                content="Group_id: [10001]; User_id: [9002]; Msg:\n[下一轮消息]"
+                content=(
+                    "Group_id: [10001]; User_id: [9002]\n"
+                    "<message>\n下一轮消息\n</message>"
+                )
             ),
         ],
     )
@@ -515,8 +521,10 @@ def test_agent_persists_group_context_summary_in_thread_state(
     for index in range(10):
         text = (
             f"Group_id: [10001]; User_id: [{3000 + index % 2}]; "
-            f"User_name: 测试群友{index % 2}; Msg:\n"
-            f"[第 {index} 轮，大家继续聊演唱会抽选、票价和怎么去现场。]"
+            f"User_name: 测试群友{index % 2}\n"
+            "<message>\n"
+            f"第 {index} 轮，大家继续聊演唱会抽选、票价和怎么去现场。\n"
+            "</message>"
         )
         agent.chat_once_stream(text, thread_id="test-context-compress")
 

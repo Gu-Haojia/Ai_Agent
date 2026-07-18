@@ -7,7 +7,7 @@ from unittest import mock
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from qq_group_bot import QQBotHandler
+from qq_group_bot import PreparedMessageGroup, QQBotHandler
 from sql_agent_cli_stream_plus import (
     AgentConfig,
     SQLCheckpointAgentStreamingPlus,
@@ -61,8 +61,13 @@ def test_datetime_system_reminder_switches_legacy_system_date(
     try:
         user_input = (
             QQBotHandler._build_multimodal_content(
-                "你好",
-                [],
+                [
+                    PreparedMessageGroup(
+                        context_text="你好",
+                        images=(),
+                        videos=(),
+                    )
+                ],
                 include_datetime_system_reminder=True,
             )
             if enabled

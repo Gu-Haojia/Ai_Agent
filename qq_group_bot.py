@@ -926,6 +926,64 @@ class MessageContent:
     sent_at: Optional[int] = None
 
 
+@dataclass(frozen=True)
+class PreparedMessageGroup:
+    """
+    已转换为模型输入的单条消息及其媒体集合。
+
+    Args:
+        context_text (str): 当前消息或引用消息的格式化文本。
+        images (tuple[StoredImage, ...]): 归属于该消息的已保存图片。
+        videos (tuple[StoredVideo, ...]): 归属于该消息的已保存视频。
+        quoted_index (Optional[int]): 引用消息序号；当前消息为 ``None``。
+
+    Returns:
+        None: 数据类初始化不返回额外值。
+
+    Raises:
+        None: 数据类不在初始化阶段主动抛出异常。
+    """
+
+    context_text: str
+    images: tuple[StoredImage, ...]
+    videos: tuple[StoredVideo, ...]
+    quoted_index: Optional[int] = None
+
+
+def _format_current_message_context(
+    group_id: int,
+    user_id: int,
+    user_name: str,
+    text: str,
+) -> str:
+    """
+    将当前 QQ 消息格式化为模型可读的文本上下文。
+
+    Args:
+        group_id (int): 当前 QQ 群号。
+        user_id (int): 当前消息发送者 QQ 号。
+        user_name (str): 当前消息发送者显示名。
+        text (str): 当前消息正文。
+
+    Returns:
+        str: 包含发送者信息与 ``message`` 标签的文本。
+
+    Raises:
+        AssertionError: 当群号、用户号、显示名或正文非法时抛出。
+    """
+    assert isinstance(group_id, int) and group_id > 0, "group_id 必须为正整数"
+    assert isinstance(user_id, int) and user_id > 0, "user_id 必须为正整数"
+    assert isinstance(user_name, str) and user_name.strip(), "user_name 不能为空"
+    assert isinstance(text, str) and text.strip(), "当前消息正文不能为空"
+    return (
+        f"Group_id: [{group_id}]; User_id: [{user_id}]; "
+        f"User_name: {user_name.strip()}\n"
+        "<message>\n"
+        f"{text.strip()}\n"
+        "</message>"
+    )
+
+
 def _format_reply_context(
     index: int,
     content: MessageContent,
@@ -956,16 +1014,17 @@ def _format_reply_context(
             tz=ZoneInfo("Asia/Tokyo"),
         )
         timestamp_context = (
-            f" Sent_at: [{sent_at.strftime('%Y-%m-%d %H:%M:%S (%Z)')}];"
+            f"; Sent_at: [{sent_at.strftime('%Y-%m-%d %H:%M:%S (%Z)')}]"
         )
     summary = content.text.strip() or "（引用消息未提供文本）"
-    if content.images:
-        summary += f"（包含{len(content.images)}张图片）"
-    if content.videos:
-        summary += f"（包含{len(content.videos)}个视频）"
     return (
-        f"引用消息{index}: User_id: [{content.user_id}]; "
-        f"User_name: {content.user_name};{timestamp_context} Msg:\n[{summary}]"
+        f'<quoted_message index="{index}">\n'
+        f"User_id: [{content.user_id}]; User_name: {content.user_name}"
+        f"{timestamp_context}\n"
+        "<message>\n"
+        f"{summary}\n"
+        "</message>\n"
+        "</quoted_message>"
     )
 
 
@@ -1289,29 +1348,78 @@ class QQBotHandler(BaseHTTPRequestHandler):
     @classmethod
     def _build_multimodal_content(
         cls,
-        model_input: str,
-        images: Sequence[StoredImage],
-        videos: Sequence[StoredVideo] = (),
+        message_groups: Sequence[PreparedMessageGroup],
         model_name: str = "",
         include_datetime_system_reminder: bool = False,
     ) -> list[dict[str, object]]:
         """
-        构造多模态消息内容列表。
+        按消息归属构造多模态内容列表。
 
         Args:
-            model_input (str): 拼接后的文本输入。
-            images (Sequence[StoredImage]): 已保存的图像集合。
-            videos (Sequence[StoredVideo], optional): 已保存的视频集合。
+            message_groups (Sequence[PreparedMessageGroup]): 当前消息与引用消息分组。
             model_name (str, optional): 当前使用的模型名称，用于选择视频片段格式。
             include_datetime_system_reminder (bool, optional): 是否加入动态时间提醒。
 
         Returns:
-            list[dict[str, object]]: 可直接传递给多模态模型的内容结构，
-                在包含 Base64 数据时会同步提供对应的本地文件名；视频将采用
-                LangChain / google_genai 兼容的 media 结构。
+            list[dict[str, object]]: 可直接传递给多模态模型的有序内容结构。
+
+        Raises:
+            AssertionError: 当消息分组、引用序号或视频模型配置非法时抛出。
         """
-        assert model_name or not videos, "存在视频时必须提供模型名称"
-        content: list[dict[str, object]] = [{"type": "text", "text": model_input}]
+        assert message_groups, "message_groups 不能为空"
+        assert message_groups[0].quoted_index is None, "首个分组必须为当前消息"
+        has_videos = any(group.videos for group in message_groups)
+        assert model_name or not has_videos, "存在视频时必须提供模型名称"
+        content: list[dict[str, object]] = []
+        cfg = getattr(cls, "bot_cfg", None)
+        use_base64 = True
+        if isinstance(cfg, BotConfig):
+            use_base64 = cfg.use_local_image_base64
+
+        for group in message_groups:
+            assert group.context_text.strip(), "消息分组文本不能为空"
+            if group.quoted_index is not None:
+                assert group.quoted_index > 0, "引用消息序号必须大于零"
+            content.append({"type": "text", "text": group.context_text})
+            owner = (
+                ""
+                if group.quoted_index is None
+                else f" in quoted message {group.quoted_index}"
+            )
+            for idx, stored in enumerate(group.images, 1):
+                file_path = Path(stored.path)
+                assert file_path.name, "图像文件名不能为空"
+                content.append(
+                    {
+                        "type": "text",
+                        "text": (
+                            f"[Image Attachment{owner}: index {idx}, "
+                            f"name {file_path.name}]"
+                        ),
+                    }
+                )
+                content.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": _resolve_stored_image_url(stored, use_base64)
+                        },
+                    }
+                )
+            for idx, video in enumerate(group.videos, 1):
+                file_path = Path(video.path)
+                assert file_path.name, "视频文件名不能为空"
+                content.append(
+                    {
+                        "type": "text",
+                        "text": (
+                            f"[Video Attachment{owner}: index {idx}, "
+                            f"name {file_path.name}]"
+                        ),
+                    }
+                )
+                content.append(cls._format_video_part(video, model_name))
+
         if include_datetime_system_reminder:
             now = datetime.now(ZoneInfo("Asia/Tokyo"))
             content.append(
@@ -1325,56 +1433,70 @@ class QQBotHandler(BaseHTTPRequestHandler):
                     ),
                 }
             )
-        if images:
-            content.append(
-                {
-                    "type": "text",
-                    "text": f"用户同时附带了 {len(images)} 张图片，请结合视觉分析并不要回传原始图片。",
-                }
-            )
-        if videos:
-            content.append(
-                {
-                    "type": "text",
-                    "text": f"用户同时附带了 {len(videos)} 个视频，请结合视频内容进行理解与推理。",
-                }
-            )
-        cfg = getattr(cls, "bot_cfg", None)
-        use_base64 = True
-        if isinstance(cfg, BotConfig):
-            use_base64 = cfg.use_local_image_base64
-        for idx, stored in enumerate(images, 1):
-            file_path = Path(stored.path)
-            assert file_path.name, "图像文件名不能为空"
-            content.append(
-                {
-                    "type": "text",
-                    "text": (
-                        f"第 {idx} 张图像已经以内嵌 data URL 形式提供，"
-                        f"本地文件名为 {file_path.name}。"
-                    ),
-                }
-            )
-            content.append(
-                {
-                    "type": "image_url",
-                    "image_url": {"url": _resolve_stored_image_url(stored, use_base64)},
-                }
-            )
-        for idx, video in enumerate(videos, 1):
-            file_path = Path(video.path)
-            assert file_path.name, "视频文件名不能为空"
-            content.append(
-                {
-                    "type": "text",
-                    "text": (
-                        f"第 {idx} 个视频已经以内嵌形式提供，"
-                        f"本地文件名为 {file_path.name}。"
-                    ),
-                }
-            )
-            content.append(cls._format_video_part(video, model_name))
         return content
+
+    @staticmethod
+    def _store_message_media(
+        image_segments: Sequence[ImageSegmentInfo],
+        video_segments: Sequence[VideoSegmentInfo],
+        storage: Optional[ImageStorageManager],
+        image_cache: dict[str, Optional[StoredImage]],
+        video_cache: dict[str, StoredVideo],
+    ) -> tuple[tuple[StoredImage, ...], tuple[StoredVideo, ...]]:
+        """
+        下载并保存单条消息中的媒体，同时复用跨消息下载缓存。
+
+        Args:
+            image_segments (Sequence[ImageSegmentInfo]): 当前分组的图片段。
+            video_segments (Sequence[VideoSegmentInfo]): 当前分组的视频段。
+            storage (Optional[ImageStorageManager]): 已初始化的媒体存储管理器。
+            image_cache (dict[str, Optional[StoredImage]]): 图片 URL 下载缓存。
+            video_cache (dict[str, StoredVideo]): 视频 URL 下载缓存。
+
+        Returns:
+            tuple[tuple[StoredImage, ...], tuple[StoredVideo, ...]]:
+                当前消息分组对应的已保存图片与视频。
+
+        Raises:
+            AssertionError: 当媒体存在但存储管理器或 URL 缺失时抛出。
+            RuntimeError: 当远程媒体下载失败时抛出。
+        """
+        if image_segments or video_segments:
+            assert isinstance(storage, ImageStorageManager), "图像存储管理器尚未配置"
+        stored_images: list[StoredImage] = []
+        stored_videos: list[StoredVideo] = []
+        seen_image_tokens: set[str] = set()
+        seen_video_tokens: set[str] = set()
+
+        for segment in image_segments:
+            assert segment.url, "当前仅支持通过 URL 获取的图片消息"
+            token = segment.url
+            if token in seen_image_tokens:
+                continue
+            seen_image_tokens.add(token)
+            if token not in image_cache:
+                assert storage is not None, "图像存储管理器尚未配置"
+                image_cache[token] = storage.save_remote_image(
+                    segment.url, segment.filename
+                )
+            saved_image = image_cache[token]
+            if saved_image is not None:
+                stored_images.append(saved_image)
+
+        for segment in video_segments:
+            assert segment.url, "当前仅支持通过 URL 获取的视频消息"
+            token = segment.url
+            if token in seen_video_tokens:
+                continue
+            seen_video_tokens.add(token)
+            if token not in video_cache:
+                assert storage is not None, "图像存储管理器尚未配置"
+                video_cache[token] = storage.save_remote_video(
+                    segment.url, segment.filename
+                )
+            stored_videos.append(video_cache[token])
+
+        return tuple(stored_images), tuple(stored_videos)
 
     @staticmethod
     def _format_video_part(video: StoredVideo, model_name: str) -> dict[str, object]:
@@ -1950,7 +2072,6 @@ class QQBotHandler(BaseHTTPRequestHandler):
             use_datetime_system_reminder = _is_truthy_env(
                 os.environ.get("ENABLE_DATETIME_SYSTEM_REMINDER")
             )
-            reply_texts = [c.text for c in reply_contents if c.text]
             user_text = parsed.text
             if not user_text:
                 if parsed.images and parsed.videos:
@@ -1959,74 +2080,73 @@ class QQBotHandler(BaseHTTPRequestHandler):
                     user_text = "（用户未提供文本，仅包含图片）"
                 elif parsed.videos:
                     user_text = "（用户未提供文本，仅包含视频）"
-                elif reply_texts:
+                elif reply_contents:
                     user_text = "（当前消息正文为空，仅引用其他消息）"
                 else:
                     user_text = "（用户未提供文本）"
-            if reply_contents:
-                context_lines: list[str] = []
-                for idx, content in enumerate(reply_contents, 1):
-                    context_lines.append(
-                        _format_reply_context(
-                            idx,
-                            content,
-                            include_timestamp=use_datetime_system_reminder,
-                        )
-                    )
-                context_lines.append(f"当前消息: [{user_text}]")
-                user_text = "\n".join(context_lines)
-            model_input = f"Group_id: [{group_id}]; User_id: [{user_id}]; User_name: {author}; Msg:\n[{user_text}]"
-            image_segments: list[ImageSegmentInfo] = []
-            video_segments: list[VideoSegmentInfo] = []
-            if parsed.images:
-                image_segments.extend(parsed.images)
-            if parsed.videos:
-                video_segments.extend(parsed.videos)
-            for content in reply_contents:
-                if content.images:
-                    image_segments.extend(content.images)
-                if content.videos:
-                    video_segments.extend(content.videos)
-            stored_images: list[StoredImage] = []
-            stored_videos: list[StoredVideo] = []
+            current_context = _format_current_message_context(
+                group_id,
+                user_id,
+                author,
+                user_text,
+            )
+            has_media = bool(
+                parsed.images
+                or parsed.videos
+                or any(content.images or content.videos for content in reply_contents)
+            )
             storage: Optional[ImageStorageManager] = None
-            if image_segments or video_segments:
+            if has_media:
                 storage = self._require_image_storage()
-            if image_segments and storage:
-                seen_tokens: set[str] = set()
-                for seg in image_segments:
-                    assert seg.url, "当前仅支持通过 URL 获取的图片消息"
-                    token = seg.url or seg.file_id or seg.filename or ""
-                    if token and token in seen_tokens:
-                        continue
-                    if token:
-                        seen_tokens.add(token)
-                    saved = storage.save_remote_image(seg.url, seg.filename)
-                    if saved:
-                        stored_images.append(saved)
-            if video_segments and storage:
-                seen_video_tokens: set[str] = set()
-                for seg in video_segments:
-                    assert seg.url, "当前仅支持通过 URL 获取的视频消息"
-                    token = seg.url or seg.file_id or seg.filename or ""
-                    if token and token in seen_video_tokens:
-                        continue
-                    if token:
-                        seen_video_tokens.add(token)
-                    stored = storage.save_remote_video(seg.url, seg.filename)
-                    stored_videos.append(stored)
+            image_cache: dict[str, Optional[StoredImage]] = {}
+            video_cache: dict[str, StoredVideo] = {}
+            current_images, current_videos = self._store_message_media(
+                parsed.images,
+                parsed.videos,
+                storage,
+                image_cache,
+                video_cache,
+            )
+            message_groups: list[PreparedMessageGroup] = [
+                PreparedMessageGroup(
+                    context_text=current_context,
+                    images=current_images,
+                    videos=current_videos,
+                )
+            ]
+            for idx, reply_content in enumerate(reply_contents, 1):
+                reply_images, reply_videos = self._store_message_media(
+                    reply_content.images,
+                    reply_content.videos,
+                    storage,
+                    image_cache,
+                    video_cache,
+                )
+                message_groups.append(
+                    PreparedMessageGroup(
+                        context_text=_format_reply_context(
+                            idx,
+                            reply_content,
+                            include_timestamp=use_datetime_system_reminder,
+                        ),
+                        images=reply_images,
+                        videos=reply_videos,
+                        quoted_index=idx,
+                    )
+                )
+            requires_content_list = bool(
+                reply_contents
+                or has_media
+                or use_datetime_system_reminder
+            )
             payload = (
                 self._build_multimodal_content(
-                    model_input,
-                    stored_images,
-                    stored_videos,
+                    message_groups,
                     self.agent._config.model_name,
                     include_datetime_system_reminder=use_datetime_system_reminder,
                 )
-                if stored_images
-                or stored_videos
-                or use_datetime_system_reminder
-                else model_input
+                if requires_content_list
+                else current_context
             )
             answer = self.agent.chat_once_stream(
                 payload, thread_id=self._thread_id_for(group_id)

@@ -6,11 +6,34 @@ import json
 import unittest
 from unittest import mock
 
-from qq_group_bot import MessageContent, _fetch_message_content, _format_reply_context
+from qq_group_bot import (
+    MessageContent,
+    _fetch_message_content,
+    _format_current_message_context,
+    _format_reply_context,
+)
 
 
 class QQBotReplyContextTests(unittest.TestCase):
     """验证引用消息发送者信息会进入 Agent 上下文。"""
+
+    def test_format_current_message_context_uses_message_tag(self) -> None:
+        """
+        当前消息应使用独立的 message 标签包裹正文。
+
+        Returns:
+            None: 测试无返回值。
+
+        Raises:
+            None: 断言失败时由 unittest 报告。
+        """
+        result = _format_current_message_context(10001, 123456, "群名片", "当前消息")
+
+        self.assertEqual(
+            result,
+            "Group_id: [10001]; User_id: [123456]; User_name: 群名片\n"
+            "<message>\n当前消息\n</message>",
+        )
 
     def test_fetch_message_content_keeps_sender(self) -> None:
         """
@@ -70,7 +93,10 @@ class QQBotReplyContextTests(unittest.TestCase):
 
         self.assertEqual(
             result,
-            "引用消息1: User_id: [123456]; User_name: 群名片; Msg:\n[原消息]",
+            '<quoted_message index="1">\n'
+            "User_id: [123456]; User_name: 群名片\n"
+            "<message>\n原消息\n</message>\n"
+            "</quoted_message>",
         )
 
     def test_format_reply_context_includes_timestamp_when_enabled(self) -> None:
@@ -96,8 +122,11 @@ class QQBotReplyContextTests(unittest.TestCase):
 
         self.assertEqual(
             result,
-            "引用消息1: User_id: [123456]; User_name: 群名片; "
-            "Sent_at: [2024-01-01 09:00:00 (JST)]; Msg:\n[原消息]",
+            '<quoted_message index="1">\n'
+            "User_id: [123456]; User_name: 群名片; "
+            "Sent_at: [2024-01-01 09:00:00 (JST)]\n"
+            "<message>\n原消息\n</message>\n"
+            "</quoted_message>",
         )
 
     def test_format_reply_context_requires_timestamp_when_enabled(self) -> None:

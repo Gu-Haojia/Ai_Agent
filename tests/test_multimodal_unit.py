@@ -12,10 +12,16 @@ from image_storage import ImageStorageManager, StoredImage, StoredVideo
 from PIL import Image
 
 try:
-    from qq_group_bot import QQBotHandler, _extract_cq_images, _parse_message_and_at
+    from qq_group_bot import (
+        PreparedMessageGroup,
+        QQBotHandler,
+        _extract_cq_images,
+        _parse_message_and_at,
+    )
 
     _QQ_MODULE_AVAILABLE = True
 except ModuleNotFoundError:
+    PreparedMessageGroup = None
     QQBotHandler = None
     _extract_cq_images = None
     _parse_message_and_at = None
@@ -91,15 +97,76 @@ class MultimodalUnitTest(unittest.TestCase):
                 mime_type="image/png",
                 base64_data=base64.b64encode(b"dummy").decode("ascii"),
             )
-            content = QQBotHandler._build_multimodal_content("test", [stored])
-            self.assertEqual(content[0]["text"], "test")
-            self.assertTrue(any(item.get("type") == "image_url" for item in content))
-            self.assertTrue(
-                any(
-                    item.get("type") == "text" and "stored.png" in item.get("text", "")
-                    for item in content
-                )
+            group = PreparedMessageGroup(
+                context_text="test",
+                images=(stored,),
+                videos=(),
             )
+            content = QQBotHandler._build_multimodal_content([group])
+            self.assertEqual(content[0]["text"], "test")
+            self.assertEqual(
+                content[1],
+                {
+                    "type": "text",
+                    "text": "[Image Attachment: index 1, name stored.png]",
+                },
+            )
+            self.assertEqual(content[2]["type"], "image_url")
+            combined_text = "\n".join(
+                str(item.get("text", "")) for item in content if item["type"] == "text"
+            )
+            self.assertNotIn("用户同时附带了", combined_text)
+            self.assertNotIn("以内嵌 data URL 形式提供", combined_text)
+
+    @unittest.skipUnless(_QQ_MODULE_AVAILABLE, "缺少 langgraph 依赖，跳过 QQ 解析逻辑测试")
+    def test_multimodal_content_keeps_quoted_image_with_quoted_message(self) -> None:
+        """
+        引用图片标签与图片应紧跟对应的引用消息文本。
+
+        Returns:
+            None: 测试无返回值。
+
+        Raises:
+            None: 断言失败时由 unittest 报告。
+        """
+        current_image = StoredImage(
+            path=Path("current.jpg"),
+            mime_type="image/jpeg",
+            base64_data=base64.b64encode(b"current").decode("ascii"),
+        )
+        quoted_image = StoredImage(
+            path=Path("quoted.png"),
+            mime_type="image/png",
+            base64_data=base64.b64encode(b"quoted").decode("ascii"),
+        )
+        groups = [
+            PreparedMessageGroup(
+                context_text="current context",
+                images=(current_image,),
+                videos=(),
+            ),
+            PreparedMessageGroup(
+                context_text="quoted context",
+                images=(quoted_image,),
+                videos=(),
+                quoted_index=1,
+            ),
+        ]
+
+        content = QQBotHandler._build_multimodal_content(groups)
+
+        self.assertEqual(content[0]["text"], "current context")
+        self.assertEqual(
+            content[1]["text"],
+            "[Image Attachment: index 1, name current.jpg]",
+        )
+        self.assertEqual(content[2]["type"], "image_url")
+        self.assertEqual(content[3]["text"], "quoted context")
+        self.assertEqual(
+            content[4]["text"],
+            "[Image Attachment in quoted message 1: index 1, name quoted.png]",
+        )
+        self.assertEqual(content[5]["type"], "image_url")
 
     @unittest.skipUnless(_QQ_MODULE_AVAILABLE, "缺少 langgraph 依赖，跳过 QQ 解析逻辑测试")
     def test_multimodal_content_builder_includes_datetime_reminder(self) -> None:
@@ -112,10 +179,13 @@ class MultimodalUnitTest(unittest.TestCase):
         Raises:
             None: 断言失败时由 unittest 报告。
         """
+        group = PreparedMessageGroup(
+            context_text="用户原消息",
+            images=(),
+            videos=(),
+        )
         content = QQBotHandler._build_multimodal_content(
-            "用户原消息",
-            [],
-            include_datetime_system_reminder=True,
+            [group], include_datetime_system_reminder=True
         )
 
         self.assertEqual(len(content), 2)
