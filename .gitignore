@@ -21,6 +21,7 @@ venv/
 # Build / Artifacts
 dist/
 build/
+control/
 *.egg-info/
 *.log
 output.xml
