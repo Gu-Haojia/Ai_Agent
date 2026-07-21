@@ -14,7 +14,7 @@ from typing import Any, Optional, Protocol, Sequence
 from src.x_monitor_render import XRenderedTweet
 
 TRANSLATION_MODE_ENV = "X_MONITOR_TRANSLATION_MODE"
-TRANSLATION_MODEL = "gemini-3.1-flash-lite"
+TRANSLATION_MODEL = "gemini-3.5-flash-lite"
 
 
 class XTweetTranslationMode:
