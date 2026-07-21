@@ -108,6 +108,8 @@ LangGraph/
 | `BOT_HOST` / `BOT_PORT` | HTTP 回调监听地址与端口（默认 `0.0.0.0:8080`） |
 | `ONEBOT_API_BASE` | NapCat HTTP API 地址（默认 `http://127.0.0.1:3000`） |
 | `ONEBOT_SECRET` / `ONEBOT_ACCESS_TOKEN` | 回调签名与 API Token（可选） |
+| `X_MONITOR_TRANSLATION_MODE` | X 推文翻译模式：`none`、`translated` 或 `bilingual` |
+| `X_MONITOR_TRANSLATION_MODEL` | X 推文翻译使用的 Gemini 模型，默认 `gemini-3.5-flash-lite` |
 | `ALLOWED_GROUPS` / `CMD_ALLOWED_USERS` | 群聊/命令白名单，逗号分隔 |
 | `THREAD_STORE_FILE` | 群 + Prompt → 线程 ID 映射文件，默认 `.qq_group_threads.json` |
 | `DAILY_TASK` / `NIGHTLY_TASK` | 需要播报的群号（逗号分隔） |

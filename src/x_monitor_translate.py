@@ -14,6 +14,7 @@ from typing import Any, Optional, Protocol, Sequence
 from src.x_monitor_render import XRenderedTweet
 
 TRANSLATION_MODE_ENV = "X_MONITOR_TRANSLATION_MODE"
+TRANSLATION_MODEL_ENV = "X_MONITOR_TRANSLATION_MODEL"
 TRANSLATION_MODEL = "gemini-3.5-flash-lite"
 
 
@@ -92,14 +93,15 @@ class GeminiTweetTranslator:
     """
 
     def __init__(
-        self, client: Optional[Any] = None, model: str = TRANSLATION_MODEL
+        self, client: Optional[Any] = None, model: Optional[str] = None
     ) -> None:
         """
         初始化 Gemini 翻译器。
 
         Args:
             client (Optional[Any]): 可注入的 Google GenAI 客户端。
-            model (str): Gemini 模型名称。
+            model (Optional[str]): Gemini 模型名称。未提供时读取
+                `X_MONITOR_TRANSLATION_MODEL`。
 
         Returns:
             None: 构造函数无返回值。
@@ -107,9 +109,14 @@ class GeminiTweetTranslator:
         Raises:
             AssertionError: 当模型名称为空时抛出。
         """
-        assert model.strip(), "Gemini 翻译模型不能为空"
+        selected_model = (
+            model
+            if model is not None
+            else os.environ.get(TRANSLATION_MODEL_ENV, TRANSLATION_MODEL)
+        )
+        assert selected_model.strip(), "Gemini 翻译模型不能为空"
         self._client = client
-        self._model = model.strip()
+        self._model = selected_model.strip()
 
     def translate_texts(self, texts: Sequence[str]) -> list[str]:
         """

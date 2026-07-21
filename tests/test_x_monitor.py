@@ -43,6 +43,7 @@ from src.x_monitor_render import (
 from src.x_monitor_translate import (
     GeminiTweetTranslator,
     TRANSLATION_MODEL,
+    TRANSLATION_MODEL_ENV,
     TRANSLATION_MODE_ENV,
     XRenderedTweetTextTranslator,
     XTweetTranslationMode,
@@ -1195,6 +1196,55 @@ class XMonitorTranslationTests(unittest.TestCase):
         self.assertEqual(result, ["你好"])
         self.assertEqual(fake_models.calls[0]["model"], TRANSLATION_MODEL)
         self.assertIn("hello", str(fake_models.calls[0]["contents"]))
+
+    def test_gemini_translator_uses_model_from_environment(self) -> None:
+        """
+        XMonitor 翻译器应支持通过环境变量选择 Gemini 模型。
+        """
+
+        class FakeModels:
+            """
+            模拟 Google GenAI models API。
+            """
+
+            def __init__(self) -> None:
+                """
+                初始化调用记录。
+
+                Returns:
+                    None: 无返回值。
+                """
+                self.calls: list[dict[str, object]] = []
+
+            def generate_content(
+                self, model: str, contents: object, config: object
+            ) -> SimpleNamespace:
+                """
+                记录生成请求并返回固定 JSON。
+
+                Args:
+                    model (str): 模型名称。
+                    contents (object): 请求内容。
+                    config (object): 生成配置。
+
+                Returns:
+                    SimpleNamespace: 模拟响应。
+                """
+                self.calls.append(
+                    {"model": model, "contents": contents, "config": config}
+                )
+                return SimpleNamespace(text='{"translations":["你好"]}')
+
+        fake_models = FakeModels()
+        client = SimpleNamespace(models=fake_models)
+
+        with mock.patch.dict(
+            os.environ, {TRANSLATION_MODEL_ENV: "gemini-2.5-flash"}
+        ):
+            result = GeminiTweetTranslator(client=client).translate_texts(["hello"])
+
+        self.assertEqual(result, ["你好"])
+        self.assertEqual(fake_models.calls[0]["model"], "gemini-2.5-flash")
 
     def test_rendered_tweet_translator_can_replace_text_only(self) -> None:
         """
