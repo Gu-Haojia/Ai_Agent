@@ -50,6 +50,7 @@ from src.visual_crossing_weather import (
     VisualCrossingWeatherFormatter,
     VisualCrossingWeatherRequest,
 )
+from src.exchange_rate_tool import ExchangeRateClient, ExchangeRateToolInput
 from src.google_hotels_client import (
     GoogleHotelsClient,
     GoogleHotelsConsoleFormatter,
@@ -1951,6 +1952,44 @@ class SQLCheckpointAgentStreamingPlus:
                         return formatted
 
                     tools.append(visual_crossing_weather_tool)
+
+                exchange_rate_client = ExchangeRateClient()
+
+                @tool("exchange_rate", args_schema=ExchangeRateToolInput)
+                def exchange_rate_tool(
+                    base_currency: str,
+                    quote_currency: str,
+                    amount: str | int | float = "1",
+                ) -> str:
+                    """
+                    查询最新汇率并将成功或失败结果结构化返回给 Agent。
+
+                    Args:
+                        base_currency (str): 原始货币代码，例如 USD。
+                        quote_currency (str): 目标货币代码，例如 JPY。
+                        amount (str | int | float): 待换算金额，默认是 1。
+
+                    Returns:
+                        str: 包含 success、data 或 error 字段的 JSON 字符串。
+
+                    Raises:
+                        None: 可预期的参数、网络和 API 响应错误均直接结构化返回。
+                    """
+
+                    result = exchange_rate_client.query(
+                        base_currency=base_currency,
+                        quote_currency=quote_currency,
+                        amount=amount,
+                    )
+                    output = ExchangeRateClient.to_json(result)
+                    print(
+                        f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m "
+                        f"[ExchangeRate Tool Output] {output}",
+                        flush=True,
+                    )
+                    return output
+
+                tools.append(exchange_rate_tool)
 
                 serpapi_key = os.environ.get("SERPAPI_API_KEY", "").strip()
                 if serpapi_key:

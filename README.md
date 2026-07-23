@@ -197,6 +197,7 @@ brew services stop postgresql
 
 - **搜索**：Tavily Search、Web Browser（抓取并总结页面）。
 - **旅行**：Google Flights / Hotels / Directions 工具链。
+- **汇率**：查询最新货币对汇率并返回结构化换算结果。
 - **音乐**：检索网易云歌曲候选，并通过 NapCat 向指定群发送音乐卡片。
 - **天气**：Visual Crossing 天气查询，支持多地点、多时段。
 - **票务**：Asobi Ticket 抓取 + `imas_ticket_tool` 便捷命令。
