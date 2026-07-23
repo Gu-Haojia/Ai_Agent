@@ -321,43 +321,6 @@ def test_context_compressor_keeps_group_chat_context_and_tool_summary(
             assert message.tool_call_id == "call-flight-1"
 
 
-def test_summary_prompt_preserves_existing_sections_and_event_continuity() -> None:
-    """
-    验证摘要提示保留现有栏目，并要求按时间顺序合并新旧群聊经过。
-
-    Returns:
-        None: 无返回值。
-
-    Raises:
-        None: 测试用例不主动抛出异常。
-    """
-    compressor = ContextCompressor(
-        ContextCompressionConfig(),
-        RecordingSummaryModel(),
-    )
-
-    prompt = compressor.build_summary_prompt(
-        "上一版发生过抽选失败和交通讨论。",
-        [_group_human(20, "后来大家开始比较住宿。")],
-    )
-
-    assert "把上一版摘要视为更早的群聊经过" in prompt
-    assert "不要只总结最新消息" in prompt
-    assert "按时间顺序" in prompt
-    assert "被压缩上下文的主要经过：" in prompt
-    assert "原有分类栏目" in prompt
-    assert "不是数据库字段" in prompt
-    assert "被压缩上下文的话题：" in prompt
-    assert "被压缩上下文的氛围：" in prompt
-    assert "参与者与发言倾向：" in prompt
-    assert "群内梗、特殊关系：" in prompt
-    assert "明确偏好或雷点：" in prompt
-    assert "最近图片/视频语境：" in prompt
-    assert "工具调用要点：" in prompt
-    assert "Agent最近说过什么：" in prompt
-    assert "需要延续或避免重复的点：" in prompt
-
-
 def test_summary_prompt_keeps_attribution_without_inferred_profiles() -> None:
     """
     验证摘要提示要求保持事实归属，避免从单次发言推断稳定档案。

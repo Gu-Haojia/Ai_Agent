@@ -187,7 +187,7 @@ def test_boost_command_prints_model_rebuild_log(
     """
     handler = _handler()
     agent = _agent()
-    agent._config.model_name = "google_genai:gemini-3.5-flash"
+    agent._config.model_name = "google_genai:gemini-3.6-flash"
     QQBotHandler.agent = agent
 
     with mock.patch.object(
@@ -198,10 +198,10 @@ def test_boost_command_prints_model_rebuild_log(
         handled = handler._handle_commands(10001, 20002, "/boost")
 
     assert handled is True
-    assert "模型已切换：google_genai:gemini-3.5-flash" in send_mock.call_args.args[2]
+    assert "模型已切换：google_genai:gemini-3.6-flash" in send_mock.call_args.args[2]
     output = capsys.readouterr().out
     assert (
-        "/boost 已切换模型：google_genai:gemini-3.5-flash -> "
+        "/boost 已切换模型：google_genai:gemini-3.6-flash -> "
         "google_genai:gemini-3.1-pro-preview，Agent 已重建。"
     ) in output
 
