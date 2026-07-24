@@ -83,6 +83,60 @@ class RecordingSummaryModel:
         )
 
 
+class SequenceSummaryModel:
+    """
+    按调用顺序返回预设摘要的测试模型。
+
+    Args:
+        responses (list[str]): 摘要模型依次返回的文本列表。
+
+    Returns:
+        None: 类初始化不返回额外值。
+
+    Raises:
+        AssertionError: 当摘要返回序列为空时抛出。
+    """
+
+    def __init__(self, responses: list[str]) -> None:
+        """
+        初始化预设摘要列表。
+
+        Args:
+            responses (list[str]): 摘要模型依次返回的文本列表。
+
+        Returns:
+            None: 无返回值。
+
+        Raises:
+            AssertionError: 当摘要返回序列为空时抛出。
+        """
+        assert responses, "responses 不能为空"
+        self.responses = list(responses)
+        self.prompts: list[str] = []
+
+    def invoke(self, messages: Iterable[Any]) -> AIMessage:
+        """
+        记录 prompt 并返回下一个预设摘要。
+
+        Args:
+            messages (Iterable[Any]): 摘要模型输入消息。
+
+        Returns:
+            AIMessage: 预设摘要响应。
+
+        Raises:
+            AssertionError: 当调用次数超过预设摘要数量时抛出。
+        """
+        prompt = ""
+        for message in messages:
+            if isinstance(message, HumanMessage):
+                prompt = str(message.content)
+        assert prompt, "摘要 prompt 不应为空"
+        self.prompts.append(prompt)
+        assert self.responses, "摘要模型调用次数超过预设数量"
+        return AIMessage(content=self.responses.pop(0))
+
+
 def _group_human(index: int, body: str, with_image: bool = False) -> HumanMessage:
     """
     构造群聊用户消息。
@@ -249,8 +303,97 @@ def test_context_compression_config_uses_conservative_defaults(
     assert config.keep_recent_text_tokens == 20000
     assert config.min_keep_recent_messages == 10
     assert config.max_summary_text_tokens == 3500
+    assert config.soft_summary_text_tokens == 3150
     assert config.min_compressible_text_tokens == 8000
     assert config.print_summary is False
+
+
+def test_context_compressor_force_compresses_oversized_summary() -> None:
+    """
+    验证摘要超过硬上限时会调用强制压缩，而不是直接报错。
+
+    Returns:
+        None: 测试用例不主动抛出异常。
+
+    Raises:
+        None: 预期行为由断言验证。
+    """
+    summary_model = SequenceSummaryModel(["long " * 100, "强制压缩后的摘要"])
+    compressor = ContextCompressor(
+        ContextCompressionConfig(max_summary_text_tokens=20),
+        summary_model,
+    )
+
+    summary = compressor.summarize("无", [HumanMessage(content="旧消息")])
+
+    assert summary == "强制压缩后的摘要"
+    assert len(summary_model.prompts) == 2
+    assert "必须执行强制压缩" in summary_model.prompts[1]
+    assert compressor.count_text_tokens(summary) <= 20
+
+
+def test_context_compressor_hard_truncates_when_force_compression_stays_oversized(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """
+    验证模型持续超限时仍能按统一编码器完成硬压缩。
+
+    Args:
+        capsys (pytest.CaptureFixture[str]): 控制台输出捕获工具。
+
+    Returns:
+        None: 测试用例不主动抛出异常。
+
+    Raises:
+        None: 预期行为由断言验证。
+    """
+    summary_model = SequenceSummaryModel(["long " * 100] * 3)
+    compressor = ContextCompressor(
+        ContextCompressionConfig(max_summary_text_tokens=20),
+        summary_model,
+    )
+
+    summary = compressor.summarize("无", [HumanMessage(content="旧消息")])
+
+    assert summary
+    assert compressor.count_text_tokens(summary) <= 20
+    assert len(summary_model.prompts) == 3
+    assert "已按统一编码器强制截断" in capsys.readouterr().out
+
+
+def test_agent_summary_model_uses_configured_soft_token_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    验证 Agent 构建摘要模型时将 90% 软上限传给模型。
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): 环境变量修改工具。
+
+    Returns:
+        None: 测试用例不主动抛出异常。
+
+    Raises:
+        None: 预期行为由断言验证。
+    """
+    monkeypatch.setenv("CONTEXT_SUMMARY_MODEL", "google_genai:test-model")
+    agent = object.__new__(SQLCheckpointAgentStreamingPlus)
+    agent._config = AgentConfig(model_name="fake:echo")
+    fake_model = object()
+
+    with mock.patch(
+        "sql_agent_cli_stream_plus._ensure_model_env_once"
+    ) as ensure_env, mock.patch(
+        "sql_agent_cli_stream_plus.init_chat_model", return_value=fake_model
+    ) as init_model:
+        result = agent._build_context_summary_model(max_output_tokens=3150)
+
+    assert result is fake_model
+    ensure_env.assert_called_once_with("google_genai:test-model")
+    init_model.assert_called_once_with(
+        "google_genai:test-model",
+        max_tokens=3150,
+    )
 
 
 def test_context_compressor_keeps_group_chat_context_and_tool_summary(

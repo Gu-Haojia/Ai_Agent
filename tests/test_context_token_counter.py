@@ -173,6 +173,24 @@ def test_context_token_counter_sanitizes_base64_text() -> None:
     assert estimate.message_text_tokens < 100
 
 
+def test_context_token_counter_truncates_text_with_same_encoder() -> None:
+    """
+    验证文本截断和 token 统计使用同一个编码器。
+
+    Returns:
+        None: 测试用例不主动抛出异常。
+
+    Raises:
+        None: 预期行为由断言验证。
+    """
+    counter = ContextTokenCounter(text_sanitizer=_identity_text)
+
+    truncated = counter.truncate_text_tokens("long " * 100, 20)
+
+    assert counter.count_text_tokens(truncated) <= 20
+    assert truncated
+
+
 def test_context_token_counter_ignores_display_format_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

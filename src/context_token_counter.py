@@ -183,6 +183,33 @@ class ContextTokenCounter:
         except Exception as exc:  # pragma: no cover
             raise AssertionError("上下文 token 编码失败。") from exc
 
+    def truncate_text_tokens(self, text: str, max_tokens: int) -> str:
+        """
+        使用当前 token 编码器将文本截断到指定上限。
+
+        Args:
+            text (str): 需要截断的文本。
+            max_tokens (int): 允许保留的最大 token 数。
+
+        Returns:
+            str: 截断后的文本；原文本未超限时返回清洗后的原文本。
+
+        Raises:
+            AssertionError: 当文本类型或 token 上限非法，或编码失败时抛出。
+        """
+        assert isinstance(text, str), "text 必须是字符串"
+        assert isinstance(max_tokens, int) and max_tokens > 0, (
+            "max_tokens 必须为正整数"
+        )
+        sanitized = self._sanitize_text(text)
+        try:
+            token_ids = self._encoder.encode(sanitized)
+            if len(token_ids) <= max_tokens:
+                return sanitized
+            return self._encoder.decode(token_ids[:max_tokens]).rstrip()
+        except Exception as exc:  # pragma: no cover
+            raise AssertionError("上下文 token 截断失败。") from exc
+
     def count_state(
         self, summary: str, messages: Sequence[Any]
     ) -> ContextTokenEstimate:

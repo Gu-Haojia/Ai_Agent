@@ -613,6 +613,19 @@ class ContextCompressionConfig:
             self.keep_recent_text_tokens < self.trigger_text_tokens
         ), "保留阈值必须小于触发阈值"
 
+    @property
+    def soft_summary_text_tokens(self) -> int:
+        """
+        计算传给摘要模型的软 token 上限。
+
+        Returns:
+            int: 硬上限的 90%，至少为 1。
+
+        Raises:
+            None: 配置已在 ``__post_init__`` 中完成校验。
+        """
+        return max(1, self.max_summary_text_tokens * 9 // 10)
+
     @classmethod
     def from_env(cls) -> "ContextCompressionConfig":
         """
@@ -956,7 +969,7 @@ class ContextCompressor:
             str: 新的群聊上下文摘要。
 
         Raises:
-            AssertionError: 当输入非法、模型无输出或摘要超出上限时抛出。
+            AssertionError: 当输入非法或模型无输出时抛出。
         """
         assert isinstance(previous_summary, str), "previous_summary 必须是字符串"
         assert isinstance(messages, Sequence) and messages, "messages 不能为空"
@@ -965,10 +978,76 @@ class ContextCompressor:
         summary = self.extract_response_text(response)
         assert summary.strip(), "上下文摘要模型返回为空"
         token_count = self.count_text_tokens(summary)
-        assert (
-            token_count <= self._config.max_summary_text_tokens
-        ), "上下文摘要超过 token 上限"
-        return summary.strip()
+        if token_count <= self._config.max_summary_text_tokens:
+            return summary.strip()
+        return self.force_compress_summary(summary)
+
+    def force_compress_summary(self, summary: str) -> str:
+        """
+        强制将超限摘要压缩到硬 token 上限以内。
+
+        Args:
+            summary (str): 首次生成且超过硬上限的摘要。
+
+        Returns:
+            str: 不超过硬上限的摘要文本。
+
+        Raises:
+            AssertionError: 当输入为空、强制压缩没有返回文本或截断失败时抛出。
+        """
+        assert isinstance(summary, str) and summary.strip(), "summary 不能为空"
+        compressed_summary = summary.strip()
+        hard_limit = self._config.max_summary_text_tokens
+        for attempt in range(2):
+            prompt = self.build_forced_summary_prompt(compressed_summary)
+            response = self._summary_model.invoke([HumanMessage(content=prompt)])
+            candidate = self.extract_response_text(response).strip()
+            assert candidate, "强制压缩模型返回为空"
+            compressed_summary = candidate
+            token_count = self.count_text_tokens(compressed_summary)
+            if token_count <= hard_limit:
+                print(
+                    "[ContextCompression] 摘要超过软上限，已完成强制压缩: "
+                    f"attempt={attempt + 1}, summary_tokens={token_count}",
+                    flush=True,
+                )
+                return compressed_summary
+
+        truncated_summary = self._token_counter.truncate_text_tokens(
+            compressed_summary, hard_limit
+        )
+        assert truncated_summary.strip(), "强制压缩后的摘要不能为空"
+        final_token_count = self.count_text_tokens(truncated_summary)
+        assert final_token_count <= hard_limit, "强制压缩未达到摘要 token 上限"
+        print(
+            "[ContextCompression] 摘要超过硬上限，已按统一编码器强制截断: "
+            f"summary_tokens={final_token_count}",
+            flush=True,
+        )
+        return truncated_summary
+
+    def build_forced_summary_prompt(self, summary: str) -> str:
+        """
+        构造超限摘要的强制压缩 prompt。
+
+        Args:
+            summary (str): 需要继续压缩的摘要文本。
+
+        Returns:
+            str: 强制压缩使用的 prompt。
+
+        Raises:
+            AssertionError: 当摘要不是非空字符串时抛出。
+        """
+        assert isinstance(summary, str) and summary.strip(), "summary 不能为空"
+        hard_limit = self._config.max_summary_text_tokens
+        return (
+            "必须执行强制压缩，只输出压缩后的摘要正文，不要解释压缩过程。\n"
+            f"硬性要求：输出不得超过 {hard_limit} 个 token。\n"
+            "优先保留明确事实、时间顺序、发言者归属、明确偏好、工具结论、"
+            "最近需要延续或避免重复的事项；删除重复描述、普通闲聊和栏目套话。\n"
+            f"待压缩摘要：\n{summary}"
+        )
 
     def build_summary_prompt(
         self, previous_summary: str, messages: Sequence[Any]
@@ -1020,7 +1099,8 @@ class ContextCompressor:
             "图片和视频只保留数量、文件名、当时结论或上下文，不要保留 base64。\n"
             "Agent自己角色的设定已经在其它地方说明了，"
             "不要在摘要中提到或猜测Agent扮演的角色。\n"
-            f"输出摘要不超过 {self._config.max_summary_text_tokens} 个 token。\n"
+            f"输出摘要目标不超过 {self._config.soft_summary_text_tokens} 个 token，"
+            f"硬上限为 {self._config.max_summary_text_tokens} 个 token。\n"
             "请使用以下固定结构：\n"
             "被压缩上下文的话题：\n"
             "被压缩上下文的主要经过：\n"
@@ -1835,26 +1915,33 @@ class SQLCheckpointAgentStreamingPlus:
             AssertionError: 当环境变量或摘要模型配置非法时抛出。
         """
         config = ContextCompressionConfig.from_env()
-        summary_model = self._build_context_summary_model()
+        summary_model = self._build_context_summary_model(
+            max_output_tokens=config.soft_summary_text_tokens
+        )
         return ContextCompressor(
             config=config,
             summary_model=summary_model,
             token_counter=self._context_token_counter,
         )
 
-    def _build_context_summary_model(self) -> Any:
+    def _build_context_summary_model(self, max_output_tokens: int | None = None) -> Any:
         """
         构建上下文摘要模型。
 
         ``CONTEXT_SUMMARY_MODEL`` 有值时使用该模型；否则沿用当前 Agent 模型。
-        本方法不做模型回退，配置错误会显式抛出断言或初始化异常。
+        摘要模型使用独立的输出 token 软上限。
+
+        Args:
+            max_output_tokens (int | None): 模型输出 token 软上限；为空时不设置。
 
         Returns:
             Any: 具备 ``invoke`` 方法的摘要模型。
 
         Raises:
-            AssertionError: 当模型名为空或缺少必要环境变量时抛出。
+            AssertionError: 当模型名或输出 token 上限非法时抛出。
         """
+        if max_output_tokens is not None:
+            assert max_output_tokens > 0, "摘要模型输出 token 上限必须为正整数"
         model_name = os.environ.get(CONTEXT_SUMMARY_MODEL_ENV, "").strip()
         if not model_name:
             model_name = self._config.model_name
@@ -1862,7 +1949,10 @@ class SQLCheckpointAgentStreamingPlus:
         if model_name in {"fake:echo", "fake:summary"}:
             return _FakeContextSummaryModel()
         _ensure_model_env_once(model_name)
-        return init_chat_model(model_name)
+        model_kwargs: dict[str, int] = {}
+        if max_output_tokens is not None:
+            model_kwargs["max_tokens"] = max_output_tokens
+        return init_chat_model(model_name, **model_kwargs)
 
     def _build_graph(self):
         model_name = self._config.model_name
