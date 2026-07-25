@@ -8,7 +8,7 @@ from unittest import mock
 
 import requests
 
-from src.exchange_rate_chart_demo import TwelveDataIntradayClient
+from src.exchange_rate_chart import TwelveDataIntradayClient
 from src.exchange_rate_trend_tool import ExchangeRateTrendService
 
 
@@ -84,7 +84,7 @@ def test_generate_returns_image_tool_compatible_result(tmp_path: Path) -> None:
         now_provider=lambda: datetime(2026, 7, 25, 22, 47),
     )
     with mock.patch(
-        "src.exchange_rate_chart_demo.requests.get",
+        "src.exchange_rate_chart.requests.get",
         return_value=_response(payload=_trend_payload()),
     ) as get:
         result = service.generate("usd", "jpy", "day")
@@ -120,7 +120,7 @@ def test_generate_rejects_invalid_mode_without_api_request(tmp_path: Path) -> No
         client=TwelveDataIntradayClient(api_key="secret"),
         output_dir=tmp_path,
     )
-    with mock.patch("src.exchange_rate_chart_demo.requests.get") as get:
+    with mock.patch("src.exchange_rate_chart.requests.get") as get:
         result = service.generate("USD", "JPY", "quarter")
 
     assert result["success"] is False
@@ -148,7 +148,7 @@ def test_generate_returns_structured_api_error(tmp_path: Path) -> None:
         now_provider=lambda: datetime(2026, 7, 25, 22, 47),
     )
     with mock.patch(
-        "src.exchange_rate_chart_demo.requests.get",
+        "src.exchange_rate_chart.requests.get",
         return_value=_response(status_code=503),
     ):
         result = service.generate("USD", "JPY", "week")

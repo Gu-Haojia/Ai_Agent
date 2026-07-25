@@ -1,18 +1,15 @@
-"""使用 Twelve Data 滚动汇率数据绘制现代风格 PNG Demo。"""
+"""查询、规范化并绘制滚动汇率趋势图。"""
 
 from __future__ import annotations
 
-import os
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Sequence
-from zoneinfo import ZoneInfo
 
 import requests
-from dotenv import load_dotenv
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 
@@ -53,7 +50,6 @@ class ExchangeRateChartMode:
         bucket (timedelta): 单个时间桶的长度。
         api_interval (str): Twelve Data 查询粒度。
         interval_label (str): 图表展示的粒度文本。
-        output_name (str): Demo 图片文件名。
 
     Returns:
         ExchangeRateChartMode: 不可变的图表模式配置。
@@ -64,7 +60,6 @@ class ExchangeRateChartMode:
     bucket: timedelta
     api_interval: str
     interval_label: str
-    output_name: str
 
     @property
     def bucket_count(self) -> int:
@@ -94,7 +89,6 @@ CHART_MODES = (
         bucket=timedelta(minutes=5),
         api_interval="5min",
         interval_label="5 分钟",
-        output_name="exchange_rate_chart_day.png",
     ),
     ExchangeRateChartMode(
         name="Week",
@@ -102,7 +96,6 @@ CHART_MODES = (
         bucket=timedelta(minutes=30),
         api_interval="30min",
         interval_label="30 分钟",
-        output_name="exchange_rate_chart_week.png",
     ),
     ExchangeRateChartMode(
         name="Month",
@@ -110,7 +103,6 @@ CHART_MODES = (
         bucket=timedelta(hours=2),
         api_interval="2h",
         interval_label="2 小时",
-        output_name="exchange_rate_chart_month.png",
     ),
     ExchangeRateChartMode(
         name="Year",
@@ -118,7 +110,6 @@ CHART_MODES = (
         bucket=timedelta(days=1),
         api_interval="1day",
         interval_label="1 天",
-        output_name="exchange_rate_chart_year.png",
     ),
 )
 
@@ -992,97 +983,3 @@ class ExchangeRateChartRenderer:
         """
 
         return f"{value:.3f}"
-
-
-def latest_completed_weekday(today: date) -> date:
-    """
-    返回今天之前最近的工作日。
-
-    Args:
-        today (date): 当前日期。
-
-    Returns:
-        date: 今天之前最近的周一至周五日期。
-
-    Raises:
-        AssertionError: 当 today 不是 date 时抛出。
-    """
-
-    assert isinstance(today, date), "today 必须是 date。"
-    candidate = today - timedelta(days=1)
-    while candidate.weekday() >= 5:
-        candidate -= timedelta(days=1)
-    return candidate
-
-
-def build_demo() -> list[Path]:
-    """
-    拉取 USD/JPY 行情并生成四种滚动模式的 Demo 图片。
-
-    Returns:
-        list[Path]: Day、Week、Month、Year 模式的 PNG 路径。
-
-    Raises:
-        AssertionError: 当环境变量未配置时抛出。
-        RuntimeError: 当 API 查询或图片生成失败时抛出。
-    """
-
-    load_dotenv(Path.cwd() / ".env")
-    api_key = os.environ.get("TWELVE_API_KEY", "").strip()
-    assert api_key, "缺少 TWELVE_API_KEY 环境变量。"
-
-    timezone_name = "Asia/Tokyo"
-    current_time = datetime.now(ZoneInfo(timezone_name)).replace(tzinfo=None)
-    client = TwelveDataIntradayClient(api_key=api_key)
-    series_builder = RollingRateSeriesBuilder()
-    renderer = ExchangeRateChartRenderer()
-    result_paths: list[Path] = []
-    latest_rate: Decimal | None = None
-
-    for mode in CHART_MODES:
-        end_time = series_builder.floor_time(current_time, mode.bucket)
-        query_start = end_time - mode.window - timedelta(days=7)
-        raw_points = client.fetch_range(
-            base_currency="USD",
-            quote_currency="JPY",
-            start_time=query_start,
-            end_time=end_time,
-            interval=mode.api_interval,
-            timezone_name=timezone_name,
-        )
-        points = series_builder.build(
-            raw_points=raw_points,
-            mode=mode,
-            current_time=current_time,
-        )
-        if latest_rate is None:
-            latest_rate = points[-1].close_rate
-        else:
-            last_point = points[-1]
-            points[-1] = IntradayRatePoint(
-                timestamp=last_point.timestamp,
-                open_rate=last_point.open_rate,
-                high_rate=max(last_point.high_rate, latest_rate),
-                low_rate=min(last_point.low_rate, latest_rate),
-                close_rate=latest_rate,
-            )
-        output_path = Path("docs/assets") / mode.output_name
-        result_path = renderer.render(
-            points=points,
-            pair="USD / JPY",
-            pair_note="美元兑日元",
-            mode=mode,
-            timezone_label="东京时间",
-            output_path=output_path,
-        )
-        result_paths.append(result_path)
-        print(
-            f"Generated {result_path} with {len(points)} "
-            f"{mode.name} points."
-        )
-
-    return result_paths
-
-
-if __name__ == "__main__":
-    build_demo()

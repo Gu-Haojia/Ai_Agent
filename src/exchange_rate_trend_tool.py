@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from src.exchange_rate_chart_demo import (
+from src.exchange_rate_chart import (
     CHART_MODES,
     ExchangeRateChartMode,
     ExchangeRateChartRenderer,
