@@ -829,7 +829,6 @@ class ExchangeRateChartRenderer:
             value_text,
             font=value_font,
             anchor="lt",
-            stroke_width=1,
         )
         top_padding = 12
         text_gap = 12
@@ -865,7 +864,6 @@ class ExchangeRateChartRenderer:
             font=value_font,
             fill=(35, 48, 68, 255),
             anchor="lt",
-            stroke_width=1,
         )
         return y + card_height
 
