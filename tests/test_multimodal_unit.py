@@ -249,6 +249,15 @@ class MultimodalUnitTest(unittest.TestCase):
             self.assertEqual(result.path.suffix, ".png")
             self.assertEqual(result.mime_type, "image/png")
 
+    def test_generated_dir_exposes_existing_output_directory(self) -> None:
+        """确认工具可以复用图像管理器的 generated 目录。"""
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            manager = ImageStorageManager(tmp_dir)
+
+            self.assertTrue(manager.generated_dir.is_dir())
+            self.assertEqual(manager.generated_dir.name, "generated")
+
     def test_infer_mime_prefers_detected_image_type(self) -> None:
         """应通过文件头识别真实图片类型并覆盖错误的备用 MIME。"""
 

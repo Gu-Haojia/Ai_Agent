@@ -51,6 +51,11 @@ from src.visual_crossing_weather import (
     VisualCrossingWeatherRequest,
 )
 from src.exchange_rate_tool import ExchangeRateClient, ExchangeRateToolInput
+from src.exchange_rate_chart_demo import TwelveDataIntradayClient
+from src.exchange_rate_trend_tool import (
+    ExchangeRateTrendService,
+    ExchangeRateTrendToolInput,
+)
 from src.google_hotels_client import (
     GoogleHotelsClient,
     GoogleHotelsConsoleFormatter,
@@ -2080,6 +2085,79 @@ class SQLCheckpointAgentStreamingPlus:
                     return output
 
                 tools.append(exchange_rate_tool)
+
+                twelve_data_key = os.environ.get("TWELVE_API_KEY", "").strip()
+                if twelve_data_key:
+                    trend_client = TwelveDataIntradayClient(
+                        api_key=twelve_data_key
+                    )
+
+                    @tool(
+                        "exchange_rate_trend",
+                        args_schema=ExchangeRateTrendToolInput,
+                    )
+                    def exchange_rate_trend_tool(
+                        base_currency: str,
+                        quote_currency: str,
+                        mode: str = "day",
+                    ) -> str:
+                        """
+                        生成滚动汇率趋势图并按生图工具格式返回图片信息。
+
+                        Args:
+                            base_currency (str): 原始货币三位代码，例如 USD。
+                            quote_currency (str): 目标货币三位代码，例如 JPY。
+                            mode (str): 趋势范围，支持 day、week、month、year。
+
+                        Returns:
+                            str: 成功时返回包含 path、mime_type、text 的 JSON；
+                                失败时返回包含 error 的结构化 JSON。
+
+                        Raises:
+                            None: 可预期错误均转换为结构化结果。
+                        """
+
+                        manager = self._require_image_manager()
+                        trend_service = ExchangeRateTrendService(
+                            client=trend_client,
+                            output_dir=manager.generated_dir,
+                        )
+                        result = trend_service.generate(
+                            base_currency=base_currency,
+                            quote_currency=quote_currency,
+                            mode=mode,
+                        )
+                        if result["success"] is not True:
+                            output = ExchangeRateTrendService.to_json(result)
+                            print(
+                                f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m "
+                                f"[ExchangeRateTrend Tool Output] {output}",
+                                flush=True,
+                            )
+                            return output
+
+                        data = result["data"]
+                        assert isinstance(data, dict), "趋势图成功结果缺少 data。"
+                        image = GeneratedImage(
+                            path=Path(str(data["path"])),
+                            mime_type=str(data["mime_type"]),
+                            prompt=str(data["text"]),
+                        )
+                        self._generated_images.append(image)
+                        payload = {
+                            "path": str(image.path),
+                            "mime_type": image.mime_type,
+                            "text": image.prompt,
+                        }
+                        output = json.dumps(payload, ensure_ascii=False)
+                        print(
+                            f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m "
+                            f"[ExchangeRateTrend Tool Output] {output}",
+                            flush=True,
+                        )
+                        return output
+
+                    tools.append(exchange_rate_trend_tool)
 
                 serpapi_key = os.environ.get("SERPAPI_API_KEY", "").strip()
                 if serpapi_key:
