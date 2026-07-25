@@ -596,7 +596,7 @@ class ExchangeRateChartRenderer:
 
         image = self._create_background()
         draw = ImageDraw.Draw(image)
-        self._draw_header(
+        header_bottom = self._draw_header(
             draw=draw,
             points=ordered_points,
             pair=pair,
@@ -604,7 +604,13 @@ class ExchangeRateChartRenderer:
             mode=mode,
             timezone_label=timezone_label,
         )
-        self._draw_chart(image=image, draw=draw, points=ordered_points)
+        chart_top = max(300, header_bottom + 36)
+        self._draw_chart(
+            image=image,
+            draw=draw,
+            points=ordered_points,
+            top=chart_top,
+        )
         self._draw_footer(draw=draw)
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -652,7 +658,7 @@ class ExchangeRateChartRenderer:
         pair_note: str,
         mode: ExchangeRateChartMode,
         timezone_label: str,
-    ) -> None:
+    ) -> int:
         """
         绘制标题、当前汇率和统计卡片。
 
@@ -665,19 +671,30 @@ class ExchangeRateChartRenderer:
             timezone_label (str): 时区展示文本。
 
         Returns:
-            None
+            int: 标题区域实际占用的底部纵坐标。
         """
 
         title_font = self._font(56)
         subtitle_font = self._font(25)
         rate_font = self._font(66)
         change_font = self._font(28)
+        content_left = 82
+        content_right = self._width - 82
+        title_top = 52
 
         draw.text(
-            (82, 62),
+            (content_left, title_top),
             pair,
             font=title_font,
             fill=(27, 38, 57, 255),
+            anchor="lt",
+            stroke_width=1,
+        )
+        title_box = draw.textbbox(
+            (content_left, title_top),
+            pair,
+            font=title_font,
+            anchor="lt",
             stroke_width=1,
         )
         range_text = self._range_text(points)
@@ -685,11 +702,19 @@ class ExchangeRateChartRenderer:
             f"{pair_note}  ·  {mode.name}  ·  {mode.interval_label}  ·  "
             f"{range_text}  ·  {timezone_label}"
         )
+        subtitle_top = title_box[3] + 8
         draw.text(
-            (84, 123),
+            (content_left + 2, subtitle_top),
             subtitle,
             font=subtitle_font,
             fill=(101, 116, 139, 255),
+            anchor="lt",
+        )
+        subtitle_box = draw.textbbox(
+            (content_left + 2, subtitle_top),
+            subtitle,
+            font=subtitle_font,
+            anchor="lt",
         )
 
         latest = points[-1].close_rate
@@ -700,20 +725,37 @@ class ExchangeRateChartRenderer:
         trend_rgb = self._UP_COLOR if positive else self._DOWN_COLOR
         change_color = (*trend_rgb, 255)
         sign = "+" if positive else ""
+        rate_top = 45
+        rate_text = self._rate_text(latest)
         draw.text(
-            (1518, 55),
-            self._rate_text(latest),
+            (content_right, rate_top),
+            rate_text,
             font=rate_font,
             fill=(24, 35, 52, 255),
-            anchor="ra",
+            anchor="rt",
             stroke_width=1,
         )
+        rate_box = draw.textbbox(
+            (content_right, rate_top),
+            rate_text,
+            font=rate_font,
+            anchor="rt",
+            stroke_width=1,
+        )
+        change_text = f"{sign}{change:.3f}  {sign}{change_percent:.2f}%"
+        change_top = rate_box[3] + 5
         draw.text(
-            (1518, 124),
-            f"{sign}{change:.3f}  {sign}{change_percent:.2f}%",
+            (content_right, change_top),
+            change_text,
             font=change_font,
             fill=change_color,
-            anchor="ra",
+            anchor="rt",
+        )
+        change_box = draw.textbbox(
+            (content_right, change_top),
+            change_text,
+            font=change_font,
+            anchor="rt",
         )
 
         high = max(point.high_rate for point in points)
@@ -723,19 +765,34 @@ class ExchangeRateChartRenderer:
             ("区间最高", high),
             ("区间最低", low),
         )
-        card_x = 915
+        card_width = 184
+        card_gap = 21
+        card_x = content_right - len(stats) * card_width - (
+            len(stats) - 1
+        ) * card_gap
+        card_top = max(subtitle_box[3], change_box[3]) + 22
+        card_bottom = card_top
         for label, value in stats:
-            self._draw_stat_card(draw, card_x, 170, label, value)
-            card_x += 205
+            card_bottom = self._draw_stat_card(
+                draw=draw,
+                x=card_x,
+                y=card_top,
+                width=card_width,
+                label=label,
+                value=value,
+            )
+            card_x += card_width + card_gap
+        return card_bottom
 
     def _draw_stat_card(
         self,
         draw: ImageDraw.ImageDraw,
         x: int,
         y: int,
+        width: int,
         label: str,
         value: Decimal,
-    ) -> None:
+    ) -> int:
         """
         绘制单个汇率统计卡片。
 
@@ -743,39 +800,78 @@ class ExchangeRateChartRenderer:
             draw (ImageDraw.ImageDraw): Pillow 绘图对象。
             x (int): 卡片左上角横坐标。
             y (int): 卡片左上角纵坐标。
+            width (int): 卡片宽度。
             label (str): 统计字段标题。
             value (Decimal): 汇率值。
 
         Returns:
-            None
+            int: 卡片底部纵坐标。
+
+        Raises:
+            AssertionError: 当卡片宽度不足时抛出。
         """
 
+        assert width >= 160, "统计卡片宽度至少为 160。"
+        label_font = self._font(17)
+        value_font = self._font(28)
+        value_text = self._rate_text(value)
+        label_box = draw.textbbox(
+            (0, 0),
+            label,
+            font=label_font,
+            anchor="lt",
+        )
+        value_box = draw.textbbox(
+            (0, 0),
+            value_text,
+            font=value_font,
+            anchor="lt",
+            stroke_width=1,
+        )
+        top_padding = 12
+        text_gap = 5
+        bottom_padding = 11
+        label_height = label_box[3] - label_box[1]
+        value_height = value_box[3] - value_box[1]
+        card_height = (
+            top_padding
+            + label_height
+            + text_gap
+            + value_height
+            + bottom_padding
+        )
+        label_top = y + top_padding
+        value_top = label_top + label_height + text_gap
         draw.rounded_rectangle(
-            (x, y, x + 184, y + 74),
+            (x, y, x + width, y + card_height),
             radius=16,
             fill=(255, 255, 255, 255),
             outline=(220, 227, 237, 255),
             width=1,
         )
         draw.text(
-            (x + 16, y + 14),
+            (x + 16, label_top),
             label,
-            font=self._font(17),
+            font=label_font,
             fill=(111, 126, 149, 255),
+            anchor="lt",
         )
         draw.text(
-            (x + 16, y + 39),
-            self._rate_text(value),
-            font=self._font(28),
+            (x + 16, value_top),
+            value_text,
+            font=value_font,
             fill=(35, 48, 68, 255),
+            anchor="lt",
             stroke_width=1,
         )
+        return y + card_height
 
     def _draw_chart(
         self,
         image: Image.Image,
         draw: ImageDraw.ImageDraw,
         points: Sequence[IntradayRatePoint],
+        top: int,
     ) -> None:
         """
         绘制坐标网格、面积和汇率折线。
@@ -784,12 +880,17 @@ class ExchangeRateChartRenderer:
             image (Image.Image): RGBA 图片画布。
             draw (ImageDraw.ImageDraw): Pillow 绘图对象。
             points (Sequence[IntradayRatePoint]): 汇率数据点。
+            top (int): 图表区域顶部纵坐标。
 
         Returns:
             None
+
+        Raises:
+            AssertionError: 当标题区域侵占图表空间时抛出。
         """
 
-        left, top, right, bottom = 120, 300, 1515, 770
+        left, right, bottom = 120, self._width - 85, 770
+        assert top < bottom - 240, "标题区域过高，无法保留足够的图表空间。"
         low = min(point.low_rate for point in points)
         high = max(point.high_rate for point in points)
         spread = high - low
@@ -972,19 +1073,24 @@ class ExchangeRateChartRenderer:
         """
 
         assert size > 0, "字体大小必须为正数。"
-        font_path = ExchangeRateChartRenderer._font_path()
-        return ImageFont.truetype(str(font_path), size=size)
+        font_path, font_index = ExchangeRateChartRenderer._font_spec()
+        return ImageFont.truetype(
+            str(font_path),
+            size=size,
+            index=font_index,
+        )
 
     @staticmethod
     @lru_cache(maxsize=1)
-    def _font_path() -> Path:
+    def _font_spec() -> tuple[Path, int]:
         """
-        使用与 Chromium 相同的字体族解析容器中文字体。
+        解析中文字体文件及 TTC 字体族中的 SC 字面索引。
 
         Returns:
-            Path: 可供 Pillow 加载的中文字体文件路径。
+            tuple[Path, int]: 可供 Pillow 加载的字体路径和字面索引。
 
         Raises:
+            ValueError: 当显式配置的字体索引不是非负整数时抛出。
             FileNotFoundError: 当显式配置或系统中没有可用中文字体时抛出。
         """
 
@@ -998,7 +1104,15 @@ class ExchangeRateChartRenderer:
                 raise FileNotFoundError(
                     f"配置的中文字体不存在：{font_path}"
                 )
-            return font_path
+            configured_index = os.environ.get(
+                "EXCHANGE_RATE_CHART_FONT_INDEX",
+                "0",
+            ).strip()
+            if not configured_index.isdigit():
+                raise ValueError(
+                    "EXCHANGE_RATE_CHART_FONT_INDEX 必须是非负整数。"
+                )
+            return font_path, int(configured_index)
 
         fontconfig_command = shutil.which("fc-match")
         if fontconfig_command:
@@ -1006,22 +1120,26 @@ class ExchangeRateChartRenderer:
                 [
                     fontconfig_command,
                     "-f",
-                    "%{family}\t%{file}",
+                    "%{family}\t%{file}\t%{index}",
                     "Noto Sans CJK SC",
                 ],
                 check=False,
                 capture_output=True,
                 text=True,
             )
-            family, separator, filename = result.stdout.partition("\t")
-            font_path = Path(filename.strip()) if separator else None
+            matched_fields = result.stdout.strip().split("\t")
+            family = matched_fields[0] if len(matched_fields) == 3 else ""
+            filename = matched_fields[1] if len(matched_fields) == 3 else ""
+            index_text = matched_fields[2] if len(matched_fields) == 3 else ""
+            font_path = Path(filename) if filename else None
             if (
                 result.returncode == 0
                 and "Noto Sans CJK" in family
                 and font_path is not None
                 and font_path.is_file()
+                and index_text.isdigit()
             ):
-                return font_path
+                return font_path, int(index_text)
 
         native_font_candidates = (
             Path("/System/Library/Fonts/Hiragino Sans GB.ttc"),
@@ -1029,7 +1147,7 @@ class ExchangeRateChartRenderer:
         )
         for font_path in native_font_candidates:
             if font_path.is_file():
-                return font_path
+                return font_path, 0
         raise FileNotFoundError(
             "未找到中文字体，请设置 EXCHANGE_RATE_CHART_FONT。"
         )
