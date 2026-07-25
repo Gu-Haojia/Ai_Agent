@@ -315,7 +315,7 @@ class ExchangeRateChartRenderer:
 
     def _create_background(self) -> Image.Image:
         """
-        创建带纵向渐变的深色背景。
+        创建带轻微层次的白色背景。
 
         Returns:
             Image.Image: RGBA 图片画布。
@@ -323,8 +323,8 @@ class ExchangeRateChartRenderer:
 
         image = Image.new("RGBA", (self._width, self._height))
         draw = ImageDraw.Draw(image)
-        top = (8, 14, 28)
-        bottom = (17, 26, 47)
+        top = (255, 255, 255)
+        bottom = (246, 249, 253)
         for y in range(self._height):
             ratio = y / max(self._height - 1, 1)
             color = tuple(
@@ -337,7 +337,11 @@ class ExchangeRateChartRenderer:
         accent_draw = ImageDraw.Draw(accent)
         accent_draw.ellipse(
             (self._width - 460, -280, self._width + 220, 400),
-            fill=(27, 185, 255, 55),
+            fill=(255, 105, 105, 20),
+        )
+        accent_draw.ellipse(
+            (-260, 520, 330, 1110),
+            fill=(39, 190, 120, 16),
         )
         accent = accent.filter(ImageFilter.GaussianBlur(110))
         return Image.alpha_composite(image, accent)
@@ -368,39 +372,23 @@ class ExchangeRateChartRenderer:
         subtitle_font = self._font(21)
         rate_font = self._font(58)
         change_font = self._font(23)
-        badge_font = self._font(16)
 
         draw.text(
             (82, 62),
             pair,
             font=title_font,
-            fill=(245, 249, 255, 255),
+            fill=(27, 38, 57, 255),
             stroke_width=1,
         )
         subtitle = (
-            f"Intraday exchange rate  ·  {interval}  ·  "
+            f"日内汇率  ·  {interval}  ·  "
             f"{points[0].timestamp:%Y-%m-%d}  ·  {timezone_label}"
         )
         draw.text(
             (84, 123),
             subtitle,
             font=subtitle_font,
-            fill=(139, 156, 186, 255),
-        )
-
-        draw.rounded_rectangle(
-            (82, 171, 173, 207),
-            radius=18,
-            fill=(18, 91, 126, 255),
-            outline=(67, 202, 255, 210),
-            width=1,
-        )
-        draw.text(
-            (127, 189),
-            "REAL DATA",
-            font=badge_font,
-            fill=(92, 215, 255, 255),
-            anchor="mm",
+            fill=(101, 116, 139, 255),
         )
 
         latest = points[-1].close_rate
@@ -409,14 +397,14 @@ class ExchangeRateChartRenderer:
         change_percent = change / opening * Decimal("100")
         positive = change >= 0
         change_color = (
-            (51, 214, 159, 255) if positive else (255, 107, 122, 255)
+            (224, 58, 64, 255) if positive else (24, 157, 96, 255)
         )
         sign = "+" if positive else ""
         draw.text(
             (1518, 55),
             self._rate_text(latest),
             font=rate_font,
-            fill=(247, 250, 255, 255),
+            fill=(24, 35, 52, 255),
             anchor="ra",
             stroke_width=1,
         )
@@ -431,9 +419,9 @@ class ExchangeRateChartRenderer:
         high = max(point.high_rate for point in points)
         low = min(point.low_rate for point in points)
         stats = (
-            ("OPEN", opening),
-            ("DAY HIGH", high),
-            ("DAY LOW", low),
+            ("开盘", opening),
+            ("日内最高", high),
+            ("日内最低", low),
         )
         card_x = 915
         for label, value in stats:
@@ -465,21 +453,21 @@ class ExchangeRateChartRenderer:
         draw.rounded_rectangle(
             (x, y, x + 184, y + 74),
             radius=16,
-            fill=(21, 34, 57, 255),
-            outline=(76, 100, 136, 180),
+            fill=(255, 255, 255, 255),
+            outline=(220, 227, 237, 255),
             width=1,
         )
         draw.text(
             (x + 16, y + 14),
             label,
             font=self._font(14),
-            fill=(124, 143, 176, 255),
+            fill=(111, 126, 149, 255),
         )
         draw.text(
             (x + 16, y + 39),
             self._rate_text(value),
             font=self._font(24),
-            fill=(229, 238, 251, 255),
+            fill=(35, 48, 68, 255),
             stroke_width=1,
         )
 
@@ -520,7 +508,7 @@ class ExchangeRateChartRenderer:
             y = round(top + (bottom - top) * ratio)
             draw.line(
                 (left, y, right, y),
-                fill=(139, 161, 197, 28),
+                fill=(218, 225, 235, 255),
                 width=1,
             )
             rate = y_max - (y_max - y_min) * Decimal(str(ratio))
@@ -528,7 +516,7 @@ class ExchangeRateChartRenderer:
                 (left - 14, y),
                 self._rate_text(rate),
                 font=label_font,
-                fill=(112, 132, 165, 255),
+                fill=(112, 126, 148, 255),
                 anchor="rm",
             )
 
@@ -537,7 +525,7 @@ class ExchangeRateChartRenderer:
             x = round(left + (right - left) * ratio)
             draw.line(
                 (x, top, x, bottom),
-                fill=(139, 161, 197, 20),
+                fill=(231, 236, 243, 255),
                 width=1,
             )
             tick_time = start_time + (end_time - start_time) * ratio
@@ -557,7 +545,7 @@ class ExchangeRateChartRenderer:
                 (x, bottom + 20),
                 tick_label,
                 font=label_font,
-                fill=(112, 132, 165, 255),
+                fill=(112, 126, 148, 255),
                 anchor="ma",
             )
 
@@ -579,10 +567,10 @@ class ExchangeRateChartRenderer:
         gradient_draw = ImageDraw.Draw(area_gradient)
         for y in range(top, bottom + 1):
             ratio = (y - top) / max(bottom - top, 1)
-            alpha = round(92 * (1 - ratio))
+            alpha = round(32 * (1 - ratio))
             gradient_draw.line(
                 (left, y, right, y),
-                fill=(38, 196, 255, alpha),
+                fill=(116, 135, 165, alpha),
             )
         image.alpha_composite(
             Image.composite(
@@ -594,27 +582,41 @@ class ExchangeRateChartRenderer:
 
         glow = Image.new("RGBA", image.size, (0, 0, 0, 0))
         glow_draw = ImageDraw.Draw(glow)
-        glow_draw.line(
-            line_points,
-            fill=(28, 194, 255, 165),
-            width=14,
-            joint="curve",
-        )
-        glow = glow.filter(ImageFilter.GaussianBlur(12))
+        for index in range(1, len(line_points)):
+            rising = points[index].close_rate >= points[index - 1].close_rate
+            color = (
+                (224, 58, 64, 95) if rising else (24, 157, 96, 95)
+            )
+            glow_draw.line(
+                (line_points[index - 1], line_points[index]),
+                fill=color,
+                width=10,
+            )
+        glow = glow.filter(ImageFilter.GaussianBlur(8))
         image.alpha_composite(glow)
 
         draw = ImageDraw.Draw(image)
-        draw.line(
-            line_points,
-            fill=(81, 214, 255, 255),
-            width=4,
-            joint="curve",
-        )
+        for index in range(1, len(line_points)):
+            rising = points[index].close_rate >= points[index - 1].close_rate
+            color = (
+                (224, 58, 64, 255) if rising else (24, 157, 96, 255)
+            )
+            draw.line(
+                (line_points[index - 1], line_points[index]),
+                fill=color,
+                width=4,
+            )
         latest_x, latest_y = line_points[-1]
+        latest_rising = points[-1].close_rate >= points[-2].close_rate
+        latest_color = (
+            (224, 58, 64, 255)
+            if latest_rising
+            else (24, 157, 96, 255)
+        )
         draw.ellipse(
             (latest_x - 11, latest_y - 11, latest_x + 11, latest_y + 11),
-            fill=(11, 24, 44, 255),
-            outline=(90, 220, 255, 255),
+            fill=(255, 255, 255, 255),
+            outline=latest_color,
             width=4,
         )
 
@@ -637,35 +639,37 @@ class ExchangeRateChartRenderer:
         footer_font = self._font(15)
         draw.text(
             (90, 850),
-            "Source: Twelve Data  ·  OHLC close values",
+            "数据来源：Twelve Data  ·  使用 OHLC 收盘价",
             font=footer_font,
-            fill=(98, 119, 152, 255),
+            fill=(120, 133, 153, 255),
         )
         draw.text(
             (1515, 850),
-            f"{len(points)} data points  ·  Deterministic render",
+            f"{len(points)} 个数据点  ·  确定性绘制",
             font=footer_font,
-            fill=(98, 119, 152, 255),
+            fill=(120, 133, 153, 255),
             anchor="ra",
         )
 
     @staticmethod
     def _font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
         """
-        创建 Pillow 内置字体。
+        创建支持中文的系统字体。
 
         Args:
             size (int): 字体像素大小。
 
         Returns:
-            ImageFont.FreeTypeFont | ImageFont.ImageFont: 可用于绘图的字体。
+            ImageFont.FreeTypeFont | ImageFont.ImageFont: 中文字体对象。
 
         Raises:
-            AssertionError: 当字号不是正数时抛出。
+            AssertionError: 当字号不是正数或字体文件不存在时抛出。
         """
 
         assert size > 0, "字体大小必须为正数。"
-        return ImageFont.load_default(size=size)
+        font_path = Path("/System/Library/Fonts/Hiragino Sans GB.ttc")
+        assert font_path.exists(), f"中文字体不存在：{font_path}"
+        return ImageFont.truetype(str(font_path), size=size)
 
     @staticmethod
     def _rate_text(value: Decimal) -> str:
@@ -735,9 +739,9 @@ def build_demo() -> Path:
     output_path = Path("docs/assets/exchange_rate_chart_demo.png")
     result_path = renderer.render(
         points=points,
-        pair="USD / JPY",
-        interval="5 min",
-        timezone_label="Tokyo time",
+        pair="美元 / 日元",
+        interval="5 分钟",
+        timezone_label="东京时间",
         output_path=output_path,
     )
     print(
