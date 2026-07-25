@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import os
 import re
+import shutil
+import subprocess
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -962,13 +966,73 @@ class ExchangeRateChartRenderer:
             ImageFont.FreeTypeFont | ImageFont.ImageFont: 中文字体对象。
 
         Raises:
-            AssertionError: 当字号不是正数或字体文件不存在时抛出。
+            AssertionError: 当字号不是正数时抛出。
+            FileNotFoundError: 当没有可用中文字体时抛出。
+            OSError: 当字体文件无法加载时抛出。
         """
 
         assert size > 0, "字体大小必须为正数。"
-        font_path = Path("/System/Library/Fonts/Hiragino Sans GB.ttc")
-        assert font_path.exists(), f"中文字体不存在：{font_path}"
+        font_path = ExchangeRateChartRenderer._font_path()
         return ImageFont.truetype(str(font_path), size=size)
+
+    @staticmethod
+    @lru_cache(maxsize=1)
+    def _font_path() -> Path:
+        """
+        使用与 Chromium 相同的字体族解析容器中文字体。
+
+        Returns:
+            Path: 可供 Pillow 加载的中文字体文件路径。
+
+        Raises:
+            FileNotFoundError: 当显式配置或系统中没有可用中文字体时抛出。
+        """
+
+        configured_path = os.environ.get(
+            "EXCHANGE_RATE_CHART_FONT",
+            "",
+        ).strip()
+        if configured_path:
+            font_path = Path(configured_path)
+            if not font_path.is_file():
+                raise FileNotFoundError(
+                    f"配置的中文字体不存在：{font_path}"
+                )
+            return font_path
+
+        fontconfig_command = shutil.which("fc-match")
+        if fontconfig_command:
+            result = subprocess.run(
+                [
+                    fontconfig_command,
+                    "-f",
+                    "%{family}\t%{file}",
+                    "Noto Sans CJK SC",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            family, separator, filename = result.stdout.partition("\t")
+            font_path = Path(filename.strip()) if separator else None
+            if (
+                result.returncode == 0
+                and "Noto Sans CJK" in family
+                and font_path is not None
+                and font_path.is_file()
+            ):
+                return font_path
+
+        native_font_candidates = (
+            Path("/System/Library/Fonts/Hiragino Sans GB.ttc"),
+            Path("C:/Windows/Fonts/msyh.ttc"),
+        )
+        for font_path in native_font_candidates:
+            if font_path.is_file():
+                return font_path
+        raise FileNotFoundError(
+            "未找到中文字体，请设置 EXCHANGE_RATE_CHART_FONT。"
+        )
 
     @staticmethod
     def _rate_text(value: Decimal) -> str:
