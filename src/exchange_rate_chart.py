@@ -767,9 +767,7 @@ class ExchangeRateChartRenderer:
         )
         card_width = 184
         card_gap = 21
-        card_x = content_right - len(stats) * card_width - (
-            len(stats) - 1
-        ) * card_gap
+        card_x = content_left
         card_top = max(subtitle_box[3], change_box[3]) + 22
         card_bottom = card_top
         for label, value in stats:
@@ -782,7 +780,7 @@ class ExchangeRateChartRenderer:
                 value=value,
             )
             card_x += card_width + card_gap
-        return card_bottom
+        return max(card_bottom, change_box[3])
 
     def _draw_stat_card(
         self,
