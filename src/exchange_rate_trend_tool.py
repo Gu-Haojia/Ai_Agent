@@ -195,7 +195,7 @@ class ExchangeRateTrendService:
             rendered_path = self._renderer.render(
                 points=points,
                 pair=f"{normalized_base} / {normalized_quote}",
-                pair_note="汇率趋势",
+                pair_note="",
                 mode=chart_mode,
                 timezone_label="东京时间",
                 output_path=output_path,

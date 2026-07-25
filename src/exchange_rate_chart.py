@@ -676,8 +676,9 @@ class ExchangeRateChartRenderer:
 
         title_font = self._font(56)
         subtitle_font = self._font(25)
-        rate_font = self._font(66)
-        change_font = self._font(28)
+        quote_scale = 1.4
+        rate_font = self._font(round(66 * quote_scale))
+        change_font = self._font(round(28 * quote_scale))
         content_left = 82
         content_right = self._width - 82
         title_top = 52
@@ -698,10 +699,14 @@ class ExchangeRateChartRenderer:
             stroke_width=1,
         )
         range_text = self._range_text(points)
-        subtitle = (
-            f"{pair_note}  ·  {mode.name}  ·  {mode.interval_label}  ·  "
-            f"{range_text}  ·  {timezone_label}"
+        subtitle_parts = (
+            pair_note.strip(),
+            mode.name,
+            mode.interval_label,
+            range_text,
+            timezone_label,
         )
+        subtitle = "  ·  ".join(part for part in subtitle_parts if part)
         subtitle_top = title_box[3] + 8
         draw.text(
             (content_left + 2, subtitle_top),
@@ -725,7 +730,7 @@ class ExchangeRateChartRenderer:
         trend_rgb = self._UP_COLOR if positive else self._DOWN_COLOR
         change_color = (*trend_rgb, 255)
         sign = "+" if positive else ""
-        rate_top = 45
+        rate_top = 36
         rate_text = self._rate_text(latest)
         draw.text(
             (content_right, rate_top),
@@ -768,7 +773,7 @@ class ExchangeRateChartRenderer:
         card_width = 184
         card_gap = 21
         card_x = content_left
-        card_top = max(subtitle_box[3], change_box[3]) + 22
+        card_top = subtitle_box[3] + 22
         card_bottom = card_top
         for label, value in stats:
             card_bottom = self._draw_stat_card(
