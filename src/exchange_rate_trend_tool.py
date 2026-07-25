@@ -6,8 +6,9 @@ import json
 import re
 import uuid
 from datetime import datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -16,6 +17,7 @@ from src.exchange_rate_chart import (
     CHART_MODES,
     ExchangeRateChartMode,
     ExchangeRateChartRenderer,
+    IntradayRatePoint,
     RollingRateSeriesBuilder,
     TwelveDataIntradayClient,
 )
@@ -183,8 +185,11 @@ class ExchangeRateTrendService:
             normalized_quote,
             chart_mode,
         )
-        description = (
-            f"{normalized_base}/{normalized_quote} {chart_mode.name} 汇率趋势图"
+        description = self._description(
+            base_currency=normalized_base,
+            quote_currency=normalized_quote,
+            mode=chart_mode,
+            points=points,
         )
         try:
             rendered_path = self._renderer.render(
@@ -281,6 +286,56 @@ class ExchangeRateTrendService:
             f"{uuid.uuid4().hex}.png"
         )
         return self._output_dir / filename
+
+    @staticmethod
+    def _description(
+        base_currency: str,
+        quote_currency: str,
+        mode: ExchangeRateChartMode,
+        points: Sequence[IntradayRatePoint],
+    ) -> str:
+        """
+        生成可随图片发送的关键行情摘要。
+
+        Args:
+            base_currency (str): 已规范化的原始货币代码。
+            quote_currency (str): 已规范化的目标货币代码。
+            mode (ExchangeRateChartMode): 图表模式。
+            points (Sequence[IntradayRatePoint]): 已规范化的汇率序列。
+
+        Returns:
+            str: 包含当前值、涨跌、极值和时间范围的中文描述。
+
+        Raises:
+            AssertionError: 当汇率序列为空时抛出。
+        """
+
+        assert points, "生成图片描述需要汇率数据。"
+        opening = points[0].open_rate
+        latest = points[-1].close_rate
+        change = latest - opening
+        change_percent = change / opening * Decimal("100")
+        if change > 0:
+            trend_text = f"上涨 +{change:.3f}（+{change_percent:.2f}%）"
+        elif change < 0:
+            trend_text = f"下跌 {change:.3f}（{change_percent:.2f}%）"
+        else:
+            trend_text = "持平 0.000（0.00%）"
+
+        high = max(point.high_rate for point in points)
+        low = min(point.low_rate for point in points)
+        if mode.name == "Day":
+            start_text = points[0].timestamp.strftime("%Y-%m-%d %H:%M")
+            end_text = points[-1].timestamp.strftime("%Y-%m-%d %H:%M")
+        else:
+            start_text = points[0].timestamp.strftime("%Y-%m-%d")
+            end_text = points[-1].timestamp.strftime("%Y-%m-%d")
+        return (
+            f"{base_currency}/{quote_currency} {mode.name} 汇率趋势："
+            f"当前 {latest:.3f}，区间{trend_text}；"
+            f"最高 {high:.3f}，最低 {low:.3f}；"
+            f"{start_text} 至 {end_text}（东京时间）。"
+        )
 
     @staticmethod
     def _normalize_currency(value: str, field_name: str) -> str:
