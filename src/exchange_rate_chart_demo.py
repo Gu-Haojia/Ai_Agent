@@ -313,7 +313,7 @@ class ExchangeRateChartRenderer:
             timezone_label=timezone_label,
         )
         self._draw_chart(image=image, draw=draw, points=ordered_points)
-        self._draw_footer(draw=draw, points=ordered_points)
+        self._draw_footer(draw=draw)
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         image.save(output_path, format="PNG", optimize=True)
@@ -376,10 +376,10 @@ class ExchangeRateChartRenderer:
             None
         """
 
-        title_font = self._font(48)
-        subtitle_font = self._font(21)
-        rate_font = self._font(58)
-        change_font = self._font(23)
+        title_font = self._font(56)
+        subtitle_font = self._font(25)
+        rate_font = self._font(66)
+        change_font = self._font(28)
 
         draw.text(
             (82, 62),
@@ -467,13 +467,13 @@ class ExchangeRateChartRenderer:
         draw.text(
             (x + 16, y + 14),
             label,
-            font=self._font(14),
+            font=self._font(17),
             fill=(111, 126, 149, 255),
         )
         draw.text(
             (x + 16, y + 39),
             self._rate_text(value),
-            font=self._font(24),
+            font=self._font(28),
             fill=(35, 48, 68, 255),
             stroke_width=1,
         )
@@ -496,7 +496,7 @@ class ExchangeRateChartRenderer:
             None
         """
 
-        left, top, right, bottom = 90, 300, 1515, 770
+        left, top, right, bottom = 120, 300, 1515, 770
         low = min(point.low_rate for point in points)
         high = max(point.high_rate for point in points)
         spread = high - low
@@ -509,7 +509,7 @@ class ExchangeRateChartRenderer:
         total_seconds = (end_time - start_time).total_seconds()
         assert total_seconds > 0, "绘图数据时间范围必须大于零。"
 
-        label_font = self._font(16)
+        label_font = self._font(19)
         for index in range(6):
             ratio = index / 5
             y = round(top + (bottom - top) * ratio)
@@ -577,7 +577,7 @@ class ExchangeRateChartRenderer:
         gradient_draw = ImageDraw.Draw(area_gradient)
         for y in range(top, bottom + 1):
             ratio = (y - top) / max(bottom - top, 1)
-            alpha = round(58 * (1 - ratio))
+            alpha = round(88 * (1 - ratio) + 8)
             gradient_draw.line(
                 (left, y, right, y),
                 fill=(*trend_rgb, alpha),
@@ -594,11 +594,11 @@ class ExchangeRateChartRenderer:
         glow_draw = ImageDraw.Draw(glow)
         glow_draw.line(
             line_points,
-            fill=(*trend_rgb, 95),
-            width=10,
+            fill=(*trend_rgb, 72),
+            width=7,
             joint="curve",
         )
-        glow = glow.filter(ImageFilter.GaussianBlur(8))
+        glow = glow.filter(ImageFilter.GaussianBlur(4))
         image.alpha_composite(glow)
 
         draw = ImageDraw.Draw(image)
@@ -619,32 +619,23 @@ class ExchangeRateChartRenderer:
     def _draw_footer(
         self,
         draw: ImageDraw.ImageDraw,
-        points: Sequence[IntradayRatePoint],
     ) -> None:
         """
         绘制图表脚注。
 
         Args:
             draw (ImageDraw.ImageDraw): Pillow 绘图对象。
-            points (Sequence[IntradayRatePoint]): 汇率数据点。
 
         Returns:
             None
         """
 
-        footer_font = self._font(15)
+        footer_font = self._font(18)
         draw.text(
             (90, 850),
             "数据来源：Twelve Data  ·  使用 OHLC 收盘价",
             font=footer_font,
             fill=(120, 133, 153, 255),
-        )
-        draw.text(
-            (1515, 850),
-            f"{len(points)} 个数据点  ·  确定性绘制",
-            font=footer_font,
-            fill=(120, 133, 153, 255),
-            anchor="ra",
         )
 
     @staticmethod
