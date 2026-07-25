@@ -162,6 +162,18 @@ class ImageStorageManager:
         self._video_http_headers = dict(self._http_headers)
         self._video_http_headers["Accept"] = "video/mp4,video/*;q=0.9,*/*;q=0.1"
 
+    @property
+    def generated_dir(self) -> Path:
+        """
+        返回已初始化的生成图片目录。
+
+        Returns:
+            Path: ``base_dir/generated`` 的绝对路径。
+        """
+
+        assert self._generated_dir.is_dir(), "生成图片目录不存在"
+        return self._generated_dir
+
     @staticmethod
     def _infer_mime(data: bytes, fallback: Optional[str]) -> str:
         """推断图像 MIME 类型。
