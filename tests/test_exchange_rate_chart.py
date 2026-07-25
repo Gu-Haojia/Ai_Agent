@@ -1,4 +1,4 @@
-"""汇率分时图 Demo 的单元测试。"""
+"""滚动汇率图核心的单元测试。"""
 
 from __future__ import annotations
 
@@ -10,14 +10,13 @@ from unittest import mock
 import requests
 from PIL import Image
 
-from src.exchange_rate_chart_demo import (
+from src.exchange_rate_chart import (
     CHART_MODES,
     ExchangeRateChartMode,
     ExchangeRateChartRenderer,
     IntradayRatePoint,
     RollingRateSeriesBuilder,
     TwelveDataIntradayClient,
-    latest_completed_weekday,
 )
 
 
@@ -99,7 +98,7 @@ def test_client_fetches_and_parses_intraday_points() -> None:
         }
     )
     with mock.patch(
-        "src.exchange_rate_chart_demo.requests.get",
+        "src.exchange_rate_chart.requests.get",
         return_value=response,
     ) as get:
         points = TwelveDataIntradayClient(api_key="secret").fetch(
@@ -166,7 +165,7 @@ def test_client_fetches_time_range() -> None:
         }
     )
     with mock.patch(
-        "src.exchange_rate_chart_demo.requests.get",
+        "src.exchange_rate_chart.requests.get",
         return_value=response,
     ) as get:
         TwelveDataIntradayClient(api_key="secret").fetch_range(
@@ -206,7 +205,7 @@ def test_client_parses_daily_date() -> None:
         }
     )
     with mock.patch(
-        "src.exchange_rate_chart_demo.requests.get",
+        "src.exchange_rate_chart.requests.get",
         return_value=response,
     ):
         points = TwelveDataIntradayClient(api_key="secret").fetch_range(
@@ -234,7 +233,6 @@ def test_series_builder_forward_fills_missing_buckets() -> None:
         bucket=timedelta(minutes=5),
         api_interval="5min",
         interval_label="5 分钟",
-        output_name="test.png",
     )
     raw_points = [
         IntradayRatePoint(
@@ -302,14 +300,3 @@ def test_renderer_supports_flat_weekend_series(tmp_path: Path) -> None:
     )
 
     assert output_path.exists()
-
-
-def test_latest_completed_weekday_skips_weekend() -> None:
-    """
-    验证周一会选择上一个周五作为完整交易日。
-
-    Returns:
-        None: 本测试无返回值。
-    """
-
-    assert latest_completed_weekday(date(2026, 7, 27)) == date(2026, 7, 24)

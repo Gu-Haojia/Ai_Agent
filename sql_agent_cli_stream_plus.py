@@ -51,7 +51,7 @@ from src.visual_crossing_weather import (
     VisualCrossingWeatherRequest,
 )
 from src.exchange_rate_tool import ExchangeRateClient, ExchangeRateToolInput
-from src.exchange_rate_chart_demo import TwelveDataIntradayClient
+from src.exchange_rate_chart import TwelveDataIntradayClient
 from src.exchange_rate_trend_tool import (
     ExchangeRateTrendService,
     ExchangeRateTrendToolInput,
