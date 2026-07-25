@@ -816,7 +816,7 @@ class ExchangeRateChartRenderer:
 
         assert width >= 160, "统计卡片宽度至少为 160。"
         label_font = self._font(25)
-        value_font = self._font(28)
+        value_font = self._font(32)
         value_text = self._rate_text(value)
         label_box = draw.textbbox(
             (0, 0),
