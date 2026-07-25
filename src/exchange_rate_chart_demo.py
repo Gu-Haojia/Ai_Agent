@@ -1,4 +1,4 @@
-"""使用 Twelve Data 分时汇率绘制现代风格 PNG Demo。"""
+"""使用 Twelve Data 滚动汇率数据绘制现代风格 PNG Demo。"""
 
 from __future__ import annotations
 
@@ -42,6 +42,87 @@ class IntradayRatePoint:
     close_rate: Decimal
 
 
+@dataclass(frozen=True)
+class ExchangeRateChartMode:
+    """
+    定义滚动汇率图的时间范围和采样粒度。
+
+    Args:
+        name (str): 模式名称。
+        window (timedelta): 向前滚动的时间范围。
+        bucket (timedelta): 单个时间桶的长度。
+        api_interval (str): Twelve Data 查询粒度。
+        interval_label (str): 图表展示的粒度文本。
+        output_name (str): Demo 图片文件名。
+
+    Returns:
+        ExchangeRateChartMode: 不可变的图表模式配置。
+    """
+
+    name: str
+    window: timedelta
+    bucket: timedelta
+    api_interval: str
+    interval_label: str
+    output_name: str
+
+    @property
+    def bucket_count(self) -> int:
+        """
+        计算模式对应的固定时间桶数量。
+
+        Returns:
+            int: 时间桶数量。
+
+        Raises:
+            AssertionError: 当时间范围不能被粒度整除时抛出。
+        """
+
+        window_seconds = int(self.window.total_seconds())
+        bucket_seconds = int(self.bucket.total_seconds())
+        assert bucket_seconds > 0, "时间桶长度必须为正数。"
+        assert window_seconds % bucket_seconds == 0, (
+            "时间范围必须能够被时间桶长度整除。"
+        )
+        return window_seconds // bucket_seconds
+
+
+CHART_MODES = (
+    ExchangeRateChartMode(
+        name="Day",
+        window=timedelta(hours=24),
+        bucket=timedelta(minutes=5),
+        api_interval="5min",
+        interval_label="5 分钟",
+        output_name="exchange_rate_chart_day.png",
+    ),
+    ExchangeRateChartMode(
+        name="Week",
+        window=timedelta(days=7),
+        bucket=timedelta(minutes=30),
+        api_interval="30min",
+        interval_label="30 分钟",
+        output_name="exchange_rate_chart_week.png",
+    ),
+    ExchangeRateChartMode(
+        name="Month",
+        window=timedelta(days=30),
+        bucket=timedelta(hours=2),
+        api_interval="2h",
+        interval_label="2 小时",
+        output_name="exchange_rate_chart_month.png",
+    ),
+    ExchangeRateChartMode(
+        name="Year",
+        window=timedelta(days=365),
+        bucket=timedelta(days=1),
+        api_interval="1day",
+        interval_label="1 天",
+        output_name="exchange_rate_chart_year.png",
+    ),
+)
+
+
 class TwelveDataIntradayClient:
     """
     查询 Twelve Data 外汇分时数据。
@@ -56,6 +137,18 @@ class TwelveDataIntradayClient:
     """
 
     _DEFAULT_BASE_URL = "https://api.twelvedata.com/time_series"
+    _SUPPORTED_INTERVALS = {
+        "1min",
+        "5min",
+        "15min",
+        "30min",
+        "45min",
+        "1h",
+        "2h",
+        "4h",
+        "8h",
+        "1day",
+    }
 
     def __init__(
         self,
@@ -119,9 +212,7 @@ class TwelveDataIntradayClient:
         normalized_base = self._normalize_currency(base_currency)
         normalized_quote = self._normalize_currency(quote_currency)
         assert isinstance(target_date, date), "target_date 必须是 date。"
-        assert interval in {"1min", "5min", "15min", "30min", "45min", "1h"}, (
-            "interval 不受支持。"
-        )
+        assert interval in self._SUPPORTED_INTERVALS, "interval 不受支持。"
         assert isinstance(timezone_name, str) and timezone_name.strip(), (
             "timezone_name 不能为空。"
         )
@@ -135,6 +226,72 @@ class TwelveDataIntradayClient:
             "outputsize": 5000,
             "apikey": self._api_key,
         }
+        return self._request_points(params)
+
+    def fetch_range(
+        self,
+        base_currency: str,
+        quote_currency: str,
+        start_time: datetime,
+        end_time: datetime,
+        interval: str,
+        timezone_name: str = "Asia/Tokyo",
+    ) -> list[IntradayRatePoint]:
+        """
+        查询指定时间范围内的外汇数据。
+
+        Args:
+            base_currency (str): 原始货币代码，例如 USD。
+            quote_currency (str): 目标货币代码，例如 JPY。
+            start_time (datetime): 查询开始时间。
+            end_time (datetime): 查询结束时间。
+            interval (str): 数据粒度。
+            timezone_name (str): 响应时间使用的 IANA 时区。
+
+        Returns:
+            list[IntradayRatePoint]: 按时间升序排列的数据点。
+
+        Raises:
+            AssertionError: 当查询参数不合法时抛出。
+            RuntimeError: 当 API 请求失败或响应格式异常时抛出。
+        """
+
+        normalized_base = self._normalize_currency(base_currency)
+        normalized_quote = self._normalize_currency(quote_currency)
+        assert isinstance(start_time, datetime), "start_time 必须是 datetime。"
+        assert isinstance(end_time, datetime), "end_time 必须是 datetime。"
+        assert start_time < end_time, "start_time 必须早于 end_time。"
+        assert interval in self._SUPPORTED_INTERVALS, "interval 不受支持。"
+        assert isinstance(timezone_name, str) and timezone_name.strip(), (
+            "timezone_name 不能为空。"
+        )
+
+        params = {
+            "symbol": f"{normalized_base}/{normalized_quote}",
+            "interval": interval,
+            "start_date": start_time.strftime("%Y-%m-%d %H:%M:%S"),
+            "end_date": end_time.strftime("%Y-%m-%d %H:%M:%S"),
+            "timezone": timezone_name,
+            "order": "asc",
+            "outputsize": 5000,
+            "apikey": self._api_key,
+        }
+        return self._request_points(params)
+
+    def _request_points(self, params: dict[str, object]) -> list[IntradayRatePoint]:
+        """
+        请求并解析 Twelve Data 时间序列。
+
+        Args:
+            params (dict[str, object]): API 查询参数。
+
+        Returns:
+            list[IntradayRatePoint]: 按时间升序排列的数据点。
+
+        Raises:
+            RuntimeError: 当 API 请求失败或响应格式异常时抛出。
+        """
+
         try:
             response = requests.get(
                 self._base_url,
@@ -211,9 +368,8 @@ class TwelveDataIntradayClient:
         """
 
         point = IntradayRatePoint(
-            timestamp=datetime.strptime(
-                str(value["datetime"]),
-                "%Y-%m-%d %H:%M:%S",
+            timestamp=TwelveDataIntradayClient._parse_timestamp(
+                str(value["datetime"])
             ),
             open_rate=Decimal(str(value["open"])),
             high_rate=Decimal(str(value["high"])),
@@ -234,10 +390,150 @@ class TwelveDataIntradayClient:
             raise ValueError("最低汇率高于其它 OHLC 值。")
         return point
 
+    @staticmethod
+    def _parse_timestamp(value: str) -> datetime:
+        """
+        解析 Twelve Data 的分时或日线时间。
+
+        Args:
+            value (str): API 返回的时间文本。
+
+        Returns:
+            datetime: 不带时区的本地行情时间。
+
+        Raises:
+            ValueError: 当时间格式不是日线或分时格式时抛出。
+        """
+
+        if len(value) == 10:
+            return datetime.strptime(value, "%Y-%m-%d")
+        if len(value) == 19:
+            return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+        raise ValueError("行情时间格式不受支持。")
+
+
+class RollingRateSeriesBuilder:
+    """将原始行情整理为固定长度的滚动汇率序列。"""
+
+    def build(
+        self,
+        raw_points: Sequence[IntradayRatePoint],
+        mode: ExchangeRateChartMode,
+        current_time: datetime,
+    ) -> list[IntradayRatePoint]:
+        """
+        按图表模式建立固定时间桶并向前填充缺失行情。
+
+        Args:
+            raw_points (Sequence[IntradayRatePoint]): 包含窗口前参考价的行情。
+            mode (ExchangeRateChartMode): 图表模式。
+            current_time (datetime): 当前本地时间。
+
+        Returns:
+            list[IntradayRatePoint]: 固定数量的连续汇率时间桶。
+
+        Raises:
+            AssertionError: 当参数或数据顺序不合法时抛出。
+            RuntimeError: 当窗口开始前不存在参考汇率时抛出。
+        """
+
+        assert isinstance(mode, ExchangeRateChartMode), "mode 类型不正确。"
+        assert isinstance(current_time, datetime), "current_time 必须是 datetime。"
+        assert raw_points, "raw_points 不能为空。"
+        ordered_points = sorted(raw_points, key=lambda point: point.timestamp)
+        assert list(raw_points) == ordered_points, "raw_points 必须按时间升序排列。"
+
+        end_time = self.floor_time(current_time, mode.bucket)
+        window_start = end_time - mode.window
+        point_index = 0
+        current_rate: Decimal | None = None
+        while (
+            point_index < len(ordered_points)
+            and ordered_points[point_index].timestamp <= window_start
+        ):
+            current_rate = ordered_points[point_index].close_rate
+            point_index += 1
+        if current_rate is None:
+            raise RuntimeError("滚动窗口开始前不存在可用于填充的参考汇率。")
+
+        normalized_points: list[IntradayRatePoint] = []
+        previous_bucket_end = window_start
+        for bucket_index in range(1, mode.bucket_count + 1):
+            bucket_end = window_start + mode.bucket * bucket_index
+            bucket_points: list[IntradayRatePoint] = []
+            while (
+                point_index < len(ordered_points)
+                and ordered_points[point_index].timestamp <= bucket_end
+            ):
+                point = ordered_points[point_index]
+                if point.timestamp > previous_bucket_end:
+                    bucket_points.append(point)
+                point_index += 1
+
+            if bucket_points:
+                first_point = bucket_points[0]
+                last_point = bucket_points[-1]
+                current_rate = last_point.close_rate
+                normalized_points.append(
+                    IntradayRatePoint(
+                        timestamp=bucket_end,
+                        open_rate=first_point.open_rate,
+                        high_rate=max(point.high_rate for point in bucket_points),
+                        low_rate=min(point.low_rate for point in bucket_points),
+                        close_rate=current_rate,
+                    )
+                )
+            else:
+                normalized_points.append(
+                    IntradayRatePoint(
+                        timestamp=bucket_end,
+                        open_rate=current_rate,
+                        high_rate=current_rate,
+                        low_rate=current_rate,
+                        close_rate=current_rate,
+                    )
+                )
+            previous_bucket_end = bucket_end
+
+        assert len(normalized_points) == mode.bucket_count, (
+            "生成的时间桶数量不符合模式配置。"
+        )
+        return normalized_points
+
+    @staticmethod
+    def floor_time(value: datetime, bucket: timedelta) -> datetime:
+        """
+        将时间向下取整到指定时间桶边界。
+
+        Args:
+            value (datetime): 需要取整的时间。
+            bucket (timedelta): 时间桶长度。
+
+        Returns:
+            datetime: 向下取整后的时间。
+
+        Raises:
+            AssertionError: 当时间桶长度不合法时抛出。
+        """
+
+        assert isinstance(value, datetime), "value 必须是 datetime。"
+        bucket_seconds = int(bucket.total_seconds())
+        assert 0 < bucket_seconds <= 86400, "时间桶长度必须在一天以内。"
+        assert 86400 % bucket_seconds == 0, "时间桶必须能够整除一天。"
+        seconds_since_midnight = (
+            value.hour * 3600 + value.minute * 60 + value.second
+        )
+        floored_seconds = seconds_since_midnight - (
+            seconds_since_midnight % bucket_seconds
+        )
+        return value.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(
+            seconds=floored_seconds
+        )
+
 
 class ExchangeRateChartRenderer:
     """
-    使用 Pillow 绘制现代深色分时汇率图。
+    使用 Pillow 绘制现代白底滚动汇率图。
 
     Args:
         width (int): 图片宽度。
@@ -275,7 +571,7 @@ class ExchangeRateChartRenderer:
         points: Sequence[IntradayRatePoint],
         pair: str,
         pair_note: str,
-        interval: str,
+        mode: ExchangeRateChartMode,
         timezone_label: str,
         output_path: Path,
     ) -> Path:
@@ -286,7 +582,7 @@ class ExchangeRateChartRenderer:
             points (Sequence[IntradayRatePoint]): 按时间排列的汇率点。
             pair (str): 图表展示的货币对。
             pair_note (str): 货币对的中文小字注解。
-            interval (str): 数据粒度。
+            mode (ExchangeRateChartMode): 图表模式。
             timezone_label (str): 时区展示文本。
             output_path (Path): PNG 输出路径。
 
@@ -298,6 +594,7 @@ class ExchangeRateChartRenderer:
         """
 
         assert len(points) >= 2, "绘图至少需要两个数据点。"
+        assert isinstance(mode, ExchangeRateChartMode), "mode 类型不正确。"
         ordered_points = sorted(points, key=lambda point: point.timestamp)
         assert list(points) == ordered_points, "points 必须按时间升序排列。"
         assert output_path.suffix.lower() == ".png", "输出文件必须是 PNG。"
@@ -309,7 +606,7 @@ class ExchangeRateChartRenderer:
             points=ordered_points,
             pair=pair,
             pair_note=pair_note,
-            interval=interval,
+            mode=mode,
             timezone_label=timezone_label,
         )
         self._draw_chart(image=image, draw=draw, points=ordered_points)
@@ -358,7 +655,7 @@ class ExchangeRateChartRenderer:
         points: Sequence[IntradayRatePoint],
         pair: str,
         pair_note: str,
-        interval: str,
+        mode: ExchangeRateChartMode,
         timezone_label: str,
     ) -> None:
         """
@@ -369,7 +666,7 @@ class ExchangeRateChartRenderer:
             points (Sequence[IntradayRatePoint]): 汇率数据点。
             pair (str): 货币对。
             pair_note (str): 货币对的中文小字注解。
-            interval (str): 数据粒度。
+            mode (ExchangeRateChartMode): 图表模式。
             timezone_label (str): 时区展示文本。
 
         Returns:
@@ -388,9 +685,10 @@ class ExchangeRateChartRenderer:
             fill=(27, 38, 57, 255),
             stroke_width=1,
         )
+        range_text = self._range_text(points)
         subtitle = (
-            f"{pair_note}  ·  日内汇率  ·  {interval}  ·  "
-            f"{points[0].timestamp:%Y-%m-%d}  ·  {timezone_label}"
+            f"{pair_note}  ·  {mode.name}  ·  {mode.interval_label}  ·  "
+            f"{range_text}  ·  {timezone_label}"
         )
         draw.text(
             (84, 123),
@@ -426,9 +724,9 @@ class ExchangeRateChartRenderer:
         high = max(point.high_rate for point in points)
         low = min(point.low_rate for point in points)
         stats = (
-            ("开盘", opening),
-            ("日内最高", high),
-            ("日内最低", low),
+            ("起始", opening),
+            ("区间最高", high),
+            ("区间最低", low),
         )
         card_x = 915
         for label, value in stats:
@@ -500,8 +798,10 @@ class ExchangeRateChartRenderer:
         low = min(point.low_rate for point in points)
         high = max(point.high_rate for point in points)
         spread = high - low
-        assert spread > 0, "绘图数据必须存在价格波动。"
-        padding = spread * Decimal("0.12")
+        if spread == 0:
+            padding = max(high * Decimal("0.0005"), Decimal("0.001"))
+        else:
+            padding = spread * Decimal("0.12")
         y_min = low - padding
         y_max = high + padding
         start_time = points[0].timestamp
@@ -536,18 +836,13 @@ class ExchangeRateChartRenderer:
                 width=1,
             )
             tick_time = start_time + (end_time - start_time) * ratio
-            rounded_minutes = round(
-                (
-                    tick_time.hour * 60
-                    + tick_time.minute
-                    + tick_time.second / 60
-                )
-                / 5
-            ) * 5
-            rounded_minutes = min(rounded_minutes, 23 * 60 + 55)
-            tick_label = (
-                f"{rounded_minutes // 60:02d}:{rounded_minutes % 60:02d}"
-            )
+            duration_days = total_seconds / 86400
+            if duration_days <= 2:
+                tick_label = tick_time.strftime("%H:%M")
+            elif duration_days <= 45:
+                tick_label = tick_time.strftime("%m-%d")
+            else:
+                tick_label = tick_time.strftime("%Y-%m")
             draw.text(
                 (x, bottom + 20),
                 tick_label,
@@ -639,6 +934,32 @@ class ExchangeRateChartRenderer:
         )
 
     @staticmethod
+    def _range_text(points: Sequence[IntradayRatePoint]) -> str:
+        """
+        根据时间跨度生成紧凑的区间文本。
+
+        Args:
+            points (Sequence[IntradayRatePoint]): 汇率时间序列。
+
+        Returns:
+            str: 图表标题区展示的时间范围。
+
+        Raises:
+            AssertionError: 当数据点少于两个时抛出。
+        """
+
+        assert len(points) >= 2, "生成时间范围至少需要两个数据点。"
+        start_time = points[0].timestamp
+        end_time = points[-1].timestamp
+        duration = end_time - start_time
+        if duration <= timedelta(days=2):
+            return (
+                f"{start_time:%m-%d %H:%M} — "
+                f"{end_time:%m-%d %H:%M}"
+            )
+        return f"{start_time:%Y-%m-%d} — {end_time:%Y-%m-%d}"
+
+    @staticmethod
     def _font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
         """
         创建支持中文的系统字体。
@@ -694,12 +1015,12 @@ def latest_completed_weekday(today: date) -> date:
     return candidate
 
 
-def build_demo() -> Path:
+def build_demo() -> list[Path]:
     """
-    拉取最近工作日的 USD/JPY 分时数据并生成 Demo 图片。
+    拉取 USD/JPY 行情并生成四种滚动模式的 Demo 图片。
 
     Returns:
-        Path: 生成的 PNG 路径。
+        list[Path]: Day、Week、Month、Year 模式的 PNG 路径。
 
     Raises:
         AssertionError: 当环境变量未配置时抛出。
@@ -711,32 +1032,56 @@ def build_demo() -> Path:
     assert api_key, "缺少 TWELVE_API_KEY 环境变量。"
 
     timezone_name = "Asia/Tokyo"
-    target_date = latest_completed_weekday(
-        datetime.now(ZoneInfo(timezone_name)).date()
-    )
+    current_time = datetime.now(ZoneInfo(timezone_name)).replace(tzinfo=None)
     client = TwelveDataIntradayClient(api_key=api_key)
-    points = client.fetch(
-        base_currency="USD",
-        quote_currency="JPY",
-        target_date=target_date,
-        interval="5min",
-        timezone_name=timezone_name,
-    )
+    series_builder = RollingRateSeriesBuilder()
     renderer = ExchangeRateChartRenderer()
-    output_path = Path("docs/assets/exchange_rate_chart_demo.png")
-    result_path = renderer.render(
-        points=points,
-        pair="USD / JPY",
-        pair_note="美元兑日元",
-        interval="5 分钟",
-        timezone_label="东京时间",
-        output_path=output_path,
-    )
-    print(
-        f"Generated {result_path} with {len(points)} points "
-        f"for {target_date.isoformat()}."
-    )
-    return result_path
+    result_paths: list[Path] = []
+    latest_rate: Decimal | None = None
+
+    for mode in CHART_MODES:
+        end_time = series_builder.floor_time(current_time, mode.bucket)
+        query_start = end_time - mode.window - timedelta(days=7)
+        raw_points = client.fetch_range(
+            base_currency="USD",
+            quote_currency="JPY",
+            start_time=query_start,
+            end_time=end_time,
+            interval=mode.api_interval,
+            timezone_name=timezone_name,
+        )
+        points = series_builder.build(
+            raw_points=raw_points,
+            mode=mode,
+            current_time=current_time,
+        )
+        if latest_rate is None:
+            latest_rate = points[-1].close_rate
+        else:
+            last_point = points[-1]
+            points[-1] = IntradayRatePoint(
+                timestamp=last_point.timestamp,
+                open_rate=last_point.open_rate,
+                high_rate=max(last_point.high_rate, latest_rate),
+                low_rate=min(last_point.low_rate, latest_rate),
+                close_rate=latest_rate,
+            )
+        output_path = Path("docs/assets") / mode.output_name
+        result_path = renderer.render(
+            points=points,
+            pair="USD / JPY",
+            pair_note="美元兑日元",
+            mode=mode,
+            timezone_label="东京时间",
+            output_path=output_path,
+        )
+        result_paths.append(result_path)
+        print(
+            f"Generated {result_path} with {len(points)} "
+            f"{mode.name} points."
+        )
+
+    return result_paths
 
 
 if __name__ == "__main__":
