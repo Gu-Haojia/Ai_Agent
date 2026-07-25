@@ -128,6 +128,7 @@ def test_renderer_writes_expected_png(tmp_path: Path) -> None:
     result = ExchangeRateChartRenderer().render(
         points=_points(),
         pair="USD / JPY",
+        pair_note="美元兑日元",
         interval="5 min",
         timezone_label="Tokyo time",
         output_path=output_path,

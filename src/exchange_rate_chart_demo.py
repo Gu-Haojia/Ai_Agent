@@ -247,6 +247,9 @@ class ExchangeRateChartRenderer:
         AssertionError: 当图片尺寸过小时抛出。
     """
 
+    _UP_COLOR = (224, 58, 64)
+    _DOWN_COLOR = (24, 157, 96)
+
     def __init__(self, width: int = 1600, height: int = 900) -> None:
         """
         初始化绘图器。
@@ -271,6 +274,7 @@ class ExchangeRateChartRenderer:
         self,
         points: Sequence[IntradayRatePoint],
         pair: str,
+        pair_note: str,
         interval: str,
         timezone_label: str,
         output_path: Path,
@@ -281,6 +285,7 @@ class ExchangeRateChartRenderer:
         Args:
             points (Sequence[IntradayRatePoint]): 按时间排列的汇率点。
             pair (str): 图表展示的货币对。
+            pair_note (str): 货币对的中文小字注解。
             interval (str): 数据粒度。
             timezone_label (str): 时区展示文本。
             output_path (Path): PNG 输出路径。
@@ -303,6 +308,7 @@ class ExchangeRateChartRenderer:
             draw=draw,
             points=ordered_points,
             pair=pair,
+            pair_note=pair_note,
             interval=interval,
             timezone_label=timezone_label,
         )
@@ -351,6 +357,7 @@ class ExchangeRateChartRenderer:
         draw: ImageDraw.ImageDraw,
         points: Sequence[IntradayRatePoint],
         pair: str,
+        pair_note: str,
         interval: str,
         timezone_label: str,
     ) -> None:
@@ -361,6 +368,7 @@ class ExchangeRateChartRenderer:
             draw (ImageDraw.ImageDraw): Pillow 绘图对象。
             points (Sequence[IntradayRatePoint]): 汇率数据点。
             pair (str): 货币对。
+            pair_note (str): 货币对的中文小字注解。
             interval (str): 数据粒度。
             timezone_label (str): 时区展示文本。
 
@@ -381,7 +389,7 @@ class ExchangeRateChartRenderer:
             stroke_width=1,
         )
         subtitle = (
-            f"日内汇率  ·  {interval}  ·  "
+            f"{pair_note}  ·  日内汇率  ·  {interval}  ·  "
             f"{points[0].timestamp:%Y-%m-%d}  ·  {timezone_label}"
         )
         draw.text(
@@ -396,9 +404,8 @@ class ExchangeRateChartRenderer:
         change = latest - opening
         change_percent = change / opening * Decimal("100")
         positive = change >= 0
-        change_color = (
-            (224, 58, 64, 255) if positive else (24, 157, 96, 255)
-        )
+        trend_rgb = self._UP_COLOR if positive else self._DOWN_COLOR
+        change_color = (*trend_rgb, 255)
         sign = "+" if positive else ""
         draw.text(
             (1518, 55),
@@ -557,6 +564,9 @@ class ExchangeRateChartRenderer:
             y = round(top + (bottom - top) * y_ratio)
             line_points.append((x, y))
 
+        positive = points[-1].close_rate >= points[0].open_rate
+        trend_rgb = self._UP_COLOR if positive else self._DOWN_COLOR
+
         area_mask = Image.new("L", image.size, 0)
         mask_draw = ImageDraw.Draw(area_mask)
         mask_draw.polygon(
@@ -567,10 +577,10 @@ class ExchangeRateChartRenderer:
         gradient_draw = ImageDraw.Draw(area_gradient)
         for y in range(top, bottom + 1):
             ratio = (y - top) / max(bottom - top, 1)
-            alpha = round(32 * (1 - ratio))
+            alpha = round(58 * (1 - ratio))
             gradient_draw.line(
                 (left, y, right, y),
-                fill=(116, 135, 165, alpha),
+                fill=(*trend_rgb, alpha),
             )
         image.alpha_composite(
             Image.composite(
@@ -582,41 +592,27 @@ class ExchangeRateChartRenderer:
 
         glow = Image.new("RGBA", image.size, (0, 0, 0, 0))
         glow_draw = ImageDraw.Draw(glow)
-        for index in range(1, len(line_points)):
-            rising = points[index].close_rate >= points[index - 1].close_rate
-            color = (
-                (224, 58, 64, 95) if rising else (24, 157, 96, 95)
-            )
-            glow_draw.line(
-                (line_points[index - 1], line_points[index]),
-                fill=color,
-                width=10,
-            )
+        glow_draw.line(
+            line_points,
+            fill=(*trend_rgb, 95),
+            width=10,
+            joint="curve",
+        )
         glow = glow.filter(ImageFilter.GaussianBlur(8))
         image.alpha_composite(glow)
 
         draw = ImageDraw.Draw(image)
-        for index in range(1, len(line_points)):
-            rising = points[index].close_rate >= points[index - 1].close_rate
-            color = (
-                (224, 58, 64, 255) if rising else (24, 157, 96, 255)
-            )
-            draw.line(
-                (line_points[index - 1], line_points[index]),
-                fill=color,
-                width=4,
-            )
-        latest_x, latest_y = line_points[-1]
-        latest_rising = points[-1].close_rate >= points[-2].close_rate
-        latest_color = (
-            (224, 58, 64, 255)
-            if latest_rising
-            else (24, 157, 96, 255)
+        draw.line(
+            line_points,
+            fill=(*trend_rgb, 255),
+            width=4,
+            joint="curve",
         )
+        latest_x, latest_y = line_points[-1]
         draw.ellipse(
             (latest_x - 11, latest_y - 11, latest_x + 11, latest_y + 11),
             fill=(255, 255, 255, 255),
-            outline=latest_color,
+            outline=(*trend_rgb, 255),
             width=4,
         )
 
@@ -739,7 +735,8 @@ def build_demo() -> Path:
     output_path = Path("docs/assets/exchange_rate_chart_demo.png")
     result_path = renderer.render(
         points=points,
-        pair="美元 / 日元",
+        pair="USD / JPY",
+        pair_note="美元兑日元",
         interval="5 分钟",
         timezone_label="东京时间",
         output_path=output_path,
