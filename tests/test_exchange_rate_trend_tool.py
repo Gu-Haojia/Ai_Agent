@@ -93,7 +93,12 @@ def test_generate_returns_image_tool_compatible_result(tmp_path: Path) -> None:
     data = result["data"]
     assert isinstance(data, dict)
     assert data["mime_type"] == "image/png"
-    assert data["text"] == "USD/JPY Day 汇率趋势图"
+    text = str(data["text"])
+    assert text.startswith("USD/JPY Day 汇率趋势：")
+    assert "当前 146.200" in text
+    assert "区间上涨 +0.100（+0.07%）" in text
+    assert "最高 146.250，最低 146.050" in text
+    assert "2026-07-24 22:50 至 2026-07-25 22:45（东京时间）" in text
     assert data["mode"] == "day"
     assert data["point_count"] == 288
     output_path = Path(str(data["path"]))
