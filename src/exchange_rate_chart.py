@@ -676,7 +676,7 @@ class ExchangeRateChartRenderer:
 
         title_font = self._font(56)
         subtitle_font = self._font(25)
-        quote_scale = 1.4
+        quote_scale = 1.25
         rate_font = self._font(round(66 * quote_scale))
         change_font = self._font(round(28 * quote_scale))
         content_left = 82
@@ -730,7 +730,7 @@ class ExchangeRateChartRenderer:
         trend_rgb = self._UP_COLOR if positive else self._DOWN_COLOR
         change_color = (*trend_rgb, 255)
         sign = "+" if positive else ""
-        rate_top = 36
+        rate_top = 60
         rate_text = self._rate_text(latest)
         draw.text(
             (content_right, rate_top),
