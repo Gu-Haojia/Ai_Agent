@@ -748,7 +748,7 @@ class ExchangeRateChartRenderer:
             stroke_width=1,
         )
         change_text = f"{sign}{change:.3f}  {sign}{change_percent:.2f}%"
-        change_top = rate_box[3] + 12
+        change_top = rate_box[3] + 20
         draw.text(
             (content_right, change_top),
             change_text,
