@@ -676,7 +676,7 @@ class ExchangeRateChartRenderer:
 
         title_font = self._font(56)
         subtitle_font = self._font(25)
-        quote_scale = 1.25
+        quote_scale = 1.75
         rate_font = self._font(round(66 * quote_scale))
         change_font = self._font(round(28 * quote_scale))
         content_left = 82
