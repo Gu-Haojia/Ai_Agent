@@ -730,7 +730,7 @@ class ExchangeRateChartRenderer:
         trend_rgb = self._UP_COLOR if positive else self._DOWN_COLOR
         change_color = (*trend_rgb, 255)
         sign = "+" if positive else ""
-        rate_top = 72
+        rate_top = 80
         rate_text = self._rate_text(latest)
         draw.text(
             (content_right, rate_top),
