@@ -225,7 +225,7 @@ class ImasSetlistAgentImageQueueTests(unittest.TestCase):
             warnings=(),
         )
 
-        agent._store_imas_setlist_image(rendered)
+        result = agent._store_imas_setlist_image(rendered)
 
         manager.save_generated_image.assert_called_once_with(
             base64.b64encode(rendered.png_bytes).decode("ascii"),
@@ -233,6 +233,7 @@ class ImasSetlistAgentImageQueueTests(unittest.TestCase):
             "image/png",
         )
         self.assertEqual(agent._generated_images, [stored])
+        self.assertEqual(result, stored)
 
     def test_store_image_reports_queue_write_failure(self) -> None:
         """

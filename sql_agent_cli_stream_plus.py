@@ -1853,7 +1853,7 @@ class SQLCheckpointAgentStreamingPlus:
     def _store_imas_setlist_image(
         self,
         rendered: ImasSetlistRenderedImage,
-    ) -> None:
+    ) -> GeneratedImage:
         """
         将 Setlist PNG 写入现有生成图片队列。
 
@@ -1861,7 +1861,7 @@ class SQLCheckpointAgentStreamingPlus:
             rendered (ImasSetlistRenderedImage): 已渲染的单张 Setlist PNG。
 
         Returns:
-            None: 图片成功入队时无返回值。
+            GeneratedImage: 已落盘并加入队列的图片信息。
 
         Raises:
             AssertionError: 当图片类型或 PNG 内容非法时抛出。
@@ -1888,6 +1888,7 @@ class SQLCheckpointAgentStreamingPlus:
                 f"Setlist 图片写入生图队列失败：{exc}",
             ) from exc
         self._generated_images.append(image)
+        return image
 
     def _require_image_manager(self) -> ImageStorageManager:
         """

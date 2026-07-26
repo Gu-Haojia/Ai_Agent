@@ -9,9 +9,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+from pathlib import Path
 import re
 import unicodedata
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Callable, Protocol
 from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup, Tag
@@ -27,7 +28,20 @@ IMAS_SETLIST_CANDIDATE_PREFIX = "imas-setlist:"
 IMAS_SETLIST_USER_AGENT = "LangGraph-ImasSetlistTool/1.0"
 
 HttpGet = Callable[..., requests.Response]
-ImageSink = Callable[["ImasSetlistRenderedImage"], None]
+
+
+class ImasSetlistImageReceipt(Protocol):
+    """定义图片成功写入现有生图队列后的返回信息。"""
+
+    path: Path
+    mime_type: str
+    prompt: str
+
+
+ImageSink = Callable[
+    ["ImasSetlistRenderedImage"],
+    ImasSetlistImageReceipt,
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -710,7 +724,7 @@ def build_imas_setlist_get_tool(
     创建可选输出图片的 Setlist Get 工具。
 
     Args:
-        image_sink (ImageSink | None): 接收渲染图片结果的回调。
+        image_sink (ImageSink | None): 保存图片并返回队列图片信息的回调。
 
     Returns:
         BaseTool: 名为 imas_setlist_get 的 LangChain 工具。
@@ -727,14 +741,15 @@ def build_imas_setlist_get_tool(
         仅在 ``imas_setlist_search`` 找到目标场次后调用，并原样传入搜索
         结果中的 candidate_id。默认返回结构化曲目；当用户明确要求图片、
         长图或适合 QQ 阅读的歌单时，将 render_image 设为 true，工具会
-        生成并发送一张 Setlist 图片，只返回渲染状态而不重复返回曲目。
+        生成并发送一张 Setlist 图片，只返回图片 path、mime_type 和 text，
+        不重复返回曲目。
 
         Args:
             candidate_id (str): 搜索工具返回的精确候选 ID。
             render_image (bool): 是否生成图片，默认 false。
 
         Returns:
-            str: JSON 字符串形式的曲目数据或图片渲染状态。
+            str: JSON 字符串形式的曲目数据或最小图片信息。
 
         Raises:
             AssertionError: 当参数非法时抛出。
@@ -758,14 +773,15 @@ def build_imas_setlist_get_tool(
                     "当前运行环境没有配置 Setlist 图片输出。",
                 )
             rendered = ImasSetlistImageService().render(normalized_id)
-            image_sink(rendered)
+            image = image_sink(rendered)
+            assert isinstance(image.path, Path), "图片路径类型非法"
+            assert image.path.name, "图片名称不能为空"
+            assert image.mime_type == "image/png", "Setlist 图片类型必须为 PNG"
+            assert image.prompt.strip(), "图片说明不能为空"
             result = {
-                "status": "rendered",
-                "candidate_id": rendered.candidate_id,
-                "title": rendered.title,
-                "day": rendered.day,
-                "image_count": 1,
-                "warnings": list(rendered.warnings),
+                "path": str(image.path),
+                "mime_type": image.mime_type,
+                "text": image.prompt,
             }
             return json.dumps(result, ensure_ascii=False)
         except (ImasSetlistToolError, AssertionError) as exc:

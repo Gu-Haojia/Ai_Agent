@@ -5,6 +5,7 @@ imas-db Setlist 搜索、详情解析与工具包装单元测试。
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import unittest
 from unittest import mock
 
@@ -646,9 +647,9 @@ class ImasSetlistToolWrapperTests(unittest.TestCase):
         self.assertEqual(payload["status"], "failed")
         self.assertEqual(payload["error"], "upstream_timeout")
 
-    def test_get_tool_image_mode_sends_image_and_returns_status_only(self) -> None:
+    def test_get_tool_image_mode_returns_queued_image_fields(self) -> None:
         """
-        图片模式应写入图片回调，且不向模型重复返回曲目数据。
+        图片模式应返回队列图片字段，且不向模型重复返回曲目数据。
 
         Returns:
             None: 测试方法无返回值。
@@ -661,7 +662,12 @@ class ImasSetlistToolWrapperTests(unittest.TestCase):
         rendered.title = "IWSF DAY3"
         rendered.day = "2026/07/26(日)"
         rendered.warnings = ()
-        image_sink = mock.Mock()
+        queued_image = mock.Mock(
+            path=Path("/tmp/imas-setlist-iwsf-day3.png"),
+            mime_type="image/png",
+            prompt="imas-db Setlist: IWSF DAY3",
+        )
+        image_sink = mock.Mock(return_value=queued_image)
         get_tool = build_imas_setlist_get_tool(image_sink=image_sink)
         with mock.patch(
             "src.imas_setlist_render.ImasSetlistImageService.render",
@@ -678,12 +684,9 @@ class ImasSetlistToolWrapperTests(unittest.TestCase):
         self.assertEqual(
             payload,
             {
-                "status": "rendered",
-                "candidate_id": rendered.candidate_id,
-                "title": "IWSF DAY3",
-                "day": "2026/07/26(日)",
-                "image_count": 1,
-                "warnings": [],
+                "path": "/tmp/imas-setlist-iwsf-day3.png",
+                "mime_type": "image/png",
+                "text": "imas-db Setlist: IWSF DAY3",
             },
         )
         self.assertNotIn("tracks", payload)
