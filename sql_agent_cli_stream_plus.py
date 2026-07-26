@@ -100,6 +100,7 @@ from src.netease_music_tool import (
     NeteaseMusicToolError,
     OneBotMusicCardSender,
 )
+from src.imas_setlist_tool import imas_setlist_get, imas_setlist_search
 
 ANILIST_SORT_CHOICES_TEXT: str = ", ".join(ANILIST_MEDIA_SORTS)
 
@@ -2874,6 +2875,8 @@ class SQLCheckpointAgentStreamingPlus:
                 tools.append(xlink)
                 tools.append(netease_music_search)
                 tools.append(send_netease_music_card)
+                tools.append(imas_setlist_search)
+                tools.append(imas_setlist_get)
 
         @tool  # raw api 1.39.1
         def generate_local_image(
