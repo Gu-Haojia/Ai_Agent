@@ -386,6 +386,7 @@ class ImasSetlistRenderDocument:
         day (str): 索引页活动日期，可为空。
         source_url (str): 详情页来源 URL，仅用于内部追踪。
         palette_stylesheet_url (str): 详情页指定的官方颜色表 URL。
+        theme_brand_id (int): 官网歌单区块声明的主题品牌 ID。
         tables_html (str): 清洗后的全部 Setlist 表格 HTML。
         table_count (int): 表格数量。
         row_count (int): 表格行总数。
@@ -397,6 +398,7 @@ class ImasSetlistRenderDocument:
     day: str
     source_url: str
     palette_stylesheet_url: str
+    theme_brand_id: int
     tables_html: str
     table_count: int
     row_count: int
@@ -491,6 +493,7 @@ class ImasSetlistDocumentParser:
                 "setlist_table_missing",
                 "Setlist 页面没有可渲染的曲目表。",
             )
+        theme_brand_id = self._resolve_theme_brand_id(tables)
         sanitized_tables: list[str] = []
         row_count = 0
         for table in tables:
@@ -509,6 +512,7 @@ class ImasSetlistDocumentParser:
             day=source.day.strip(),
             source_url=source.source_url,
             palette_stylesheet_url=palette_stylesheet_url,
+            theme_brand_id=theme_brand_id,
             tables_html="\n".join(sanitized_tables),
             table_count=len(sanitized_tables),
             row_count=row_count,
@@ -596,6 +600,55 @@ class ImasSetlistDocumentParser:
         )
 
     @staticmethod
+    def _resolve_theme_brand_id(tables: list[Tag]) -> int:
+        """
+        读取官网包裹歌单区块声明的统一主题品牌 ID。
+
+        Args:
+            tables (list[Tag]): 详情页中的全部 Setlist 表格。
+
+        Returns:
+            int: 官网颜色表可识别的品牌 ID。
+
+        Raises:
+            ImasSetlistRenderError: 当品牌 ID 缺失、非法或不一致时抛出。
+        """
+        brand_ids: list[int] = []
+        for table in tables:
+            section = table.find_parent(class_="section")
+            if not isinstance(section, Tag):
+                raise ImasSetlistRenderError(
+                    "setlist_theme_brand_missing",
+                    "Setlist 表格缺少官网主题区块。",
+                )
+            raw_brand_id = section.get("data-brand-id")
+            if raw_brand_id is None:
+                brand_ids.append(0)
+                continue
+            if (
+                not isinstance(raw_brand_id, str)
+                or not raw_brand_id.isascii()
+                or not raw_brand_id.isdigit()
+            ):
+                raise ImasSetlistRenderError(
+                    "setlist_theme_brand_invalid",
+                    "Setlist 官网主题区块包含非法品牌 ID。",
+                )
+            brand_id = int(raw_brand_id)
+            if not 0 <= brand_id <= 255:
+                raise ImasSetlistRenderError(
+                    "setlist_theme_brand_invalid",
+                    "Setlist 官网主题品牌 ID 超出允许范围。",
+                )
+            brand_ids.append(brand_id)
+        if len(set(brand_ids)) != 1:
+            raise ImasSetlistRenderError(
+                "setlist_theme_brand_inconsistent",
+                "同一张 Setlist 图片包含不一致的官网主题品牌。",
+            )
+        return brand_ids[0]
+
+    @staticmethod
     def _clean_text(value: str) -> str:
         """
         折叠连续空白以比较可见文字。
@@ -644,21 +697,37 @@ class ImasSetlistHtmlRenderer:
   </style>
 </head>
 <body>
-  <article id="setlist-card">
+  <article
+    id="setlist-card"
+    data-theme-brand-id="{document.theme_brand_id}"
+  >
     <header class="setlist-header">♪ セットリスト</header>
     <section class="event-meta">
       <h1>{html.escape(document.title)}</h1>
       {day_html}
     </section>
     <section class="setlist-content">{document.tables_html}</section>
-    <footer class="setlist-footer">© imas-db.jp</footer>
+    <footer class="setlist-footer">
+      © imas-db.jp　天海春香Agent 生成
+    </footer>
   </article>
 </body>
 </html>"""
 
 
 IMAS_SETLIST_APPLY_PALETTE_SCRIPT: Final[str] = """
-async ({stylesheetUrl, timeoutMs}) => {
+async ({stylesheetUrl, themeBrandId, timeoutMs}) => {
+  const themeProbeStyle = document.createElement("style");
+  themeProbeStyle.textContent = (
+    ".section { border-color: rgb(1, 2, 3); }"
+  );
+  document.head.appendChild(themeProbeStyle);
+  const themeProbe = document.createElement("div");
+  themeProbe.className = "section";
+  themeProbe.dataset.brandId = String(themeBrandId);
+  themeProbe.hidden = true;
+  document.body.appendChild(themeProbe);
+
   const stylesheet = document.createElement("link");
   stylesheet.rel = "stylesheet";
   stylesheet.href = stylesheetUrl;
@@ -691,6 +760,8 @@ async ({stylesheetUrl, timeoutMs}) => {
   });
   if (loadStatus !== "success") {
     stylesheet.remove();
+    themeProbe.remove();
+    themeProbeStyle.remove();
     return {status: loadStatus};
   }
 
@@ -699,6 +770,21 @@ async ({stylesheetUrl, timeoutMs}) => {
     CSS.supports("border-bottom-style", value)
   );
   let invalidValueCount = 0;
+  const themeColor = (
+    window.getComputedStyle(themeProbe).borderTopColor
+  );
+  if (
+    !isColor(themeColor)
+    || themeColor === "rgb(1, 2, 3)"
+  ) {
+    invalidValueCount += 1;
+  } else {
+    document.documentElement.style.setProperty(
+      "--setlist-pink",
+      themeColor,
+      "important"
+    );
+  }
   const idolNames = Array.from(
     document.querySelectorAll(".idol-name")
   );
@@ -746,6 +832,8 @@ async ({stylesheetUrl, timeoutMs}) => {
   }
 
   stylesheet.remove();
+  themeProbe.remove();
+  themeProbeStyle.remove();
   await new Promise((resolve) => {
     window.requestAnimationFrame(() => {
       window.requestAnimationFrame(resolve);
@@ -756,6 +844,7 @@ async ({stylesheetUrl, timeoutMs}) => {
   }
   return {
     status: "success",
+    theme_color: themeColor,
     idol_name_count: idolNames.length,
     badge_count: badges.length,
   };
@@ -770,6 +859,7 @@ class BrowserImasSetlistPaletteApplier:
         self,
         page: Page,
         stylesheet_url: str,
+        theme_brand_id: int,
         timeout_ms: int,
     ) -> None:
         """
@@ -778,6 +868,7 @@ class BrowserImasSetlistPaletteApplier:
         Args:
             page (Page): 已载入本地固定模板的 Playwright 页面。
             stylesheet_url (str): 已通过白名单校验的官方颜色表 URL。
+            theme_brand_id (int): 官网歌单区块声明的品牌 ID。
             timeout_ms (int): 样式表加载超时毫秒数。
 
         Returns:
@@ -788,6 +879,9 @@ class BrowserImasSetlistPaletteApplier:
             ImasSetlistRenderError: 当颜色表地址不可信或无法应用时抛出。
         """
         assert stylesheet_url.strip(), "stylesheet_url 不能为空"
+        assert 0 <= theme_brand_id <= 255, (
+            "theme_brand_id 必须位于 0 到 255"
+        )
         assert timeout_ms > 0, "timeout_ms 必须大于 0"
         if not _is_trusted_palette_stylesheet_url(stylesheet_url):
             raise ImasSetlistRenderError(
@@ -798,6 +892,7 @@ class BrowserImasSetlistPaletteApplier:
             IMAS_SETLIST_APPLY_PALETTE_SCRIPT,
             {
                 "stylesheetUrl": stylesheet_url,
+                "themeBrandId": theme_brand_id,
                 "timeoutMs": timeout_ms,
             },
         )
@@ -889,6 +984,7 @@ class BrowserImasSetlistRenderer:
                     self._palette_applier.apply(
                         page,
                         document.palette_stylesheet_url,
+                        document.theme_brand_id,
                         self._timeout_ms,
                     )
                     page.evaluate("document.fonts.ready")

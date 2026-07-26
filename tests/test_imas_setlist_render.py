@@ -33,32 +33,37 @@ SOURCE_HTML = """
   </head>
   <body>
     <h1 id="page_title">特殊形式公演</h1>
-    <table class="tracklist" style="--tracklist-title-width:25rem">
-      <thead>
-        <tr><th>No.</th><th>内容/楽曲</th><th>演者</th></tr>
-      </thead>
-      <tbody>
-        <tr onclick="alert(1)">
-          <td>1</td>
-          <td>
-            <a href="https://example.com/song">楽曲名</a>
-            <small class="badge bg-nijisanji">NIJISANJI</small>
-          </td>
-          <td>
-            <span
-              class="idol-name"
-              data-brand-id="255"
-              data-nijisanji="valz-01"
-              title="不要属性"
-            >演者A</span>
-            <ruby><rb>演者B</rb><rp>(</rp><rt>えんじゃ</rt><rp>)</rp></ruby>
-            <em>特殊注记</em>
-          </td>
-        </tr>
-        <tr class="part-header"><th colspan="3">【第二部】</th></tr>
-        <tr><td>2〜4</td><td colspan="2"><ol><li>曲A</li><li>曲B</li></ol></td></tr>
-      </tbody>
-    </table>
+    <div class="section" data-brand-id="8">
+      <table class="tracklist" style="--tracklist-title-width:25rem">
+        <thead>
+          <tr><th>No.</th><th>内容/楽曲</th><th>演者</th></tr>
+        </thead>
+        <tbody>
+          <tr onclick="alert(1)">
+            <td>1</td>
+            <td>
+              <a href="https://example.com/song">楽曲名</a>
+              <small class="badge bg-nijisanji">NIJISANJI</small>
+            </td>
+            <td>
+              <span
+                class="idol-name"
+                data-brand-id="255"
+                data-nijisanji="valz-01"
+                title="不要属性"
+              >演者A</span>
+              <ruby><rb>演者B</rb><rp>(</rp><rt>えんじゃ</rt><rp>)</rp></ruby>
+              <em>特殊注记</em>
+            </td>
+          </tr>
+          <tr class="part-header"><th colspan="3">【第二部】</th></tr>
+          <tr>
+            <td>2〜4</td>
+            <td colspan="2"><ol><li>曲A</li><li>曲B</li></ol></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
   </body>
 </html>
 """
@@ -108,6 +113,7 @@ class ImasSetlistDocumentParserTests(unittest.TestCase):
             document.palette_stylesheet_url,
             "https://imas-db.jp/css/imas.min.css?v=20260516",
         )
+        self.assertEqual(document.theme_brand_id, 8)
         self.assertEqual(document.table_count, 1)
         self.assertEqual(document.row_count, 4)
         self.assertIn("<ruby>", document.tables_html)
@@ -197,6 +203,24 @@ class ImasSetlistDocumentParserTests(unittest.TestCase):
             "setlist_palette_stylesheet_missing",
         )
 
+    def test_parse_uses_general_theme_for_unbranded_section(self) -> None:
+        """
+        多品牌官网区块没有单一品牌 ID 时应使用综合企划色。
+
+        Returns:
+            None: 测试方法无返回值。
+
+        Raises:
+            AssertionError: 当解析器没有返回综合企划品牌 ID 时抛出。
+        """
+        source = _source(
+            SOURCE_HTML.replace(' data-brand-id="8"', "", 1)
+        )
+
+        document = ImasSetlistDocumentParser().parse(source)
+
+        self.assertEqual(document.theme_brand_id, 0)
+
 
 class ImasSetlistHtmlRendererTests(unittest.TestCase):
     """验证已经确认的单张 1280px 图片样式。"""
@@ -220,7 +244,9 @@ class ImasSetlistHtmlRendererTests(unittest.TestCase):
             'font-family: "Noto Sans CJK JP", sans-serif;',
             rendered,
         )
+        self.assertIn('data-theme-brand-id="8"', rendered)
         self.assertIn("© imas-db.jp", rendered)
+        self.assertIn("天海春香Agent 生成", rendered)
         self.assertNotIn("[by imas-db.jp]", rendered)
         self.assertNotIn(document.source_url, rendered)
         self.assertNotIn("https://imas-db.jp/css/", rendered)
@@ -252,6 +278,7 @@ class BrowserImasSetlistPaletteApplierTests(unittest.TestCase):
         BrowserImasSetlistPaletteApplier().apply(
             page,
             stylesheet_url,
+            8,
             12_000,
         )
 
@@ -259,8 +286,11 @@ class BrowserImasSetlistPaletteApplierTests(unittest.TestCase):
         script, arguments = page.evaluate.call_args.args
         self.assertIn("border-bottom-color", script)
         self.assertIn("background-color", script)
+        self.assertIn("--setlist-pink", script)
+        self.assertIn('className = "section"', script)
         self.assertIn("stylesheet.remove()", script)
         self.assertEqual(arguments["stylesheetUrl"], stylesheet_url)
+        self.assertEqual(arguments["themeBrandId"], 8)
         self.assertEqual(arguments["timeoutMs"], 12_000)
 
     def test_apply_reports_stylesheet_load_failure(self) -> None:
@@ -280,6 +310,7 @@ class BrowserImasSetlistPaletteApplierTests(unittest.TestCase):
             BrowserImasSetlistPaletteApplier().apply(
                 page,
                 "https://imas-db.jp/css/imas.min.css?v=20260516",
+                8,
                 12_000,
             )
 
@@ -306,6 +337,7 @@ class BrowserImasSetlistPaletteApplierTests(unittest.TestCase):
             BrowserImasSetlistPaletteApplier().apply(
                 page,
                 "https://example.com/css/imas.min.css",
+                8,
                 12_000,
             )
 
