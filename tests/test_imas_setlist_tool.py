@@ -406,6 +406,30 @@ class ImasSetlistServiceTests(unittest.TestCase):
 class ImasSetlistToolWrapperTests(unittest.TestCase):
     """验证两个 LangChain 工具的公开参数和错误输出。"""
 
+    def test_tool_descriptions_expose_idolmaster_setlist_intent(self) -> None:
+        """
+        工具描述应包含偶像大师、演唱会与歌单等意图检索关键词。
+
+        Returns:
+            None: 测试方法无返回值。
+
+        Raises:
+            AssertionError: 当工具描述缺少关键意图词时由断言抛出。
+        """
+        for current_tool in (imas_setlist_search, imas_setlist_get):
+            self.assertIn("偶像大师", current_tool.description)
+            self.assertIn("演唱会", current_tool.description)
+            self.assertIn("歌单", current_tool.description)
+            self.assertIn("Setlist", current_tool.description)
+        self.assertIn(
+            "imas_setlist_get",
+            imas_setlist_search.description,
+        )
+        self.assertIn(
+            "imas_setlist_search",
+            imas_setlist_get.description,
+        )
+
     def test_search_tool_exposes_only_query_parameter(self) -> None:
         """
         搜索工具应只要求 query，不暴露 limit 或候选 ID。

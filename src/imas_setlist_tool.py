@@ -584,13 +584,19 @@ def _failure_payload(
 @tool("imas_setlist_search")
 def imas_setlist_search(query: str) -> str:
     """
-    在 imas-db 活动索引中搜索全部 Setlist 候选。
+    搜索偶像大师（THE IDOLM@STER／アイマス）企划的演唱会歌单候选。
 
-    候选只包含 candidate_id、title 和 day。获取曲目时必须把返回的
-    candidate_id 原样传给 ``imas_setlist_get``，不得猜测候选 ID。
+    当用户询问偶像大师各品牌或企划的演唱会、Live、活动歌单
+    （Setlist）、曲目表、演唱曲目，或“某场演出唱了什么”时，先调用
+    本工具。可使用活动名、公演名、年份、DAY 或品牌关键词搜索
+    imas-db；本工具返回全部匹配候选，每项只包含 candidate_id、title
+    和 day。
+
+    获取某一场演出的具体歌单时，必须把返回的 candidate_id 原样传给
+    ``imas_setlist_get``，不得自行猜测候选 ID。
 
     Args:
-        query (str): 非空自然语言查询，可包含活动名、年份或 DAY。
+        query (str): 非空搜索词，例如活动名、年份、品牌或 DAY。
 
     Returns:
         str: JSON 字符串形式的全部匹配候选。
@@ -611,10 +617,15 @@ def imas_setlist_search(query: str) -> str:
 @tool("imas_setlist_get")
 def imas_setlist_get(candidate_id: str) -> str:
     """
-    使用搜索结果中的精确 candidate_id 获取 Setlist。
+    获取指定偶像大师演唱会、Live 或活动的完整歌单（Setlist）。
 
-    曲目仅包含 no、title、brand 和 performers，并附活动 title、day
-    与 source_url。
+    仅在 ``imas_setlist_search`` 找到目标场次后调用，并原样传入搜索
+    结果中的 candidate_id。返回该场演出的活动标题、日期，以及按演出
+    顺序排列的曲目表；每首曲目仅包含序号 no、歌名 title、偶像大师
+    品牌或企划 brand、演唱者 performers，同时附上 imas-db 来源链接。
+
+    适合回答“这场偶像大师演出有哪些歌”“第几首是什么歌”“谁演唱了
+    哪首歌”等需要精确歌单内容的问题。
 
     Args:
         candidate_id (str): 搜索工具返回的精确候选 ID。
