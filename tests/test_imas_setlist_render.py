@@ -63,6 +63,12 @@ SOURCE_HTML = """
           </tr>
         </tbody>
       </table>
+      <p class="notes">
+        (*) 29-31曲目はアンコール
+        <a href="https://example.com/note">注記リンク</a>
+        <em>補足</em>
+      </p>
+      <p class="advertisement">広告</p>
     </div>
   </body>
 </html>
@@ -121,6 +127,17 @@ class ImasSetlistDocumentParserTests(unittest.TestCase):
         self.assertIn('data-nijisanji="valz-01"', document.tables_html)
         self.assertIn('data-brand-id="255"', document.tables_html)
         self.assertIn("特殊注记", document.tables_html)
+        self.assertIn(
+            '<p class="notes">',
+            document.tables_html,
+        )
+        self.assertIn(
+            "(*) 29-31曲目はアンコール",
+            document.tables_html,
+        )
+        self.assertIn("注記リンク", document.tables_html)
+        self.assertIn("補足", document.tables_html)
+        self.assertNotIn("広告", document.tables_html)
         self.assertNotIn("onclick", document.tables_html)
         self.assertNotIn("href=", document.tables_html)
         self.assertNotIn("title=", document.tables_html)
@@ -245,6 +262,11 @@ class ImasSetlistHtmlRendererTests(unittest.TestCase):
             rendered,
         )
         self.assertIn('data-theme-brand-id="8"', rendered)
+        self.assertIn(".setlist-content > .notes", rendered)
+        self.assertIn(
+            "(*) 29-31曲目はアンコール",
+            rendered,
+        )
         self.assertIn("© imas-db.jp", rendered)
         self.assertIn("天海春香Agent 生成", rendered)
         self.assertNotIn("[by imas-db.jp]", rendered)

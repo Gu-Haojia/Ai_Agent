@@ -44,6 +44,7 @@ IMAS_SETLIST_ALLOWED_TAGS: Final[frozenset[str]] = frozenset(
         "rp",
         "ol",
         "li",
+        "p",
     }
 )
 IMAS_SETLIST_ALLOWED_ATTRIBUTES: Final[frozenset[str]] = frozenset(
@@ -289,6 +290,15 @@ table.tracklist .additional {
   color: #666;
   font-size: 88.8%;
 }
+.setlist-content > .notes {
+  margin: 0;
+  padding: 10px 16px 11px;
+  color: #666;
+  border-bottom: 1px solid var(--setlist-border);
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1.45;
+}
 .badge {
   display: inline-block;
   margin-left: 3px;
@@ -494,13 +504,18 @@ class ImasSetlistDocumentParser:
                 "Setlist 页面没有可渲染的曲目表。",
             )
         theme_brand_id = self._resolve_theme_brand_id(tables)
-        sanitized_tables: list[str] = []
+        sanitized_content: list[str] = []
         row_count = 0
         for table in tables:
             cleaned, table_warnings = self._sanitize_table(table)
             warnings.extend(table_warnings)
             row_count += len(cleaned.select("tr"))
-            sanitized_tables.append(str(cleaned))
+            sanitized_content.append(str(cleaned))
+            cleaned_notes, note_warnings = (
+                self._sanitize_following_notes(table)
+            )
+            warnings.extend(note_warnings)
+            sanitized_content.extend(str(note) for note in cleaned_notes)
         if row_count <= 0:
             raise ImasSetlistRenderError(
                 "setlist_rows_missing",
@@ -513,8 +528,8 @@ class ImasSetlistDocumentParser:
             source_url=source.source_url,
             palette_stylesheet_url=palette_stylesheet_url,
             theme_brand_id=theme_brand_id,
-            tables_html="\n".join(sanitized_tables),
-            table_count=len(sanitized_tables),
+            tables_html="\n".join(sanitized_content),
+            table_count=len(tables),
             row_count=row_count,
             warnings=tuple(dict.fromkeys(warnings)),
         )
@@ -564,6 +579,91 @@ class ImasSetlistDocumentParser:
             raise ImasSetlistRenderError(
                 "setlist_text_changed",
                 "Setlist 清洗前后可见文字不一致。",
+            )
+        return cloned, tuple(dict.fromkeys(warnings))
+
+    def _sanitize_following_notes(
+        self,
+        table: Tag,
+    ) -> tuple[list[Tag], tuple[str, ...]]:
+        """
+        清洗紧邻当前歌单表格的全部官网注解段落。
+
+        Args:
+            table (Tag): 原始 tracklist 表格。
+
+        Returns:
+            tuple[list[Tag], tuple[str, ...]]: 安全注解及兼容警告。
+
+        Raises:
+            ImasSetlistRenderError: 当注解无法安全克隆或文字变化时抛出。
+        """
+        cleaned_notes: list[Tag] = []
+        warnings: list[str] = []
+        for sibling in table.next_siblings:
+            if isinstance(sibling, Comment):
+                continue
+            if isinstance(sibling, str):
+                if not sibling.strip():
+                    continue
+                break
+            if not isinstance(sibling, Tag):
+                break
+            if (
+                sibling.name != "p"
+                or "notes" not in sibling.get("class", [])
+            ):
+                break
+            cleaned, note_warnings = self._sanitize_note(sibling)
+            cleaned_notes.append(cleaned)
+            warnings.extend(note_warnings)
+        return cleaned_notes, tuple(dict.fromkeys(warnings))
+
+    def _sanitize_note(self, note: Tag) -> tuple[Tag, tuple[str, ...]]:
+        """
+        清洗单条官网注解，并保留其中全部可见文字。
+
+        Args:
+            note (Tag): 原始 p.notes 注解。
+
+        Returns:
+            tuple[Tag, tuple[str, ...]]: 清洗后的注解与兼容警告。
+
+        Raises:
+            ImasSetlistRenderError: 当注解克隆失败或可见文字变化时抛出。
+        """
+        source_text = self._clean_text(note.get_text(" ", strip=True))
+        cloned_soup = BeautifulSoup(str(note), "html.parser")
+        cloned = cloned_soup.select_one("p.notes")
+        if not isinstance(cloned, Tag):
+            raise ImasSetlistRenderError(
+                "setlist_note_invalid",
+                "Setlist 注解无法安全克隆。",
+            )
+        for comment in cloned.find_all(
+            string=lambda value: isinstance(value, Comment)
+        ):
+            comment.extract()
+
+        warnings: list[str] = []
+        for node in [cloned, *list(cloned.find_all(True))]:
+            if node.name not in IMAS_SETLIST_ALLOWED_TAGS:
+                warnings.append(f"unwrapped_tag:{node.name}")
+                node.unwrap()
+                continue
+            node.attrs = {
+                key: value
+                for key, value in node.attrs.items()
+                if (
+                    key in IMAS_SETLIST_ALLOWED_ATTRIBUTES
+                    or key.startswith("data-")
+                )
+            }
+        cleaned_text = self._clean_text(cloned.get_text(" ", strip=True))
+        if cleaned_text != source_text:
+            raise ImasSetlistRenderError(
+                "setlist_note_text_changed",
+                "Setlist 注解清洗前后可见文字不一致。",
             )
         return cloned, tuple(dict.fromkeys(warnings))
 
