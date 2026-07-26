@@ -7,15 +7,19 @@ imas-db Setlist 搜索与详情查询工具。
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 import re
 import unicodedata
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup, Tag
-from langchain_core.tools import tool
+from langchain_core.tools import BaseTool, tool
 import requests
+
+if TYPE_CHECKING:
+    from src.imas_setlist_render import ImasSetlistRenderedImage
 
 
 IMAS_SETLIST_INDEX_URL = "https://imas-db.jp/song/event/"
@@ -23,6 +27,27 @@ IMAS_SETLIST_CANDIDATE_PREFIX = "imas-setlist:"
 IMAS_SETLIST_USER_AGENT = "LangGraph-ImasSetlistTool/1.0"
 
 HttpGet = Callable[..., requests.Response]
+ImageSink = Callable[["ImasSetlistRenderedImage"], None]
+
+
+@dataclass(frozen=True, slots=True)
+class ImasSetlistPageSource:
+    """
+    表示已通过索引校验的 imas-db Setlist 详情页来源。
+
+    Args:
+        candidate_id (str): 搜索工具返回的候选 ID。
+        candidate_title (str): 索引页候选标题。
+        day (str): 索引页活动日期，可为空。
+        source_url (str): 通过校验的详情页 URL。
+        html (str): 当前请求得到的详情页 HTML。
+    """
+
+    candidate_id: str
+    candidate_title: str
+    day: str
+    source_url: str
+    html: str
 
 
 class ImasSetlistToolError(RuntimeError):
@@ -125,16 +150,39 @@ class ImasSetlistClient:
             AssertionError: 当候选 ID、索引或详情结构非法时抛出。
             ImasSetlistToolError: 当候选不存在或页面请求失败时抛出。
         """
+        source = self.fetch_source(candidate_id)
+        title, tracks = self._parse_detail(source.html)
+        return {
+            "status": "success",
+            "title": title,
+            "day": source.day,
+            "tracks": tracks,
+            "source_url": source.source_url,
+        }
+
+    def fetch_source(self, candidate_id: str) -> ImasSetlistPageSource:
+        """
+        校验候选 ID，并获取当前详情页 HTML。
+
+        Args:
+            candidate_id (str): 搜索工具返回的精确候选 ID。
+
+        Returns:
+            ImasSetlistPageSource: 索引元信息和详情页 HTML。
+
+        Raises:
+            AssertionError: 当候选 ID 格式或详情 URL 非法时抛出。
+            ImasSetlistToolError: 当候选不存在或页面请求失败时抛出。
+        """
         normalized_id = candidate_id.strip()
         assert re.fullmatch(
             rf"{re.escape(IMAS_SETLIST_CANDIDATE_PREFIX)}[A-Za-z0-9_.-]+",
             normalized_id,
         ), "candidate_id 格式非法"
-        candidates = self._load_candidates()
         candidate = next(
             (
                 item
-                for item in candidates
+                for item in self._load_candidates()
                 if item["candidate_id"] == normalized_id
             ),
             None,
@@ -144,17 +192,15 @@ class ImasSetlistClient:
                 "candidate_not_found",
                 "candidate_id 不存在，请先调用 imas_setlist_search。",
             )
-
         source_url = str(candidate["source_url"])
         self._assert_detail_url(source_url)
-        title, tracks = self._parse_detail(self._fetch_html(source_url))
-        return {
-            "status": "success",
-            "title": title,
-            "day": candidate["day"],
-            "tracks": tracks,
-            "source_url": source_url,
-        }
+        return ImasSetlistPageSource(
+            candidate_id=normalized_id,
+            candidate_title=str(candidate["title"]),
+            day=str(candidate["day"]),
+            source_url=source_url,
+            html=self._fetch_html(source_url),
+        )
 
     def _load_candidates(self) -> list[dict[str, str]]:
         """
@@ -242,6 +288,7 @@ class ImasSetlistClient:
                     (
                         candidate_id,
                         title,
+                        *self._search_aliases(slug, title),
                         parent_text,
                         item_text,
                         anchor_text,
@@ -281,7 +328,10 @@ class ImasSetlistClient:
                 self._clean_text(node.get_text(" ", strip=True))
                 for node in table.select("thead th")
             ]
-            assert headers == ["No.", "楽曲", "演者"], (
+            assert headers in (
+                ["No.", "楽曲", "演者"],
+                ["No.", "内容/楽曲", "演者"],
+            ), (
                 f"Setlist 表头不符合预期：{headers}"
             )
             for row in table.select("tbody tr"):
@@ -305,14 +355,19 @@ class ImasSetlistClient:
             dict[str, str | None] | None: 最小曲目结构或 None。
 
         Raises:
-            AssertionError: 当有序号曲目缺少标题或演者时抛出。
+            AssertionError: 当有序号曲目列数异常或缺少标题时抛出。
         """
+        if "part-header" in row.get("class", []):
+            return None
         cells = row.find_all("td", recursive=False)
-        if len(cells) != 3:
+        if not cells:
             return None
         no = self._clean_text(cells[0].get_text(" ", strip=True))
         if not no:
             return None
+        assert len(cells) in {2, 3}, (
+            f"第 {no} 首曲目的列数不符合预期：{len(cells)}"
+        )
 
         title_cell = BeautifulSoup(str(cells[1]), "html.parser").find("td")
         assert isinstance(title_cell, Tag), "曲目标题单元格结构非法"
@@ -324,17 +379,51 @@ class ImasSetlistClient:
         for node in title_cell.select("small.badge, .visually-hidden"):
             node.decompose()
         title = self._clean_text(title_cell.get_text(" ", strip=True))
-        performers = self._clean_text(cells[2].get_text(" ", strip=True))
+        performers = (
+            self._clean_text(cells[2].get_text(" ", strip=True))
+            if len(cells) == 3
+            else ""
+        )
         performers = re.sub(r"\s+,\s*", ", ", performers)
         performers = re.sub(r"\s+\)", ")", performers)
         assert title, f"第 {no} 首曲目缺少标题"
-        assert performers, f"第 {no} 首曲目缺少演者"
         return {
             "no": no,
             "title": title,
             "brand": brand,
             "performers": performers,
         }
+
+    @staticmethod
+    def _search_aliases(slug: str, title: str) -> tuple[str, ...]:
+        """
+        为页面中可确定的常用活动简称生成搜索别名。
+
+        Args:
+            slug (str): 详情页文件名中的稳定标识。
+            title (str): 索引页活动标题。
+
+        Returns:
+            tuple[str, ...]: 可加入内部搜索文本的别名。
+
+        Raises:
+            AssertionError: 当 slug 或 title 为空时抛出。
+        """
+        assert slug.strip(), "slug 不能为空"
+        assert title.strip(), "title 不能为空"
+        aliases: list[str] = []
+        day_match = re.search(r"(?:^|[_-])day(\d+)(?:$|[_-])", slug, re.I)
+        if day_match is None:
+            day_match = re.search(r"\bday\s*(\d+)\b", title, re.I)
+        if day_match is not None:
+            aliases.append(f"d{day_match.group(1)}")
+
+        compact_title = ImasSetlistClient._compact_text(title)
+        if "mstersofidolworld" in compact_title:
+            years = re.findall(r"(?:19|20)\d{2}", compact_title)
+            for year in years:
+                aliases.extend((f"moiw{year}", f"moiw{year[-2:]}"))
+        return tuple(dict.fromkeys(aliases))
 
     def _fetch_html(self, url: str) -> str:
         """
@@ -614,33 +703,86 @@ def imas_setlist_search(query: str) -> str:
     return json.dumps(result, ensure_ascii=False)
 
 
-@tool("imas_setlist_get")
-def imas_setlist_get(candidate_id: str) -> str:
+def build_imas_setlist_get_tool(
+    image_sink: ImageSink | None = None,
+) -> BaseTool:
     """
-    获取指定偶像大师演唱会、Live 或活动的完整歌单（Setlist）。
-
-    仅在 ``imas_setlist_search`` 找到目标场次后调用，并原样传入搜索
-    结果中的 candidate_id。返回该场演出的活动标题、日期，以及按演出
-    顺序排列的曲目表；每首曲目仅包含序号 no、歌名 title、偶像大师
-    品牌或企划 brand、演唱者 performers，同时附上 imas-db 来源链接。
-
-    适合回答“这场偶像大师演出有哪些歌”“第几首是什么歌”“谁演唱了
-    哪首歌”等需要精确歌单内容的问题。
+    创建可选输出图片的 Setlist Get 工具。
 
     Args:
-        candidate_id (str): 搜索工具返回的精确候选 ID。
+        image_sink (ImageSink | None): 接收渲染图片结果的回调。
 
     Returns:
-        str: JSON 字符串形式的活动与曲目。
+        BaseTool: 名为 imas_setlist_get 的 LangChain 工具。
 
     Raises:
-        AssertionError: 当 candidate_id 为空或过长时抛出。
+        None: 本函数不主动抛出异常。
     """
-    normalized_id = candidate_id.strip()
-    assert normalized_id, "candidate_id 不能为空"
-    assert len(normalized_id) <= 200, "candidate_id 长度不能超过 200"
-    try:
-        result = ImasSetlistClient().get(normalized_id)
-    except (ImasSetlistToolError, AssertionError) as exc:
-        return _failure_payload("get", normalized_id, exc)
-    return json.dumps(result, ensure_ascii=False)
+
+    @tool("imas_setlist_get")
+    def get_tool(candidate_id: str, render_image: bool = False) -> str:
+        """
+        获取偶像大师演唱会、Live 或活动的歌单（Setlist）。
+
+        仅在 ``imas_setlist_search`` 找到目标场次后调用，并原样传入搜索
+        结果中的 candidate_id。默认返回结构化曲目；当用户明确要求图片、
+        长图或适合 QQ 阅读的歌单时，将 render_image 设为 true，工具会
+        生成并发送一张 Setlist 图片，只返回渲染状态而不重复返回曲目。
+
+        Args:
+            candidate_id (str): 搜索工具返回的精确候选 ID。
+            render_image (bool): 是否生成图片，默认 false。
+
+        Returns:
+            str: JSON 字符串形式的曲目数据或图片渲染状态。
+
+        Raises:
+            AssertionError: 当参数非法时抛出。
+        """
+        from src.imas_setlist_render import (
+            ImasSetlistImageService,
+            ImasSetlistRenderError,
+        )
+
+        normalized_id = candidate_id.strip()
+        assert normalized_id, "candidate_id 不能为空"
+        assert len(normalized_id) <= 200, "candidate_id 长度不能超过 200"
+        assert isinstance(render_image, bool), "render_image 必须是布尔值"
+        try:
+            if not render_image:
+                result = ImasSetlistClient().get(normalized_id)
+                return json.dumps(result, ensure_ascii=False)
+            if image_sink is None:
+                raise ImasSetlistRenderError(
+                    "image_output_unavailable",
+                    "当前运行环境没有配置 Setlist 图片输出。",
+                )
+            rendered = ImasSetlistImageService().render(normalized_id)
+            image_sink(rendered)
+            result = {
+                "status": "rendered",
+                "candidate_id": rendered.candidate_id,
+                "title": rendered.title,
+                "day": rendered.day,
+                "image_count": 1,
+                "warnings": list(rendered.warnings),
+            }
+            return json.dumps(result, ensure_ascii=False)
+        except (ImasSetlistToolError, AssertionError) as exc:
+            return _failure_payload("get", normalized_id, exc)
+        except ImasSetlistRenderError as exc:
+            return json.dumps(
+                {
+                    "status": "failed",
+                    "action": "get",
+                    "input": normalized_id,
+                    "error": exc.error_code,
+                    "message": str(exc),
+                },
+                ensure_ascii=False,
+            )
+
+    return get_tool
+
+
+imas_setlist_get: BaseTool = build_imas_setlist_get_tool()

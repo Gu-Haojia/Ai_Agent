@@ -11,6 +11,8 @@
 """
 
 from __future__ import annotations
+
+import base64
 import json
 import os
 import re
@@ -100,7 +102,14 @@ from src.netease_music_tool import (
     NeteaseMusicToolError,
     OneBotMusicCardSender,
 )
-from src.imas_setlist_tool import imas_setlist_get, imas_setlist_search
+from src.imas_setlist_render import (
+    ImasSetlistRenderedImage,
+    ImasSetlistRenderError,
+)
+from src.imas_setlist_tool import (
+    build_imas_setlist_get_tool,
+    imas_setlist_search,
+)
 
 ANILIST_SORT_CHOICES_TEXT: str = ", ".join(ANILIST_MEDIA_SORTS)
 
@@ -1841,6 +1850,45 @@ class SQLCheckpointAgentStreamingPlus:
         self._generated_images = []
         return images
 
+    def _store_imas_setlist_image(
+        self,
+        rendered: ImasSetlistRenderedImage,
+    ) -> None:
+        """
+        将 Setlist PNG 写入现有生成图片队列。
+
+        Args:
+            rendered (ImasSetlistRenderedImage): 已渲染的单张 Setlist PNG。
+
+        Returns:
+            None: 图片成功入队时无返回值。
+
+        Raises:
+            AssertionError: 当图片类型或 PNG 内容非法时抛出。
+            ImasSetlistRenderError: 当图片无法写入生图队列时抛出。
+        """
+        assert isinstance(
+            rendered,
+            ImasSetlistRenderedImage,
+        ), "rendered 必须是 ImasSetlistRenderedImage"
+        assert rendered.png_bytes.startswith(
+            b"\x89PNG\r\n\x1a\n"
+        ), "Setlist 图片必须是 PNG"
+        manager = self._require_image_manager()
+        encoded = base64.b64encode(rendered.png_bytes).decode("ascii")
+        try:
+            image = manager.save_generated_image(
+                encoded,
+                f"imas-db Setlist: {rendered.title}",
+                "image/png",
+            )
+        except OSError as exc:
+            raise ImasSetlistRenderError(
+                "image_queue_write_failed",
+                f"Setlist 图片写入生图队列失败：{exc}",
+            ) from exc
+        self._generated_images.append(image)
+
     def _require_image_manager(self) -> ImageStorageManager:
         """
         获取已配置的图像管理器。
@@ -2876,7 +2924,11 @@ class SQLCheckpointAgentStreamingPlus:
                 tools.append(netease_music_search)
                 tools.append(send_netease_music_card)
                 tools.append(imas_setlist_search)
-                tools.append(imas_setlist_get)
+                tools.append(
+                    build_imas_setlist_get_tool(
+                        image_sink=self._store_imas_setlist_image,
+                    )
+                )
 
         @tool  # raw api 1.39.1
         def generate_local_image(

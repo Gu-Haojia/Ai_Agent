@@ -14,6 +14,7 @@ from src.imas_setlist_tool import (
     IMAS_SETLIST_INDEX_URL,
     ImasSetlistClient,
     ImasSetlistToolError,
+    build_imas_setlist_get_tool,
     imas_setlist_get,
     imas_setlist_search,
 )
@@ -68,6 +69,24 @@ INDEX_HTML = """
 </html>
 """
 
+MOIW_INDEX_HTML = """
+<html>
+  <body>
+    <main>
+      <ul>
+        <li>
+          <a
+            href="./idolmaster_idolworld2025_day2.html"
+            title="THE IDOLM@STER M@STERS OF IDOL WORLD 2025 DAY2"
+          >M@STERS OF IDOL WORLD 2025 DAY2</a>
+          <small class="date">- 2025/12/14(日)</small>
+        </li>
+      </ul>
+    </main>
+  </body>
+</html>
+"""
+
 
 DETAIL_HTML = """
 <html>
@@ -103,6 +122,49 @@ DETAIL_HTML = """
           <td>2</td>
           <td>新曲 (short ver.)</td>
           <td>出演者A 出演者B</td>
+        </tr>
+      </tbody>
+    </table>
+  </body>
+</html>
+"""
+
+NON_STANDARD_DETAIL_HTML = """
+<html>
+  <body>
+    <h1 id="page_title">既存特殊形式公演</h1>
+    <table class="tracklist">
+      <thead>
+        <tr><th>No.</th><th>内容/楽曲</th><th>演者</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>1</td>
+          <td>
+            初
+            <small class="badge bg-imas-brand-gakuen">学園</small>
+          </td>
+        </tr>
+        <tr>
+          <td>10〜25</td>
+          <td colspan="2">
+            会場の全員で歌唱するユニット曲メドレー
+            <ol>
+              <li>運命光年</li>
+              <li>We're the one</li>
+            </ol>
+          </td>
+        </tr>
+        <tr class="part-header">
+          <th colspan="3">【第二部】</th>
+        </tr>
+        <tr class="part-header">
+          <td colspan="3">「みんな元気!!!!!」メドレー ここまで</td>
+        </tr>
+        <tr>
+          <td>26</td>
+          <td>終曲</td>
+          <td><ruby><rb>特殊演者</rb><rp>(</rp><rt>とくしゅ</rt><rp>)</rp></ruby></td>
         </tr>
       </tbody>
     </table>
@@ -195,6 +257,28 @@ class ImasSetlistIndexParserTests(unittest.TestCase):
             "day",
         })
 
+    def test_search_supports_moiw_year_and_short_day_aliases(self) -> None:
+        """
+        MOIW25 d2 应命中 M@STERS OF IDOL WORLD 2025 DAY2。
+
+        Returns:
+            None: 测试方法无返回值。
+
+        Raises:
+            AssertionError: 当常用简称无法命中时由断言抛出。
+        """
+        client = ImasSetlistClient(
+            http_get=mock.Mock(return_value=_response(MOIW_INDEX_HTML))
+        )
+
+        result = client.search("MOIW25 d2")
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(
+            result["candidates"][0]["candidate_id"],
+            "imas-setlist:idolmaster_idolworld2025_day2",
+        )
+
 
 class ImasSetlistPageParserTests(unittest.TestCase):
     """验证详情页只解析有序号的最小曲目字段。"""
@@ -249,6 +333,47 @@ class ImasSetlistPageParserTests(unittest.TestCase):
 
         with self.assertRaisesRegex(AssertionError, "表头"):
             ImasSetlistClient()._parse_detail(changed_html)
+
+    def test_parse_tracks_accepts_existing_non_standard_rows(self) -> None:
+        """
+        合法特殊曲目不得丢失，段落标题不得误判为曲目。
+
+        Returns:
+            None: 测试方法无返回值。
+
+        Raises:
+            AssertionError: 当现有特殊结构未被完整转换时由断言抛出。
+        """
+        _, tracks = ImasSetlistClient()._parse_detail(
+            NON_STANDARD_DETAIL_HTML
+        )
+
+        self.assertEqual(
+            tracks,
+            [
+                {
+                    "no": "1",
+                    "title": "初",
+                    "brand": "学園",
+                    "performers": "",
+                },
+                {
+                    "no": "10〜25",
+                    "title": (
+                        "会場の全員で歌唱するユニット曲メドレー "
+                        "運命光年 We're the one"
+                    ),
+                    "brand": None,
+                    "performers": "",
+                },
+                {
+                    "no": "26",
+                    "title": "終曲",
+                    "brand": None,
+                    "performers": "特殊演者",
+                },
+            ],
+        )
 
 
 class ImasSetlistServiceTests(unittest.TestCase):
@@ -447,7 +572,7 @@ class ImasSetlistToolWrapperTests(unittest.TestCase):
 
     def test_get_tool_exposes_only_candidate_id_parameter(self) -> None:
         """
-        Get 工具应只要求 candidate_id，不与搜索参数混用。
+        Get 工具应要求 candidate_id，并提供默认关闭的图片参数。
 
         Returns:
             None: 测试方法无返回值。
@@ -457,8 +582,12 @@ class ImasSetlistToolWrapperTests(unittest.TestCase):
         """
         schema = imas_setlist_get.tool_call_schema.model_json_schema()
 
-        self.assertEqual(set(schema["properties"]), {"candidate_id"})
+        self.assertEqual(
+            set(schema["properties"]),
+            {"candidate_id", "render_image"},
+        )
         self.assertEqual(schema["required"], ["candidate_id"])
+        self.assertFalse(schema["properties"]["render_image"]["default"])
 
     def test_search_tool_returns_service_payload(self) -> None:
         """
@@ -516,6 +645,50 @@ class ImasSetlistToolWrapperTests(unittest.TestCase):
         payload = json.loads(output)
         self.assertEqual(payload["status"], "failed")
         self.assertEqual(payload["error"], "upstream_timeout")
+
+    def test_get_tool_image_mode_sends_image_and_returns_status_only(self) -> None:
+        """
+        图片模式应写入图片回调，且不向模型重复返回曲目数据。
+
+        Returns:
+            None: 测试方法无返回值。
+
+        Raises:
+            AssertionError: 当图片模式状态或回调不符合预期时抛出。
+        """
+        rendered = mock.Mock()
+        rendered.candidate_id = "imas-setlist:idolmaster_iwsf_day3"
+        rendered.title = "IWSF DAY3"
+        rendered.day = "2026/07/26(日)"
+        rendered.warnings = ()
+        image_sink = mock.Mock()
+        get_tool = build_imas_setlist_get_tool(image_sink=image_sink)
+        with mock.patch(
+            "src.imas_setlist_render.ImasSetlistImageService.render",
+            return_value=rendered,
+        ) as render:
+            output = get_tool.invoke(
+                {
+                    "candidate_id": rendered.candidate_id,
+                    "render_image": True,
+                }
+            )
+
+        payload = json.loads(output)
+        self.assertEqual(
+            payload,
+            {
+                "status": "rendered",
+                "candidate_id": rendered.candidate_id,
+                "title": "IWSF DAY3",
+                "day": "2026/07/26(日)",
+                "image_count": 1,
+                "warnings": [],
+            },
+        )
+        self.assertNotIn("tracks", payload)
+        image_sink.assert_called_once_with(rendered)
+        render.assert_called_once_with(rendered.candidate_id)
 
 
 if __name__ == "__main__":
