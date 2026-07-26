@@ -153,6 +153,10 @@ class ImasSetlistHtmlRendererTests(unittest.TestCase):
         rendered = ImasSetlistHtmlRenderer().render(document)
 
         self.assertIn("width: 640px", rendered)
+        self.assertIn(
+            'font-family: "Noto Sans CJK JP", sans-serif;',
+            rendered,
+        )
         self.assertIn("© imas-db.jp", rendered)
         self.assertNotIn("[by imas-db.jp]", rendered)
         self.assertNotIn(document.source_url, rendered)

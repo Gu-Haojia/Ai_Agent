@@ -94,8 +94,7 @@ body {
   margin: 0;
   padding: 0;
   background: var(--setlist-pink);
-  font-family: -apple-system, BlinkMacSystemFont, "Noto Sans JP",
-    "Yu Gothic", "Meiryo", sans-serif;
+  font-family: "Noto Sans CJK JP", sans-serif;
 }
 #setlist-card {
   width: 640px;
