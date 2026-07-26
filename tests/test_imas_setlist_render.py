@@ -12,6 +12,7 @@ from unittest import mock
 from image_storage import GeneratedImage, ImageStorageManager
 from sql_agent_cli_stream_plus import SQLCheckpointAgentStreamingPlus
 from src.imas_setlist_render import (
+    BrowserImasSetlistPaletteApplier,
     BrowserImasSetlistRenderer,
     ImasSetlistDocumentParser,
     ImasSetlistHtmlRenderer,
@@ -24,6 +25,12 @@ from src.imas_setlist_tool import ImasSetlistClient, ImasSetlistPageSource
 
 SOURCE_HTML = """
 <html>
+  <head>
+    <link
+      rel="stylesheet"
+      href="/css/imas.min.css?v=20260516"
+    >
+  </head>
   <body>
     <h1 id="page_title">特殊形式公演</h1>
     <table class="tracklist" style="--tracklist-title-width:25rem">
@@ -97,6 +104,10 @@ class ImasSetlistDocumentParserTests(unittest.TestCase):
 
         self.assertEqual(document.title, "特殊形式公演")
         self.assertEqual(document.day, "")
+        self.assertEqual(
+            document.palette_stylesheet_url,
+            "https://imas-db.jp/css/imas.min.css?v=20260516",
+        )
         self.assertEqual(document.table_count, 1)
         self.assertEqual(document.row_count, 4)
         self.assertIn("<ruby>", document.tables_html)
@@ -134,6 +145,58 @@ class ImasSetlistDocumentParserTests(unittest.TestCase):
             "setlist_title_missing",
         )
 
+    def test_parse_rejects_missing_official_palette_stylesheet(self) -> None:
+        """
+        详情页缺少官方颜色表时应显式失败，不得使用过时的本地颜色。
+
+        Returns:
+            None: 测试方法无返回值。
+
+        Raises:
+            AssertionError: 当解析器未返回预期错误码时抛出。
+        """
+        source = _source(
+            SOURCE_HTML.replace(
+                '<link\n      rel="stylesheet"\n'
+                '      href="/css/imas.min.css?v=20260516"\n'
+                "    >",
+                "",
+            )
+        )
+
+        with self.assertRaises(ImasSetlistRenderError) as context:
+            ImasSetlistDocumentParser().parse(source)
+
+        self.assertEqual(
+            context.exception.error_code,
+            "setlist_palette_stylesheet_missing",
+        )
+
+    def test_parse_rejects_external_palette_stylesheet(self) -> None:
+        """
+        颜色表只允许来自 imas-db.jp 的固定 CSS 路径。
+
+        Returns:
+            None: 测试方法无返回值。
+
+        Raises:
+            AssertionError: 当外部样式表被解析器接受时抛出。
+        """
+        source = _source(
+            SOURCE_HTML.replace(
+                "/css/imas.min.css?v=20260516",
+                "https://example.com/css/imas.min.css",
+            )
+        )
+
+        with self.assertRaises(ImasSetlistRenderError) as context:
+            ImasSetlistDocumentParser().parse(source)
+
+        self.assertEqual(
+            context.exception.error_code,
+            "setlist_palette_stylesheet_missing",
+        )
+
 
 class ImasSetlistHtmlRendererTests(unittest.TestCase):
     """验证已经确认的单张 1280px 图片样式。"""
@@ -161,6 +224,96 @@ class ImasSetlistHtmlRendererTests(unittest.TestCase):
         self.assertNotIn("[by imas-db.jp]", rendered)
         self.assertNotIn(document.source_url, rendered)
         self.assertNotIn("https://imas-db.jp/css/", rendered)
+
+
+class BrowserImasSetlistPaletteApplierTests(unittest.TestCase):
+    """验证官网颜色仅被固化到允许的视觉属性。"""
+
+    def test_apply_uses_official_stylesheet_and_timeout(self) -> None:
+        """
+        颜色应用器应把官网样式地址和超时传入浏览器脚本。
+
+        Returns:
+            None: 测试方法无返回值。
+
+        Raises:
+            AssertionError: 当浏览器调用参数或结果不符合预期时抛出。
+        """
+        page = mock.Mock()
+        page.evaluate.return_value = {
+            "status": "success",
+            "idol_name_count": 2,
+            "badge_count": 1,
+        }
+        stylesheet_url = (
+            "https://imas-db.jp/css/imas.min.css?v=20260516"
+        )
+
+        BrowserImasSetlistPaletteApplier().apply(
+            page,
+            stylesheet_url,
+            12_000,
+        )
+
+        page.evaluate.assert_called_once()
+        script, arguments = page.evaluate.call_args.args
+        self.assertIn("border-bottom-color", script)
+        self.assertIn("background-color", script)
+        self.assertIn("stylesheet.remove()", script)
+        self.assertEqual(arguments["stylesheetUrl"], stylesheet_url)
+        self.assertEqual(arguments["timeoutMs"], 12_000)
+
+    def test_apply_reports_stylesheet_load_failure(self) -> None:
+        """
+        官网颜色表加载失败时应返回稳定错误，不得静默使用本地颜色。
+
+        Returns:
+            None: 测试方法无返回值。
+
+        Raises:
+            AssertionError: 当错误类型或错误码不符合预期时抛出。
+        """
+        page = mock.Mock()
+        page.evaluate.return_value = {"status": "load_failed"}
+
+        with self.assertRaises(ImasSetlistRenderError) as context:
+            BrowserImasSetlistPaletteApplier().apply(
+                page,
+                "https://imas-db.jp/css/imas.min.css?v=20260516",
+                12_000,
+            )
+
+        self.assertEqual(
+            context.exception.error_code,
+            "setlist_palette_stylesheet_failed",
+        )
+
+    def test_apply_rejects_external_stylesheet_before_browser_call(
+        self,
+    ) -> None:
+        """
+        浏览器网络入口应再次拒绝非官方颜色表地址。
+
+        Returns:
+            None: 测试方法无返回值。
+
+        Raises:
+            AssertionError: 当外部地址被加载或错误码不正确时抛出。
+        """
+        page = mock.Mock()
+
+        with self.assertRaises(ImasSetlistRenderError) as context:
+            BrowserImasSetlistPaletteApplier().apply(
+                page,
+                "https://example.com/css/imas.min.css",
+                12_000,
+            )
+
+        self.assertEqual(
+            context.exception.error_code,
+            "setlist_palette_stylesheet_untrusted",
+        )
+        page.evaluate.assert_not_called()
 
 
 class ImasSetlistImageServiceTests(unittest.TestCase):

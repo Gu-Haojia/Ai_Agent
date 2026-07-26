@@ -2,18 +2,23 @@
 imas-db Setlist 原始表格清洗与固定样式单图渲染。
 
 图片后端保留页面中全部 Setlist 表格行和可见文本，只移除链接、事件属性
-及不参与截图的元数据。渲染使用本地固定 CSS，不依赖线上样式文件。
+及不参与截图的元数据。渲染布局使用本地固定 CSS，颜色优先采用详情页指定
+的 imas-db 官方颜色表。
 """
 
 from __future__ import annotations
 
 import html
 from dataclasses import dataclass
-from typing import Final
+from typing import TYPE_CHECKING, Final
+from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup, Comment, Tag
 
 from src.imas_setlist_tool import ImasSetlistClient, ImasSetlistPageSource
+
+if TYPE_CHECKING:
+    from playwright.sync_api import Page
 
 
 IMAS_SETLIST_CSS_WIDTH: Final[int] = 640
@@ -44,6 +49,35 @@ IMAS_SETLIST_ALLOWED_TAGS: Final[frozenset[str]] = frozenset(
 IMAS_SETLIST_ALLOWED_ATTRIBUTES: Final[frozenset[str]] = frozenset(
     {"class", "colspan", "rowspan"}
 )
+IMAS_SETLIST_PALETTE_STYLESHEET_PATHS: Final[frozenset[str]] = frozenset(
+    {
+        "/css/imas.css",
+        "/css/imas.min.css",
+    }
+)
+
+
+def _is_trusted_palette_stylesheet_url(stylesheet_url: str) -> bool:
+    """
+    判断颜色表 URL 是否属于允许访问的 imas-db 官方路径。
+
+    Args:
+        stylesheet_url (str): 待校验的绝对 URL。
+
+    Returns:
+        bool: 仅当 URL 使用官方 HTTPS 主机和固定 CSS 路径时为真。
+
+    Raises:
+        None: 本函数不主动抛出异常。
+    """
+    parsed = urlparse(stylesheet_url)
+    return (
+        parsed.scheme == "https"
+        and parsed.netloc == "imas-db.jp"
+        and parsed.path in IMAS_SETLIST_PALETTE_STYLESHEET_PATHS
+        and not parsed.fragment
+    )
+
 
 IMAS_SETLIST_FIXED_CSS: Final[str] = """
 :root {
@@ -351,6 +385,7 @@ class ImasSetlistRenderDocument:
         title (str): 详情页活动标题。
         day (str): 索引页活动日期，可为空。
         source_url (str): 详情页来源 URL，仅用于内部追踪。
+        palette_stylesheet_url (str): 详情页指定的官方颜色表 URL。
         tables_html (str): 清洗后的全部 Setlist 表格 HTML。
         table_count (int): 表格数量。
         row_count (int): 表格行总数。
@@ -361,6 +396,7 @@ class ImasSetlistRenderDocument:
     title: str
     day: str
     source_url: str
+    palette_stylesheet_url: str
     tables_html: str
     table_count: int
     row_count: int
@@ -443,6 +479,10 @@ class ImasSetlistDocumentParser:
                 "Setlist 详情页缺少活动标题。",
             )
         title = self._clean_text(title_node.get_text(" ", strip=True))
+        palette_stylesheet_url = self._resolve_palette_stylesheet_url(
+            soup,
+            source.source_url,
+        )
         warnings: list[str] = []
 
         tables = soup.select("table.tracklist")
@@ -468,6 +508,7 @@ class ImasSetlistDocumentParser:
             title=title,
             day=source.day.strip(),
             source_url=source.source_url,
+            palette_stylesheet_url=palette_stylesheet_url,
             tables_html="\n".join(sanitized_tables),
             table_count=len(sanitized_tables),
             row_count=row_count,
@@ -521,6 +562,38 @@ class ImasSetlistDocumentParser:
                 "Setlist 清洗前后可见文字不一致。",
             )
         return cloned, tuple(dict.fromkeys(warnings))
+
+    @staticmethod
+    def _resolve_palette_stylesheet_url(
+        soup: BeautifulSoup,
+        source_url: str,
+    ) -> str:
+        """
+        解析并校验详情页声明的 imas-db 官方颜色表地址。
+
+        Args:
+            soup (BeautifulSoup): 详情页 DOM。
+            source_url (str): 已校验的详情页 URL。
+
+        Returns:
+            str: 绝对 HTTPS 官方颜色表 URL。
+
+        Raises:
+            ImasSetlistRenderError: 当页面没有可信颜色表时抛出。
+        """
+        for stylesheet in soup.select(
+            'link[rel~="stylesheet"][href]'
+        ):
+            href = stylesheet.get("href")
+            if not isinstance(href, str) or not href.strip():
+                continue
+            stylesheet_url = urljoin(source_url, href.strip())
+            if _is_trusted_palette_stylesheet_url(stylesheet_url):
+                return stylesheet_url
+        raise ImasSetlistRenderError(
+            "setlist_palette_stylesheet_missing",
+            "Setlist 详情页缺少可信的 imas-db 官方颜色表。",
+        )
 
     @staticmethod
     def _clean_text(value: str) -> str:
@@ -584,12 +657,164 @@ class ImasSetlistHtmlRenderer:
 </html>"""
 
 
+IMAS_SETLIST_APPLY_PALETTE_SCRIPT: Final[str] = """
+async ({stylesheetUrl, timeoutMs}) => {
+  const stylesheet = document.createElement("link");
+  stylesheet.rel = "stylesheet";
+  stylesheet.href = stylesheetUrl;
+
+  const loadStatus = await new Promise((resolve) => {
+    let settled = false;
+    const finish = (status) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      window.clearTimeout(timerId);
+      resolve(status);
+    };
+    stylesheet.addEventListener(
+      "load",
+      () => finish("success"),
+      {once: true}
+    );
+    stylesheet.addEventListener(
+      "error",
+      () => finish("load_failed"),
+      {once: true}
+    );
+    const timerId = window.setTimeout(
+      () => finish("load_failed"),
+      timeoutMs
+    );
+    document.head.appendChild(stylesheet);
+  });
+  if (loadStatus !== "success") {
+    stylesheet.remove();
+    return {status: loadStatus};
+  }
+
+  const isColor = (value) => CSS.supports("color", value);
+  const isBorderStyle = (value) => (
+    CSS.supports("border-bottom-style", value)
+  );
+  let invalidValueCount = 0;
+  const idolNames = Array.from(
+    document.querySelectorAll(".idol-name")
+  );
+  for (const element of idolNames) {
+    const computed = window.getComputedStyle(element);
+    if (
+      !isColor(computed.borderBottomColor)
+      || !isBorderStyle(computed.borderBottomStyle)
+    ) {
+      invalidValueCount += 1;
+      continue;
+    }
+    element.style.setProperty(
+      "border-bottom-color",
+      computed.borderBottomColor,
+      "important"
+    );
+    element.style.setProperty(
+      "border-bottom-style",
+      computed.borderBottomStyle,
+      "important"
+    );
+  }
+
+  const badges = Array.from(document.querySelectorAll(".badge"));
+  for (const element of badges) {
+    const computed = window.getComputedStyle(element);
+    if (
+      !isColor(computed.backgroundColor)
+      || !isColor(computed.color)
+    ) {
+      invalidValueCount += 1;
+      continue;
+    }
+    element.style.setProperty(
+      "background-color",
+      computed.backgroundColor,
+      "important"
+    );
+    element.style.setProperty(
+      "color",
+      computed.color,
+      "important"
+    );
+  }
+
+  stylesheet.remove();
+  await new Promise((resolve) => {
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(resolve);
+    });
+  });
+  if (invalidValueCount > 0) {
+    return {status: "invalid_color"};
+  }
+  return {
+    status: "success",
+    idol_name_count: idolNames.length,
+    badge_count: badges.length,
+  };
+}
+"""
+
+
+class BrowserImasSetlistPaletteApplier:
+    """通过官方 CSS 计算颜色并固化允许的视觉属性。"""
+
+    def apply(
+        self,
+        page: Page,
+        stylesheet_url: str,
+        timeout_ms: int,
+    ) -> None:
+        """
+        临时加载官方颜色表，并将计算结果写入安全内联样式。
+
+        Args:
+            page (Page): 已载入本地固定模板的 Playwright 页面。
+            stylesheet_url (str): 已通过白名单校验的官方颜色表 URL。
+            timeout_ms (int): 样式表加载超时毫秒数。
+
+        Returns:
+            None: 成功时颜色已固化，官方样式表已移除。
+
+        Raises:
+            AssertionError: 当地址为空或超时不为正数时抛出。
+            ImasSetlistRenderError: 当颜色表地址不可信或无法应用时抛出。
+        """
+        assert stylesheet_url.strip(), "stylesheet_url 不能为空"
+        assert timeout_ms > 0, "timeout_ms 必须大于 0"
+        if not _is_trusted_palette_stylesheet_url(stylesheet_url):
+            raise ImasSetlistRenderError(
+                "setlist_palette_stylesheet_untrusted",
+                "Setlist 颜色表地址不属于允许的 imas-db 官方路径。",
+            )
+        result: dict[str, object] = page.evaluate(
+            IMAS_SETLIST_APPLY_PALETTE_SCRIPT,
+            {
+                "stylesheetUrl": stylesheet_url,
+                "timeoutMs": timeout_ms,
+            },
+        )
+        if result["status"] != "success":
+            raise ImasSetlistRenderError(
+                "setlist_palette_stylesheet_failed",
+                "imas-db 官方颜色表加载或颜色解析失败。",
+            )
+
+
 class BrowserImasSetlistRenderer:
     """使用无头 Chromium 将固定模板截图为单张 PNG。"""
 
     def __init__(
         self,
         html_renderer: ImasSetlistHtmlRenderer | None = None,
+        palette_applier: BrowserImasSetlistPaletteApplier | None = None,
         timeout_ms: int = 30_000,
     ) -> None:
         """
@@ -597,6 +822,8 @@ class BrowserImasSetlistRenderer:
 
         Args:
             html_renderer (ImasSetlistHtmlRenderer | None): HTML 渲染器。
+            palette_applier (BrowserImasSetlistPaletteApplier | None):
+                官网颜色应用器。
             timeout_ms (int): 单次页面渲染超时毫秒数。
 
         Returns:
@@ -607,6 +834,9 @@ class BrowserImasSetlistRenderer:
         """
         assert timeout_ms > 0, "timeout_ms 必须大于 0"
         self._html_renderer = html_renderer or ImasSetlistHtmlRenderer()
+        self._palette_applier = (
+            palette_applier or BrowserImasSetlistPaletteApplier()
+        )
         self._timeout_ms = timeout_ms
 
     def render_to_png_bytes(
@@ -655,6 +885,11 @@ class BrowserImasSetlistRenderer:
                         render_html,
                         wait_until="domcontentloaded",
                         timeout=self._timeout_ms,
+                    )
+                    self._palette_applier.apply(
+                        page,
+                        document.palette_stylesheet_url,
+                        self._timeout_ms,
                     )
                     page.evaluate("document.fonts.ready")
                     image_bytes = page.locator("#setlist-card").screenshot(
