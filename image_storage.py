@@ -932,7 +932,7 @@ class ImageStorageManager:
         assert api_key, "缺少 XAI_API_KEY 环境变量"
 
         payload: dict[str, object] = {
-            "model": "grok-imagine-image-quality",
+            "model": "grok-imagine-image",
             "prompt": prompt.strip(),
             "response_format": "b64_json",
         }

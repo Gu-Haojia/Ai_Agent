@@ -364,7 +364,7 @@ class MultimodalUnitTest(unittest.TestCase):
                 "Content-Type": "application/json",
             },
             json={
-                "model": "grok-imagine-image-quality",
+                "model": "grok-imagine-image",
                 "prompt": "draw a cat",
                 "response_format": "b64_json",
                 "aspect_ratio": "16:9",
