@@ -117,6 +117,7 @@ ANILIST_SORT_CHOICES_TEXT: str = ", ".join(ANILIST_MEDIA_SORTS)
 _ENV_COMMON_CHECKED: bool = False
 _ENV_OPENAI_CHECKED: bool = False
 _ENV_GEMINI_CHECKED: bool = False
+_ENV_XAI_CHECKED: bool = False
 
 
 def _ensure_common_env_once() -> None:
@@ -161,6 +162,23 @@ def _ensure_openai_env_once() -> None:
         return
     assert os.environ.get("OPENAI_API_KEY"), "缺少 OPENAI_API_KEY 环境变量。"
     _ENV_OPENAI_CHECKED = True
+
+
+def _ensure_xai_env_once() -> None:
+    """
+    xAI 相关环境校验，仅首次需要 xAI 时执行。
+
+    Returns:
+        None: 函数无返回值。
+
+    Raises:
+        AssertionError: 当缺少 `XAI_API_KEY` 环境变量时抛出。
+    """
+    global _ENV_XAI_CHECKED
+    if _ENV_XAI_CHECKED:
+        return
+    assert os.environ.get("XAI_API_KEY"), "缺少 XAI_API_KEY 环境变量。"
+    _ENV_XAI_CHECKED = True
 
 
 # 说明：严禁在代码中硬编码密钥；请通过环境变量注入：
@@ -2965,6 +2983,8 @@ class SQLCheckpointAgentStreamingPlus:
             ).strip().lower()
             if image_provider == "openai":
                 _ensure_openai_env_once()
+            elif image_provider == "xai":
+                _ensure_xai_env_once()
             else:
                 image_provider = "gemini"
                 _ensure_gemini_env_once()
@@ -3035,6 +3055,13 @@ class SQLCheckpointAgentStreamingPlus:
                             )
                         image = manager.save_generated_image(
                             b64_data, prompt_text, mime_type
+                        )
+                    elif image_provider == "xai":
+                        image = manager.generate_image_via_xai(
+                            prompt=prompt_text,
+                            aspect_ratio=aspect_ratio_norm,
+                            size=resolution,
+                            reference_images=references or None,
                         )
                     else:
                         image = manager.generate_image_via_gemini(
