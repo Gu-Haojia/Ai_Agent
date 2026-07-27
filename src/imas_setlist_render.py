@@ -380,7 +380,7 @@ table.tracklist .additional {
   border-top: 1px solid #eee;
   font-size: 8px;
   line-height: 1.2;
-  text-align: right;
+  text-align: center;
 }
 """
 
