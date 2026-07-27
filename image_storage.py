@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import math
 import mimetypes
 import os
@@ -897,6 +898,124 @@ class ImageStorageManager:
             model=self._image_model,
             image=image,
             prompt=prompt_text,
+        )
+
+    def generate_image_via_xai(
+        self,
+        prompt: str,
+        *,
+        aspect_ratio: Optional[str] = None,
+        size: Optional[str] = None,
+        reference_images: Optional[Sequence[GeminiReferenceImage]] = None,
+        timeout: int = 180,
+    ) -> GeneratedImage:
+        """
+        使用 xAI Images API 生成或编辑图像，并将结果保存到本地。
+
+        Args:
+            prompt (str): 图像描述或编辑指令。
+            aspect_ratio (Optional[str]): 输出比例。
+            size (Optional[str]): 输出分辨率，例如 ``1K`` 或 ``2K``。
+            reference_images (Optional[Sequence[GeminiReferenceImage]]):
+                参考图列表，每项为 ``(mime_type, base64_data)``。
+            timeout (int): HTTP 请求超时时间，单位秒。
+
+        Returns:
+            GeneratedImage: 已保存到本地的生成图像。
+
+        Raises:
+            AssertionError: 当提示词或 API Key 缺失时抛出。
+            RuntimeError: 当 xAI 返回错误或响应缺少图像数据时抛出。
+        """
+        assert isinstance(prompt, str) and prompt.strip(), "prompt 不能为空"
+        api_key = os.environ.get("XAI_API_KEY")
+        assert api_key, "缺少 XAI_API_KEY 环境变量"
+
+        payload: dict[str, object] = {
+            "model": "grok-imagine-image-quality",
+            "prompt": prompt.strip(),
+            "response_format": "b64_json",
+        }
+        if aspect_ratio:
+            payload["aspect_ratio"] = aspect_ratio.strip()
+        if size:
+            payload["resolution"] = size.strip().lower()
+
+        endpoint = "https://api.x.ai/v1/images/generations"
+        if reference_images:
+            endpoint = "https://api.x.ai/v1/images/edits"
+            image_inputs = [
+                {
+                    "type": "image_url",
+                    "url": f"data:{mime_type};base64,{base64_data}",
+                }
+                for mime_type, base64_data in reference_images
+            ]
+            if len(image_inputs) == 1:
+                payload["image"] = image_inputs[0]
+            else:
+                payload["images"] = image_inputs
+
+        response = requests.post(
+            endpoint,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=timeout,
+        )
+        response_data = response.json()
+        if not response.ok:
+            raise RuntimeError(
+                json.dumps(
+                    {
+                        "provider": "xai",
+                        "status_code": response.status_code,
+                        "error": response_data,
+                    },
+                    ensure_ascii=False,
+                )
+            )
+
+        data = response_data.get("data") or []
+        if not data:
+            raise RuntimeError(
+                json.dumps(
+                    {
+                        "provider": "xai",
+                        "status_code": response.status_code,
+                        "error": {
+                            "code": "missing_image_data",
+                            "message": "xAI 响应缺少图像数据",
+                        },
+                    },
+                    ensure_ascii=False,
+                )
+            )
+
+        item = data[0]
+        b64_data = item.get("b64_json")
+        mime_type = item.get("mime_type")
+        if not b64_data or not mime_type:
+            raise RuntimeError(
+                json.dumps(
+                    {
+                        "provider": "xai",
+                        "status_code": response.status_code,
+                        "error": {
+                            "code": "invalid_image_data",
+                            "message": "xAI 响应缺少 b64_json 或 mime_type",
+                        },
+                    },
+                    ensure_ascii=False,
+                )
+            )
+
+        return self.save_generated_image(
+            b64_data,
+            prompt.strip(),
+            mime_type,
         )
 
     def generate_image_via_gemini(
