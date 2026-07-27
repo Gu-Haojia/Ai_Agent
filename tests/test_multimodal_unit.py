@@ -1,5 +1,7 @@
 import base64
 from io import BytesIO
+import json
+import os
 import re
 import tempfile
 import unittest
@@ -317,6 +319,176 @@ class MultimodalUnitTest(unittest.TestCase):
             model="gpt-image-2",
             image=reference_path.resolve(),
             prompt="edit this",
+        )
+
+    def test_generate_image_via_xai_uses_generation_endpoint(self) -> None:
+        """确认 xAI 文生图使用固定模型和生成接口。"""
+        output_base64 = self._make_image_base64(1, 1, "JPEG")
+        response = SimpleNamespace(
+            ok=True,
+            status_code=200,
+            json=mock.Mock(
+                return_value={
+                    "data": [
+                        {
+                            "b64_json": output_base64,
+                            "mime_type": "image/jpeg",
+                        }
+                    ]
+                }
+            ),
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            manager = ImageStorageManager(tmp_dir)
+            with (
+                mock.patch.dict(os.environ, {"XAI_API_KEY": "test-key"}),
+                mock.patch.object(
+                    image_storage.requests, "post", return_value=response
+                ) as post_mock,
+            ):
+                result = manager.generate_image_via_xai(
+                    " draw a cat ",
+                    aspect_ratio="16:9",
+                    size="2K",
+                )
+
+            self.assertTrue(result.path.exists())
+
+        self.assertEqual(result.mime_type, "image/jpeg")
+        self.assertEqual(result.prompt, "draw a cat")
+        post_mock.assert_called_once_with(
+            "https://api.x.ai/v1/images/generations",
+            headers={
+                "Authorization": "Bearer test-key",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "grok-imagine-image",
+                "prompt": "draw a cat",
+                "response_format": "b64_json",
+                "aspect_ratio": "16:9",
+                "resolution": "2k",
+            },
+            timeout=180,
+        )
+
+    def test_generate_image_via_xai_uses_single_image_edit(self) -> None:
+        """确认单张参考图使用 xAI image 编辑字段。"""
+        image_base64 = self._make_image_base64(1, 1, "PNG")
+        response = SimpleNamespace(
+            ok=True,
+            status_code=200,
+            json=mock.Mock(
+                return_value={
+                    "data": [
+                        {
+                            "b64_json": image_base64,
+                            "mime_type": "image/png",
+                        }
+                    ]
+                }
+            ),
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            manager = ImageStorageManager(tmp_dir)
+            with (
+                mock.patch.dict(os.environ, {"XAI_API_KEY": "test-key"}),
+                mock.patch.object(
+                    image_storage.requests, "post", return_value=response
+                ) as post_mock,
+            ):
+                manager.generate_image_via_xai(
+                    "edit this",
+                    reference_images=[("image/png", image_base64)],
+                )
+
+        request = post_mock.call_args
+        self.assertEqual(
+            request.args[0],
+            "https://api.x.ai/v1/images/edits",
+        )
+        self.assertEqual(
+            request.kwargs["json"]["image"],
+            {
+                "type": "image_url",
+                "url": f"data:image/png;base64,{image_base64}",
+            },
+        )
+        self.assertNotIn("images", request.kwargs["json"])
+
+    def test_generate_image_via_xai_uses_multiple_image_edit(self) -> None:
+        """确认多张参考图使用 xAI images 编辑字段。"""
+        first_base64 = self._make_image_base64(1, 1, "PNG")
+        second_base64 = self._make_image_base64(1, 1, "JPEG")
+        response = SimpleNamespace(
+            ok=True,
+            status_code=200,
+            json=mock.Mock(
+                return_value={
+                    "data": [
+                        {
+                            "b64_json": first_base64,
+                            "mime_type": "image/png",
+                        }
+                    ]
+                }
+            ),
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            manager = ImageStorageManager(tmp_dir)
+            with (
+                mock.patch.dict(os.environ, {"XAI_API_KEY": "test-key"}),
+                mock.patch.object(
+                    image_storage.requests, "post", return_value=response
+                ) as post_mock,
+            ):
+                manager.generate_image_via_xai(
+                    "combine these",
+                    reference_images=[
+                        ("image/png", first_base64),
+                        ("image/jpeg", second_base64),
+                    ],
+                )
+
+        request_payload = post_mock.call_args.kwargs["json"]
+        self.assertEqual(len(request_payload["images"]), 2)
+        self.assertNotIn("image", request_payload)
+
+    def test_generate_image_via_xai_preserves_structured_api_error(self) -> None:
+        """确认 xAI API 错误以结构化 JSON 形式抛出。"""
+        response = SimpleNamespace(
+            ok=False,
+            status_code=400,
+            json=mock.Mock(
+                return_value={
+                    "error": {
+                        "code": "invalid_request",
+                        "message": "invalid resolution",
+                    }
+                }
+            ),
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            manager = ImageStorageManager(tmp_dir)
+            with (
+                mock.patch.dict(os.environ, {"XAI_API_KEY": "test-key"}),
+                mock.patch.object(
+                    image_storage.requests, "post", return_value=response
+                ),
+                self.assertRaises(RuntimeError) as context,
+            ):
+                manager.generate_image_via_xai("draw a cat", size="4K")
+
+        error = json.loads(str(context.exception))
+        self.assertEqual(error["provider"], "xai")
+        self.assertEqual(error["status_code"], 400)
+        self.assertEqual(
+            error["error"]["error"]["code"],
+            "invalid_request",
         )
 
     def test_save_base64_image(self) -> None:

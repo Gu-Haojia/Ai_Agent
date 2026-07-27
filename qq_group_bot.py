@@ -2894,7 +2894,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
         - /switch <name>      → 切换到 prompts/<name>.txt（设置 SYS_MSG_FILE）并重建 Agent
         - /boost              → 在 Gemini 文本模型之间切换并重建 Agent
         - /image              → 在 Gemini 生图模型之间切换
-        - /imageprovider      → 在 Gemini/OpenAI 生图服务商之间切换
+        - /imageprovider      → 在 Gemini 与环境指定的生图服务商之间切换
         - /xtrans             → 循环切换 XMonitor 推文翻译模式
         - /xlink <url>        → 解析指定 X 推文链接并按当前翻译模式发图
         - /clear              → 为当前群的当前 Prompt 新建线程
@@ -3123,7 +3123,12 @@ class QQBotHandler(BaseHTTPRequestHandler):
             current_provider = (
                 os.environ.get("IMAGE_PROVIDER") or "gemini"
             ).strip().lower()
-            next_provider = "openai" if current_provider == "gemini" else "gemini"
+            configured_provider = (
+                os.environ.get("NEXT_IMAGE_PROVIDER") or "openai"
+            ).strip().lower()
+            next_provider = (
+                configured_provider if current_provider == "gemini" else "gemini"
+            )
             os.environ["IMAGE_PROVIDER"] = next_provider
             msg = f"生图服务商已切换：{current_provider} -> {next_provider}。"
             _send_group_msg(
