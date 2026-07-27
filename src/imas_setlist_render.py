@@ -401,6 +401,7 @@ class ImasSetlistRenderDocument:
         table_count (int): 表格数量。
         row_count (int): 表格行总数。
         warnings (tuple[str, ...]): 不影响渲染的兼容警告。
+        venue (str): 官方活动页提供的场馆，可为空。
     """
 
     candidate_id: str
@@ -413,6 +414,7 @@ class ImasSetlistRenderDocument:
     table_count: int
     row_count: int
     warnings: tuple[str, ...]
+    venue: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -532,6 +534,7 @@ class ImasSetlistDocumentParser:
             table_count=len(tables),
             row_count=row_count,
             warnings=tuple(dict.fromkeys(warnings)),
+            venue=source.venue.strip(),
         )
 
     def _sanitize_table(self, table: Tag) -> tuple[Tag, tuple[str, ...]]:
@@ -783,9 +786,14 @@ class ImasSetlistHtmlRenderer:
         """
         assert document.title.strip(), "渲染标题不能为空"
         assert document.tables_html.strip(), "渲染表格不能为空"
-        day_html = (
-            f"<p>{html.escape(document.day)}</p>"
-            if document.day
+        metadata = tuple(
+            value
+            for value in (document.day, document.venue)
+            if value
+        )
+        metadata_html = (
+            f"<p>{'　·　'.join(html.escape(value) for value in metadata)}</p>"
+            if metadata
             else ""
         )
         return f"""<!doctype html>
@@ -804,7 +812,7 @@ class ImasSetlistHtmlRenderer:
     <header class="setlist-header">♪ セットリスト</header>
     <section class="event-meta">
       <h1>{html.escape(document.title)}</h1>
-      {day_html}
+      {metadata_html}
     </section>
     <section class="setlist-content">{document.tables_html}</section>
     <footer class="setlist-footer">

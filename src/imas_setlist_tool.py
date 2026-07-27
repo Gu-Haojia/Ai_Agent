@@ -26,6 +26,10 @@ if TYPE_CHECKING:
 IMAS_SETLIST_INDEX_URL = "https://imas-db.jp/song/event/"
 IMAS_SETLIST_CANDIDATE_PREFIX = "imas-setlist:"
 IMAS_SETLIST_USER_AGENT = "LangGraph-ImasSetlistTool/1.0"
+IMAS_SETLIST_OFFICIAL_HOST = "idolmaster-official.jp"
+IMAS_SETLIST_VENUE_LABELS = frozenset(
+    {"場所", "開催場所", "公演場所", "会場", "開催会場", "公演会場"}
+)
 
 HttpGet = Callable[..., requests.Response]
 
@@ -55,6 +59,7 @@ class ImasSetlistPageSource:
         day (str): 索引页活动日期，可为空。
         source_url (str): 通过校验的详情页 URL。
         html (str): 当前请求得到的详情页 HTML。
+        venue (str): 官方活动页提供的场馆，可为空。
     """
 
     candidate_id: str
@@ -62,6 +67,7 @@ class ImasSetlistPageSource:
     day: str
     source_url: str
     html: str
+    venue: str = ""
 
 
 class ImasSetlistToolError(RuntimeError):
@@ -166,13 +172,16 @@ class ImasSetlistClient:
         """
         source = self.fetch_source(candidate_id)
         title, tracks = self._parse_detail(source.html)
-        return {
+        result: dict[str, object] = {
             "status": "success",
             "title": title,
             "day": source.day,
             "tracks": tracks,
             "source_url": source.source_url,
         }
+        if source.venue:
+            result["venue"] = source.venue
+        return result
 
     def fetch_source(self, candidate_id: str) -> ImasSetlistPageSource:
         """
@@ -208,12 +217,18 @@ class ImasSetlistClient:
             )
         source_url = str(candidate["source_url"])
         self._assert_detail_url(source_url)
+        html = self._fetch_html(source_url)
         return ImasSetlistPageSource(
             candidate_id=normalized_id,
             candidate_title=str(candidate["title"]),
             day=str(candidate["day"]),
             source_url=source_url,
-            html=self._fetch_html(source_url),
+            html=html,
+            venue=self._parse_venue(
+                html,
+                source_url,
+                str(candidate["title"]),
+            ),
         )
 
     def _load_candidates(self) -> list[dict[str, str]]:
@@ -311,6 +326,102 @@ class ImasSetlistClient:
                 )
             ),
         }
+
+    def _parse_venue(
+        self,
+        html: str,
+        source_url: str,
+        title: str,
+    ) -> str:
+        """
+        从 imas-db 提供的官方活动链接读取场馆。
+
+        Args:
+            html (str): imas-db Setlist 详情 HTML。
+            source_url (str): imas-db Setlist 详情 URL。
+            title (str): 当前活动标题。
+
+        Returns:
+            str: 官方活动页中的场馆；没有可靠结果时为空字符串。
+
+        Raises:
+            None: 可选场馆页面不可用时不影响 Setlist 查询。
+        """
+        soup = BeautifulSoup(html, "html.parser")
+        official_url = ""
+        for anchor in soup.select("a[href]"):
+            if anchor.get_text(" ", strip=True) != "詳細":
+                continue
+            candidate_url = urljoin(source_url, str(anchor["href"]))
+            parsed = urlparse(candidate_url)
+            if (
+                parsed.scheme == "https"
+                and parsed.hostname == IMAS_SETLIST_OFFICIAL_HOST
+            ):
+                official_url = candidate_url
+                break
+        if not official_url:
+            return ""
+
+        for page_url in (
+            official_url,
+            urljoin(official_url, "information/"),
+        ):
+            try:
+                page = BeautifulSoup(
+                    self._fetch_html(page_url),
+                    "html.parser",
+                )
+            except ImasSetlistToolError:
+                continue
+            page_text = "\n".join(
+                self._clean_text(value)
+                for value in page.stripped_strings
+            )
+            labels = "|".join(
+                re.escape(label)
+                for label in IMAS_SETLIST_VENUE_LABELS
+            )
+            venues = tuple(
+                dict.fromkeys(
+                    re.findall(
+                        rf"^(?:{labels})\n([^\n]+)",
+                        page_text,
+                        re.MULTILINE,
+                    )
+                )
+            )
+            if len(venues) == 1:
+                return venues[0]
+            if len(venues) > 1:
+                tokens = [
+                    token.casefold()
+                    for token in re.findall(
+                        r"[A-Za-z0-9@]+|[ぁ-んァ-ヶ一-龯々ー]{2,}",
+                        title,
+                    )
+                    if len(token) >= 3
+                ]
+                blocks = re.findall(
+                    rf"^公演名\n(.*?)^(?:{labels})\n([^\n]+)",
+                    page_text,
+                    re.MULTILINE | re.DOTALL,
+                )
+                if blocks:
+                    score, venue = max(
+                        (
+                            sum(
+                                len(token)
+                                for token in tokens
+                                if token in context.casefold()
+                            ),
+                            candidate,
+                        )
+                        for context, candidate in blocks
+                    )
+                    if score > 0:
+                        return venue
+        return ""
 
     def _parse_detail(
         self,
