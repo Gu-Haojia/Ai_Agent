@@ -3020,7 +3020,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
         if cmd == "/switch" and len(parts) == 1:
             names = _list_prompt_names()
             msg = (
-                ("可用 prompts: \n    " + "\n    ".join(names))
+                ("可用 prompts: \n  ●" + "\n  ●".join(names))
                 if names
                 else "未找到可用 prompts（请在 prompts/ 放置 .txt 文件）。"
             )
@@ -3054,8 +3054,8 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 )
                 thread_id = self._thread_id_for(group_id)
                 switch_msg = (
-                    f"已切换到 {name} 并恢复对应线程：{thread_id}。"
-                    "需要清除记忆请使用/forget 命令。"
+                    f"已切换到 {name}。\n"
+                    + f"恢复对应线程：{thread_id}。\n"
                 )
                 if account_profile is None:
                     msg = switch_msg + "该 Prompt 未配置账号资料，昵称和头像保持不变。"
