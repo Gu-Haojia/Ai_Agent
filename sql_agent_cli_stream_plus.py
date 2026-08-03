@@ -534,7 +534,7 @@ def _build_tavily_prompt_notice(tavily_calls: int) -> str:
     if tavily_calls < TAVILY_PROMPT_NOTICE_THRESHOLD:
         return ""
     return (
-        f"本轮已经调用 Tavily {tavily_calls} 次，调用次数较多。"
+        "本轮 Tavily 调用次数已经达到或超过规定上限。"
         "请尽量不要再次调用 Tavily，优先基于已有搜索结果完成回答；"
         "只有在现有信息无法回答且确实需要新的独立事实时才继续搜索。"
     )

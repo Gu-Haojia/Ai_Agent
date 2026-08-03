@@ -67,7 +67,7 @@ def test_count_current_turn_tavily_calls_ignores_previous_turn() -> None:
 
 def test_build_tavily_prompt_notice_starts_at_fifth_call() -> None:
     """
-    验证达到第五次调用后生成动态提醒，低于阈值时不生成。
+    验证达到第五次调用后生成内容稳定的提醒，低于阈值时不生成。
 
     Returns:
         None: 测试用例无返回值。
@@ -78,8 +78,10 @@ def test_build_tavily_prompt_notice_starts_at_fifth_call() -> None:
     assert _build_tavily_prompt_notice(4) == ""
 
     notice = _build_tavily_prompt_notice(5)
+    later_notice = _build_tavily_prompt_notice(7)
 
-    assert "Tavily 5 次" in notice
+    assert notice == later_notice
+    assert "达到或超过规定上限" in notice
     assert "尽量不要再次调用 Tavily" in notice
 
 
