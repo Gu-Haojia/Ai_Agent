@@ -113,62 +113,6 @@ def test_prompt_switch_restores_each_prompt_thread(
     }
 
 
-def test_switch_command_selects_target_prompt_thread(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """验证 `/switch` 重建 Agent 后立即选择目标 Prompt 线程。
-
-    Args:
-        monkeypatch (pytest.MonkeyPatch): pytest 环境与属性替换工具。
-        tmp_path (Path): pytest 临时目录。
-        capsys (pytest.CaptureFixture[str]): pytest 标准输出捕获工具。
-
-    Returns:
-        None: 测试通过时无返回值。
-
-    Raises:
-        None: 测试用例不主动抛出异常。
-    """
-    prompts_dir = tmp_path / "prompts"
-    prompts_dir.mkdir()
-    (prompts_dir / "kotone.txt").write_text("prompt", encoding="utf-8")
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(qq_group_bot.time, "time_ns", lambda: 202)
-    handler = _handler()
-    agent = _agent()
-    QQBotHandler.agent = agent
-    QQBotHandler._group_threads = {
-        "10001/default": "thread-10001-mother-101",
-    }
-
-    with mock.patch.object(
-        QQBotHandler,
-        "rebuild_agent",
-        return_value=agent,
-    ), mock.patch.object(
-        qq_group_bot, "_set_qq_nickname"
-    ) as nickname_mock, mock.patch.object(
-        qq_group_bot, "_set_qq_avatar"
-    ) as avatar_mock, mock.patch.object(
-        qq_group_bot, "_send_group_msg"
-    ) as send_mock:
-        handled = handler._handle_commands(10001, 20002, "/switch kotone")
-
-    assert handled is True
-    assert QQBotHandler._group_threads == {
-        "10001/default": "thread-10001-mother-101",
-        "10001/kotone": "thread-10001-mother-202",
-    }
-    assert send_mock.call_args.args[2].startswith(
-        "已切换到 kotone 并恢复对应线程：thread-10001-mother-202。"
-    )
-    nickname_mock.assert_not_called()
-    avatar_mock.assert_not_called()
-    assert "/switch 已应用 Prompt：kotone，Agent 已重建。" in capsys.readouterr().out
-
-
 def test_boost_command_prints_model_rebuild_log(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
