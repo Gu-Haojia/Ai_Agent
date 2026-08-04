@@ -3076,6 +3076,12 @@ class QQBotHandler(BaseHTTPRequestHandler):
                     profile_manager, PromptAccountProfileManager
                 ), "Prompt 账号资料管理器尚未初始化"
                 account_profile = profile_manager.resolve(name)
+                settings = replace(
+                    self.runtime_settings,
+                    prompt_file=f"{name}.txt",
+                )
+                self.runtime_settings_store.save(settings)
+                QQBotHandler.runtime_settings = settings
                 os.environ["SYS_MSG_FILE"] = path
                 self.rebuild_agent()
                 print(
@@ -3465,6 +3471,10 @@ def main() -> None:
     bot_cfg = BotConfig.from_env()
     runtime_settings_store = RuntimeSettingsStore()
     runtime_settings = runtime_settings_store.load()
+    if runtime_settings.prompt_file:
+        prompt_path = Path("prompts") / runtime_settings.prompt_file
+        assert prompt_path.is_file(), f"持久化的 Prompt 文件不存在: {prompt_path}"
+        os.environ["SYS_MSG_FILE"] = str(prompt_path.resolve())
     reminder_store = JsonReminderStore(
         os.environ.get("REMINDER_STORE_FILE", ".qq_reminders.json")
     )

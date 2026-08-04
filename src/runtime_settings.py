@@ -20,6 +20,7 @@ class RuntimeSettings:
     Args:
         schema_version (int): 配置文件结构版本。
         tavily_search_limit (int): 单轮 Tavily 搜索提醒阈值。
+        prompt_file (str): 持久化的 Prompt 文件名，空字符串表示使用环境变量。
 
     Returns:
         None: dataclass 初始化不返回额外值。
@@ -30,6 +31,7 @@ class RuntimeSettings:
 
     schema_version: int = 1
     tavily_search_limit: int = 5
+    prompt_file: str = ""
 
     def __post_init__(self) -> None:
         """校验运行时设置。
@@ -50,6 +52,7 @@ class RuntimeSettings:
             <= self.tavily_search_limit
             <= MAX_TAVILY_SEARCH_LIMIT
         ), "tavily_search_limit 必须在 5 到 999 之间"
+        assert isinstance(self.prompt_file, str), "prompt_file 必须为字符串"
 
 
 class RuntimeSettingsStore:
@@ -95,12 +98,17 @@ class RuntimeSettingsStore:
             return settings
         data = json.loads(self._path.read_text(encoding="utf-8"))
         assert isinstance(data, dict), "运行时设置必须是 JSON 对象"
-        assert set(data) == {"schema_version", "tavily_search_limit"}, (
+        assert set(data) == {
+            "schema_version",
+            "tavily_search_limit",
+            "prompt_file",
+        }, (
             "运行时设置字段不完整或包含未知字段"
         )
         return RuntimeSettings(
             schema_version=data["schema_version"],
             tavily_search_limit=data["tavily_search_limit"],
+            prompt_file=data["prompt_file"],
         )
 
     def save(self, settings: RuntimeSettings) -> None:

@@ -37,17 +37,20 @@ def test_runtime_settings_store_creates_and_loads_default_file(
     assert json.loads(path.read_text(encoding="utf-8")) == {
         "schema_version": 1,
         "tavily_search_limit": 5,
+        "prompt_file": "",
     }
     assert store.load() == settings
 
 
 def test_searchlimit_command_saves_and_updates_current_agent(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """验证搜索上限命令同时更新文件和当前 Agent。
 
     Args:
         tmp_path (Path): pytest 临时目录。
+        monkeypatch (pytest.MonkeyPatch): pytest 属性替换工具。
 
     Returns:
         None: 测试通过时无返回值。
@@ -63,9 +66,19 @@ def test_searchlimit_command_saves_and_updates_current_agent(
     )
     agent = mock.Mock()
     store = RuntimeSettingsStore(tmp_path / ".runtime_settings.json")
-    QQBotHandler.agent = agent
-    QQBotHandler.runtime_settings = RuntimeSettings()
-    QQBotHandler.runtime_settings_store = store
+    monkeypatch.setattr(QQBotHandler, "agent", agent, raising=False)
+    monkeypatch.setattr(
+        QQBotHandler,
+        "runtime_settings",
+        RuntimeSettings(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        QQBotHandler,
+        "runtime_settings_store",
+        store,
+        raising=False,
+    )
 
     with mock.patch.object(qq_group_bot, "_send_group_msg") as send_mock:
         handled = handler._handle_commands(10001, 20002, "/searchlimit 7")

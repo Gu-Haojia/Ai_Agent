@@ -13,6 +13,7 @@ import pytest
 import qq_group_bot
 from qq_group_bot import QQBotHandler
 from src.napcat_account_profile import PromptAccountProfileManager
+from src.runtime_settings import RuntimeSettings, RuntimeSettingsStore
 
 
 @pytest.fixture(autouse=True)
@@ -44,6 +45,18 @@ def reset_thread_mapping_state(
         QQBotHandler,
         "account_profile_manager",
         PromptAccountProfileManager(profile_config, tmp_path / "avatars"),
+    )
+    monkeypatch.setattr(
+        QQBotHandler,
+        "runtime_settings",
+        RuntimeSettings(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        QQBotHandler,
+        "runtime_settings_store",
+        RuntimeSettingsStore(tmp_path / ".runtime_settings.json"),
+        raising=False,
     )
     monkeypatch.setenv("SYS_MSG_FILE", "/app/prompts/default.txt")
 
@@ -211,6 +224,8 @@ def test_switch_command_applies_tracked_account_profile(
     nickname_mock.assert_called_once_with("http://onebot", "藤田ことね", "token")
     expected_avatar = base64.b64encode(b"avatar").decode("ascii")
     avatar_mock.assert_called_once_with("http://onebot", expected_avatar, "token")
+    assert QQBotHandler.runtime_settings.prompt_file == "藤田ことね.txt"
+    assert QQBotHandler.runtime_settings_store.load().prompt_file == "藤田ことね.txt"
     assert "账号昵称和头像已切换为 藤田ことね" in send_mock.call_args.args[2]
 
 
