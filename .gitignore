@@ -38,6 +38,7 @@ output.xml
 .qq_group_memnames.json
 .meru_watch.json
 .x_monitor.json
+.runtime_settings.json
 
 # Local backup (not tracked)
 local_backup/

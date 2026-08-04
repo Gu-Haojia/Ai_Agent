@@ -45,7 +45,7 @@ import unicodedata
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from datetime import datetime
 from pathlib import Path
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from hashlib import sha1
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Lock
@@ -209,6 +209,7 @@ from src.meru_monitor import DEFAULT_LIMIT, MeruMonitorManager, MeruSearchResult
 from src.meru_watch_media import send_meru_message_with_images
 from src.napcat_account_profile import PromptAccountProfileManager
 from src.timer_reminder import JsonReminderStore, TimerReminderManager
+from src.runtime_settings import RuntimeSettings, RuntimeSettingsStore
 from src.x_monitor import (
     DEFAULT_LIMIT as X_DEFAULT_LIMIT,
     XMonitorManager,
@@ -1288,6 +1289,8 @@ class QQBotHandler(BaseHTTPRequestHandler):
     meru_monitor: Optional[MeruMonitorManager] = None
     x_monitor: Optional[XMonitorManager] = None
     account_profile_manager: Optional[PromptAccountProfileManager] = None
+    runtime_settings: RuntimeSettings = RuntimeSettings()
+    runtime_settings_store: RuntimeSettingsStore
     _post_lock: ClassVar[Lock] = Lock()  # 串行化处理 POST 请求
     # 群/Prompt -> 线程ID 映射，用于在 Prompt 间恢复各自的群对话线程
     _group_threads: dict[str, str] = {}
@@ -2373,7 +2376,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
             reminder_manager, TimerReminderManager
         ), "定时提醒管理器尚未初始化"
         old_agent = getattr(cls, "agent", None)
-        new_agent = _build_agent_from_env(reminder_manager)
+        new_agent = _build_agent_from_env(reminder_manager, cls.runtime_settings)
         image_mgr = cls.image_storage
         assert isinstance(image_mgr, ImageStorageManager), "图像存储管理器尚未初始化"
         new_agent.set_image_manager(image_mgr)
@@ -2893,6 +2896,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
         - /switch             → 列出 prompts 目录下可用文件名（不含后缀）
         - /switch <name>      → 切换到 prompts/<name>.txt（设置 SYS_MSG_FILE）并重建 Agent
         - /boost              → 在 Gemini 文本模型之间切换并重建 Agent
+        - /searchlimit [数量] → 查看或修改单轮 Tavily 搜索提醒阈值
         - /image              → 在 Gemini 生图模型之间切换
         - /imageprovider      → 在 Gemini 与环境指定的生图服务商之间切换
         - /xtrans             → 循环切换 XMonitor 推文翻译模式
@@ -2973,7 +2977,34 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 "18) /xlink <推文链接> - 解析指定 X 推文并按当前翻译模式发图\n"
                 "19) /dl <链接> - 下载视频并直接发送到群聊\n"
                 "20) /summary - 查看当前线程的上下文压缩摘要"
+                "\n21) /searchlimit [1-8] - 查看或修改搜索上限"
             )
+            _send_group_msg(
+                self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
+            )
+            return True
+
+        if cmd == "/searchlimit" and len(parts) in {1, 2}:
+            if len(parts) == 1:
+                msg = (
+                    "当前 Tavily 搜索上限："
+                    f"{self.runtime_settings.tavily_search_limit}"
+                )
+            else:
+                try:
+                    search_limit = int(parts[1])
+                    settings = replace(
+                        self.runtime_settings,
+                        tavily_search_limit=search_limit,
+                    )
+                    self.runtime_settings_store.save(settings)
+                    self.agent.set_tavily_search_limit(search_limit)
+                    QQBotHandler.runtime_settings = settings
+                    msg = f"Tavily 搜索上限已设置为：{search_limit}"
+                except (AssertionError, ValueError) as error:
+                    msg = f"设置失败：{error}。用法：/searchlimit [1-8]"
+                except OSError as error:
+                    msg = f"设置保存失败：{error}"
             _send_group_msg(
                 self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
             )
@@ -3337,11 +3368,13 @@ class QQBotHandler(BaseHTTPRequestHandler):
 
 def _build_agent_from_env(
     reminder_manager: TimerReminderManager,
+    runtime_settings: RuntimeSettings,
 ) -> SQLCheckpointAgentStreamingPlus:
     """从环境变量构建使用共享提醒管理器的 SQL Agent。
 
     Args:
         reminder_manager (TimerReminderManager): QQ Bot 持有的共享提醒管理器。
+        runtime_settings (RuntimeSettings): 当前运行时设置。
 
     Returns:
         SQLCheckpointAgentStreamingPlus: 已初始化的 QQ Agent。
@@ -3352,6 +3385,7 @@ def _build_agent_from_env(
     assert isinstance(
         reminder_manager, TimerReminderManager
     ), "reminder_manager 类型无效"
+    assert isinstance(runtime_settings, RuntimeSettings), "runtime_settings 类型无效"
     model = os.environ.get("MODEL_NAME", "openai:gpt-4o-mini")
     pg = os.environ.get("LANGGRAPH_PG", "")
     thread = os.environ.get("THREAD_ID", "qq-napcat-demo")
@@ -3364,6 +3398,7 @@ def _build_agent_from_env(
         thread_id=thread,
         use_memory_ckpt=use_memory,
         store_id=store_id,
+        tavily_search_limit=runtime_settings.tavily_search_limit,
     )
     agent = SQLCheckpointAgentStreamingPlus(cfg, reminder_manager=reminder_manager)
     return agent
@@ -3428,6 +3463,8 @@ def main() -> None:
             )
             raise RuntimeError("PostgreSQL 未在限定时间内就绪")
     bot_cfg = BotConfig.from_env()
+    runtime_settings_store = RuntimeSettingsStore()
+    runtime_settings = runtime_settings_store.load()
     reminder_store = JsonReminderStore(
         os.environ.get("REMINDER_STORE_FILE", ".qq_reminders.json")
     )
@@ -3437,7 +3474,7 @@ def main() -> None:
     )
     try:
         reminder_restore_result = reminder_manager.restore_pending()
-        agent = _build_agent_from_env(reminder_manager)
+        agent = _build_agent_from_env(reminder_manager, runtime_settings)
     except Exception:
         reminder_manager.stop()
         raise
@@ -3466,6 +3503,8 @@ def main() -> None:
     QQBotHandler.agent = agent
     QQBotHandler.reminder_manager = reminder_manager
     QQBotHandler.image_storage = image_manager
+    QQBotHandler.runtime_settings = runtime_settings
+    QQBotHandler.runtime_settings_store = runtime_settings_store
     QQBotHandler.account_profile_manager = PromptAccountProfileManager(
         config_path=Path("prompts/avatars/account_profiles.json"),
         avatar_dir=Path("prompts/avatars"),

@@ -113,7 +113,7 @@ from src.imas_setlist_tool import (
 
 ANILIST_SORT_CHOICES_TEXT: str = ", ".join(ANILIST_MEDIA_SORTS)
 TAVILY_SEARCH_TOOL_NAME: str = "tavily_search"
-TAVILY_PROMPT_NOTICE_THRESHOLD: int = 5
+DEFAULT_TAVILY_SEARCH_LIMIT: int = 5
 
 # ---- 环境校验：仅在首次需要时检查，避免重复消耗 ----
 _ENV_COMMON_CHECKED: bool = False
@@ -515,23 +515,27 @@ def _count_current_turn_tavily_calls(messages: Sequence[Any]) -> int:
     return tavily_calls
 
 
-def _build_tavily_prompt_notice(tavily_calls: int) -> str:
+def _build_tavily_prompt_notice(tavily_calls: int, search_limit: int) -> str:
     """
     根据当前轮次的 Tavily 调用次数构造临时提示。
 
     Args:
         tavily_calls (int): 当前用户轮次已经发起的 Tavily 调用次数。
+        search_limit (int): 单轮 Tavily 搜索提醒阈值。
 
     Returns:
         str: 达到提醒阈值时返回提示文本，否则返回空字符串。
 
     Raises:
-        AssertionError: 当 ``tavily_calls`` 不是非负整数时抛出。
+        AssertionError: 当调用次数或搜索上限不合法时抛出。
     """
     assert isinstance(tavily_calls, int) and tavily_calls >= 0, (
         "tavily_calls 必须是非负整数"
     )
-    if tavily_calls < TAVILY_PROMPT_NOTICE_THRESHOLD:
+    assert isinstance(search_limit, int) and search_limit >= 1, (
+        "search_limit 必须是正整数"
+    )
+    if tavily_calls < search_limit:
         return ""
     return (
         "本轮 Tavily 调用次数已经达到或超过规定上限。"
@@ -1825,6 +1829,7 @@ class AgentConfig:
     use_memory_ckpt: bool = False
     enable_tools: bool = False
     checkpoint_retention_limit: int = 5
+    tavily_search_limit: int = DEFAULT_TAVILY_SEARCH_LIMIT
     # 用于持久记忆（langmem）命名空间的 store 隔离标识，由环境变量 STORE_ID 注入
     store_id: str = ""
 
@@ -1842,6 +1847,9 @@ class SQLCheckpointAgentStreamingPlus:
 
         dry_run = os.environ.get("DRY_RUN") == "1"
         self._config = config
+        assert self._config.tavily_search_limit >= 1, (
+            "tavily_search_limit 必须大于等于 1"
+        )
         if dry_run:
             self._config.use_memory_ckpt = True
 
@@ -1876,6 +1884,23 @@ class SQLCheckpointAgentStreamingPlus:
         self._printed_in_round: bool = False
         # 当前持久记忆命名空间（供 langmem 工具使用）；由外部在请求前设置
         self._memory_namespace: str = ""
+
+    def set_tavily_search_limit(self, search_limit: int) -> None:
+        """更新单轮 Tavily 搜索提醒阈值。
+
+        Args:
+            search_limit (int): 新的搜索提醒阈值。
+
+        Returns:
+            None: 更新完成后不返回额外值。
+
+        Raises:
+            AssertionError: 当搜索上限不是正整数时抛出。
+        """
+        assert isinstance(search_limit, int) and search_limit >= 1, (
+            "search_limit 必须是正整数"
+        )
+        self._config.tavily_search_limit = search_limit
 
     def shutdown(self) -> None:
         """
@@ -3202,7 +3227,8 @@ class SQLCheckpointAgentStreamingPlus:
             state_messages = list(state.get("messages", []))
             messages = [sys_msg]
             tavily_notice = _build_tavily_prompt_notice(
-                _count_current_turn_tavily_calls(state_messages)
+                _count_current_turn_tavily_calls(state_messages),
+                self._config.tavily_search_limit,
             )
             if tavily_notice:
                 messages.append(SystemMessage(content=tavily_notice))

@@ -75,10 +75,10 @@ def test_build_tavily_prompt_notice_starts_at_fifth_call() -> None:
     Raises:
         None: 测试用例不主动抛出异常。
     """
-    assert _build_tavily_prompt_notice(4) == ""
+    assert _build_tavily_prompt_notice(4, 5) == ""
 
-    notice = _build_tavily_prompt_notice(5)
-    later_notice = _build_tavily_prompt_notice(7)
+    notice = _build_tavily_prompt_notice(5, 5)
+    later_notice = _build_tavily_prompt_notice(7, 5)
 
     assert notice == later_notice
     assert "达到或超过规定上限" in notice

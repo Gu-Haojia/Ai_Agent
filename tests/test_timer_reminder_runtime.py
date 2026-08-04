@@ -21,6 +21,7 @@ from src.timer_reminder import (
     ReminderPruneResult,
     TimerReminderManager,
 )
+from src.runtime_settings import RuntimeSettings
 
 
 class _FakeReminderStore:
@@ -242,6 +243,7 @@ def test_rebuild_agent_reuses_timer_and_keeps_old_agent_until_success(
     new_agent = object.__new__(SQLCheckpointAgentStreamingPlus)
     image_manager = object.__new__(ImageStorageManager)
     reminder_manager = mock.Mock(spec=TimerReminderManager)
+    runtime_settings = RuntimeSettings(tavily_search_limit=7)
     events: list[str] = []
 
     monkeypatch.setattr(QQBotHandler, "agent", old_agent, raising=False)
@@ -253,9 +255,18 @@ def test_rebuild_agent_reuses_timer_and_keeps_old_agent_until_success(
         raising=False,
     )
     monkeypatch.setattr(
+        QQBotHandler,
+        "runtime_settings",
+        runtime_settings,
+        raising=False,
+    )
+    monkeypatch.setattr(
         qq_group_bot,
         "_build_agent_from_env",
-        lambda manager: events.append("build") or new_agent,
+        lambda manager, settings: events.append(
+            f"build:{settings.tavily_search_limit}"
+        )
+        or new_agent,
     )
     monkeypatch.setattr(
         SQLCheckpointAgentStreamingPlus,
@@ -267,7 +278,7 @@ def test_rebuild_agent_reuses_timer_and_keeps_old_agent_until_success(
 
     assert result is new_agent
     assert QQBotHandler.agent is new_agent
-    assert events == ["build", "shutdown"]
+    assert events == ["build:7", "shutdown"]
     reminder_manager.restore_pending.assert_not_called()
 
 
@@ -340,7 +351,13 @@ def test_repeated_rebuilds_release_old_agents_and_playwright_threads(
         QQBotHandler, "reminder_manager", reminder_manager, raising=False
     )
     monkeypatch.setattr(QQBotHandler, "image_storage", image_manager, raising=False)
-    first_agent = qq_group_bot._build_agent_from_env(reminder_manager)
+    runtime_settings = RuntimeSettings()
+    monkeypatch.setattr(
+        QQBotHandler, "runtime_settings", runtime_settings, raising=False
+    )
+    first_agent = qq_group_bot._build_agent_from_env(
+        reminder_manager, runtime_settings
+    )
     monkeypatch.setattr(QQBotHandler, "agent", first_agent, raising=False)
     del first_agent
     old_agent_references: list[
