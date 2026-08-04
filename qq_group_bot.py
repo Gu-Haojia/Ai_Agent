@@ -3471,10 +3471,17 @@ def main() -> None:
     bot_cfg = BotConfig.from_env()
     runtime_settings_store = RuntimeSettingsStore()
     runtime_settings = runtime_settings_store.load()
-    if runtime_settings.prompt_file:
-        prompt_path = Path("prompts") / runtime_settings.prompt_file
-        assert prompt_path.is_file(), f"持久化的 Prompt 文件不存在: {prompt_path}"
+    prompt_path = Path("prompts") / runtime_settings.prompt_file
+    if runtime_settings.prompt_file and prompt_path.is_file():
         os.environ["SYS_MSG_FILE"] = str(prompt_path.resolve())
+    else:
+        environment_prompt = os.environ.get("SYS_MSG_FILE", "").strip()
+        if environment_prompt:
+            runtime_settings = replace(
+                runtime_settings,
+                prompt_file=Path(environment_prompt).name,
+            )
+            runtime_settings_store.save(runtime_settings)
     reminder_store = JsonReminderStore(
         os.environ.get("REMINDER_STORE_FILE", ".qq_reminders.json")
     )
