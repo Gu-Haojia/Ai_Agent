@@ -79,6 +79,10 @@ from src.serper_image_search_tool import SerperImageSearchTool
 from src.tavily_search_tool import RoutedTavilySearch
 from src.anilist_client import AniListAPI, ANILIST_MEDIA_SORTS
 from src.timer_reminder import TimerReminderManager
+from src.runtime_settings import (
+    MAX_TAVILY_SEARCH_LIMIT,
+    MIN_TAVILY_SEARCH_LIMIT,
+)
 from src.asobi_ticket_agent import AsobiTicketQuery
 from src.checkpoint_retention import (
     CheckpointRetentionError,
@@ -532,8 +536,9 @@ def _build_tavily_prompt_notice(tavily_calls: int, search_limit: int) -> str:
     assert isinstance(tavily_calls, int) and tavily_calls >= 0, (
         "tavily_calls 必须是非负整数"
     )
-    assert isinstance(search_limit, int) and search_limit >= 1, (
-        "search_limit 必须是正整数"
+    assert type(search_limit) is int, "search_limit 必须是整数"
+    assert MIN_TAVILY_SEARCH_LIMIT <= search_limit <= MAX_TAVILY_SEARCH_LIMIT, (
+        "search_limit 必须在 5 到 999 之间"
     )
     if tavily_calls < search_limit:
         return ""
@@ -1847,8 +1852,12 @@ class SQLCheckpointAgentStreamingPlus:
 
         dry_run = os.environ.get("DRY_RUN") == "1"
         self._config = config
-        assert self._config.tavily_search_limit >= 1, (
-            "tavily_search_limit 必须大于等于 1"
+        assert (
+            MIN_TAVILY_SEARCH_LIMIT
+            <= self._config.tavily_search_limit
+            <= MAX_TAVILY_SEARCH_LIMIT
+        ), (
+            "tavily_search_limit 必须在 5 到 999 之间"
         )
         if dry_run:
             self._config.use_memory_ckpt = True
@@ -1895,10 +1904,11 @@ class SQLCheckpointAgentStreamingPlus:
             None: 更新完成后不返回额外值。
 
         Raises:
-            AssertionError: 当搜索上限不是正整数时抛出。
+            AssertionError: 当搜索上限不是 5 到 999 的整数时抛出。
         """
-        assert isinstance(search_limit, int) and search_limit >= 1, (
-            "search_limit 必须是正整数"
+        assert type(search_limit) is int, "search_limit 必须是整数"
+        assert MIN_TAVILY_SEARCH_LIMIT <= search_limit <= MAX_TAVILY_SEARCH_LIMIT, (
+            "search_limit 必须在 5 到 999 之间"
         )
         self._config.tavily_search_limit = search_limit
 

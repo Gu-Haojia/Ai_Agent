@@ -2977,7 +2977,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 "18) /xlink <推文链接> - 解析指定 X 推文并按当前翻译模式发图\n"
                 "19) /dl <链接> - 下载视频并直接发送到群聊\n"
                 "20) /summary - 查看当前线程的上下文压缩摘要"
-                "\n21) /searchlimit [1-8] - 查看或修改搜索上限"
+                "\n21) /searchlimit [5-999] - 查看或修改搜索上限"
             )
             _send_group_msg(
                 self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
@@ -3002,7 +3002,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
                     QQBotHandler.runtime_settings = settings
                     msg = f"Tavily 搜索上限已设置为：{search_limit}"
                 except (AssertionError, ValueError) as error:
-                    msg = f"设置失败：{error}。用法：/searchlimit [1-8]"
+                    msg = f"设置失败：{error}。用法：/searchlimit [5-999]"
                 except OSError as error:
                     msg = f"设置保存失败：{error}"
             _send_group_msg(

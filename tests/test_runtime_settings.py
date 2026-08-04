@@ -75,3 +75,40 @@ def test_searchlimit_command_saves_and_updates_current_agent(
     assert QQBotHandler.runtime_settings.tavily_search_limit == 7
     agent.set_tavily_search_limit.assert_called_once_with(7)
     assert "已设置为：7" in send_mock.call_args.args[2]
+
+
+@pytest.mark.parametrize("search_limit", [5, 999])
+def test_runtime_settings_accepts_search_limit_boundaries(search_limit: int) -> None:
+    """验证搜索上限允许 5 到 999 的边界值。
+
+    Args:
+        search_limit (int): 待验证的合法边界值。
+
+    Returns:
+        None: 测试通过时无返回值。
+
+    Raises:
+        None: 测试用例不主动抛出异常。
+    """
+    settings = RuntimeSettings(tavily_search_limit=search_limit)
+
+    assert settings.tavily_search_limit == search_limit
+
+
+@pytest.mark.parametrize("search_limit", [4, 1000])
+def test_runtime_settings_rejects_search_limit_outside_range(
+    search_limit: int,
+) -> None:
+    """验证搜索上限拒绝小于 5 或大于 999 的数值。
+
+    Args:
+        search_limit (int): 待验证的非法边界值。
+
+    Returns:
+        None: 测试通过时无返回值。
+
+    Raises:
+        None: 预期的 AssertionError 由测试捕获。
+    """
+    with pytest.raises(AssertionError, match="必须在 5 到 999 之间"):
+        RuntimeSettings(tavily_search_limit=search_limit)

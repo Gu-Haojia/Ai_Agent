@@ -9,8 +9,8 @@ from pathlib import Path
 
 
 RUNTIME_SETTINGS_PATH: Path = Path(".runtime_settings.json")
-MIN_TAVILY_SEARCH_LIMIT: int = 1
-MAX_TAVILY_SEARCH_LIMIT: int = 8
+MIN_TAVILY_SEARCH_LIMIT: int = 5
+MAX_TAVILY_SEARCH_LIMIT: int = 999
 
 
 @dataclass(frozen=True)
@@ -49,7 +49,7 @@ class RuntimeSettings:
             MIN_TAVILY_SEARCH_LIMIT
             <= self.tavily_search_limit
             <= MAX_TAVILY_SEARCH_LIMIT
-        ), "tavily_search_limit 必须在 1 到 8 之间"
+        ), "tavily_search_limit 必须在 5 到 999 之间"
 
 
 class RuntimeSettingsStore:
