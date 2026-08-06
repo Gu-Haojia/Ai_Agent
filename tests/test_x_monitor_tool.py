@@ -394,7 +394,7 @@ class XMonitorToolRegistrationTests(unittest.TestCase):
 
     def test_xmonitor_wrapper_uses_default_interval(self) -> None:
         """
-        xmonitor 包装层省略轮询间隔时应默认使用 300 秒。
+        xmonitor 包装层省略轮询间隔时应默认使用 60 秒。
         """
         tools = self._build_tools()
         xmonitor = tools["xmonitor"]
@@ -411,10 +411,10 @@ class XMonitorToolRegistrationTests(unittest.TestCase):
             )
 
         payload = json.loads(output)
-        self.assertEqual(payload["interval_seconds"], 300)
+        self.assertEqual(payload["interval_seconds"], 60)
         start.assert_called_once_with(
             username="@kana_hanaiwa",
-            interval_seconds=300,
+            interval_seconds=60,
             group_id=123,
             user_id=456,
         )
