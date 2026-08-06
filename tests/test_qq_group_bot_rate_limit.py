@@ -83,6 +83,6 @@ def test_gemini_rate_limit_uses_fixed_group_message() -> None:
     send_group_msg.assert_called_once_with(
         "http://onebot",
         10001,
-        "（模型服务繁忙，请稍后再试）",
+        "（服务繁忙）诶...？模型服务好像有点忙呢，请稍后再试吧~",
         "token",
     )

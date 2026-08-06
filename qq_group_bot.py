@@ -2169,7 +2169,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
         except ChatGoogleGenerativeAIError as e:
             cause = e.__cause__
             if isinstance(cause, ClientError) and cause.code == 429:
-                answer = "（模型服务繁忙，请稍后再试）"
+                answer = "（服务繁忙）诶...？模型服务好像有点忙呢，请稍后再试吧~"
             else:
                 answer = f"（内部错误）{e}"
             generated_images = []
