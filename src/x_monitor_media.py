@@ -11,13 +11,14 @@ import json
 import os
 import sys
 import time
+from threading import Lock
 from typing import Callable, Optional, Sequence
 from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 
 import requests
 
-from src.x_monitor import XPostResult
+from src.x_monitor import NEW_POST_NOTICE_ENV, XPostResult
 from src.x_monitor_render import BrowserTweetRenderer, XRenderedTweet, XTweetPayloadParser
 from src.x_monitor_translate import (
     XRenderedTweetTextTranslator,
@@ -27,6 +28,7 @@ from src.x_monitor_translate import (
 MessagePayload = Sequence[dict[str, dict[str, str]]] | str
 RenderedImageFetcher = Callable[[XPostResult], tuple[str, str]]
 LEGACY_MEDIA_ENV = "X_MONITOR_LEGACY_MEDIA"
+_X_SEND_LOCK = Lock()
 
 
 def _guess_suffix(mime: str) -> str:
@@ -367,6 +369,7 @@ def send_x_message_with_images(
     fetcher: Optional[Callable[[str], tuple[str, str]]] = None,
     max_images: Optional[int] = None,
     renderer: Optional[RenderedImageFetcher] = None,
+    tag: str = "",
 ) -> None:
     """
     发送携带图片的 X 推文监控消息。
@@ -380,24 +383,39 @@ def send_x_message_with_images(
         fetcher (Optional[Callable[[str], tuple[str, str]]]): 自定义下载器。
         max_images (Optional[int]): 附图上限，None 表示发送全部图片。
         renderer (Optional[RenderedImageFetcher]): 解析后截图渲染器。
+        tag (str): 通知标签，`NEW` 表示新推文通知。
     Returns:
         None: 无返回值。
 
     Raises:
         RuntimeError: 当 OneBot 发送失败时抛出。
     """
-    if _env_flag(LEGACY_MEDIA_ENV):
-        payload = compose_x_media_message(
-            text,
-            items,
-            fetcher=fetcher,
-            max_images=max_images,
-            renderer=renderer,
-        )
-        _send_group_msg(api_base, group_id, payload, access_token)
-        return
-
     assert items, "推文列表不能为空"
-    for item in items:
-        payload = _compose_rendered_tweet_message([item], renderer=renderer)
-        _send_group_msg(api_base, group_id, payload, access_token)
+    if _env_flag(LEGACY_MEDIA_ENV):
+        payloads = [
+            compose_x_media_message(
+                text,
+                items,
+                fetcher=fetcher,
+                max_images=max_images,
+                renderer=renderer,
+            )
+        ]
+    else:
+        payloads = [
+            _compose_rendered_tweet_message([item], renderer=renderer)
+            for item in items
+        ]
+
+    with _X_SEND_LOCK:
+        if tag == "NEW" and _env_flag(NEW_POST_NOTICE_ENV):
+            display_name = (items[0].display_name or items[0].username).strip()
+            assert display_name, "用户显示名不能为空"
+            _send_group_msg(
+                api_base,
+                group_id,
+                f"[NEW] {display_name} 更新了推文",
+                access_token,
+            )
+        for payload in payloads:
+            _send_group_msg(api_base, group_id, payload, access_token)

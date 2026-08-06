@@ -2709,6 +2709,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 self.bot_cfg.access_token,
                 text,
                 items,
+                tag=tag,
             )
 
         if len(argv) >= 2 and argv[1].lower() == "list":
@@ -3710,6 +3711,7 @@ def main() -> None:
                 bot_cfg.access_token,
                 text,
                 items,
+                tag=tag,
             )
 
         return _notify, _notify_media

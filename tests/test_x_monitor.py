@@ -1555,6 +1555,105 @@ class XMonitorMediaComposeTests(unittest.TestCase):
         self.assertEqual(first_payload[0]["data"]["file"], "base64://b64-1")
         self.assertEqual(second_payload[0]["data"]["file"], "base64://b64-2")
 
+    def test_new_notice_waits_for_render_then_sends_before_images(self) -> None:
+        """
+        新推文通知应先完成全部渲染，再连续发送文字与图片。
+        """
+        items = [
+            XPostResult(
+                username="kana_hanaiwa",
+                post_id="1",
+                text="first",
+                created_label="05-05 10:02",
+                url="https://x.com/kana_hanaiwa/status/1",
+                display_name="Kana Hanaiwa",
+                source_payload=build_render_payload(post_id="1", text="first"),
+            ),
+            XPostResult(
+                username="kana_hanaiwa",
+                post_id="2",
+                text="second",
+                created_label="05-05 10:03",
+                url="https://x.com/kana_hanaiwa/status/2",
+                display_name="Kana Hanaiwa",
+                source_payload=build_render_payload(post_id="2", text="second"),
+            ),
+        ]
+        events: list[str] = []
+
+        def fake_render(item: XPostResult) -> tuple[str, str]:
+            """
+            记录渲染顺序并返回固定截图。
+
+            Args:
+                item (XPostResult): 推文结果。
+
+            Returns:
+                tuple[str, str]: base64 与 MIME。
+
+            Raises:
+                None: 本函数不主动抛出异常。
+            """
+            events.append(f"render:{item.post_id}")
+            return f"b64-{item.post_id}", "image/png"
+
+        def fake_send(
+            api_base: str,
+            group_id: int,
+            message: object,
+            access_token: str,
+        ) -> None:
+            """
+            记录 OneBot 发送顺序。
+
+            Args:
+                api_base (str): OneBot API 基地址。
+                group_id (int): 目标群号。
+                message (object): 消息内容。
+                access_token (str): API Token。
+
+            Returns:
+                None: 无返回值。
+
+            Raises:
+                None: 本函数不主动抛出异常。
+            """
+            del api_base, group_id, access_token
+            if isinstance(message, str):
+                events.append(f"send:{message}")
+                return
+            assert isinstance(message, list)
+            events.append(f"send:{message[0]['data']['file']}")
+
+        env = {
+            "X_MONITOR_LEGACY_MEDIA": "",
+            NEW_POST_NOTICE_ENV: "1",
+        }
+        with mock.patch.dict("os.environ", env):
+            with mock.patch(
+                "src.x_monitor_media._send_group_msg", side_effect=fake_send
+            ):
+                send_x_message_with_images(
+                    "http://onebot",
+                    123,
+                    "token",
+                    "hello",
+                    items,
+                    renderer=fake_render,
+                    tag="NEW",
+                )
+
+        self.assertEqual(
+            events,
+            [
+                "render:1",
+                "render:2",
+                "send:[NEW] Kana Hanaiwa 更新了推文",
+                "send:base64://b64-1",
+                "send:base64://b64-2",
+            ],
+        )
+
     def test_legacy_env_uses_original_text_and_media(self) -> None:
         """
         旧版环境变量开启时，应沿用文本 + 原图发送模式。
@@ -1662,9 +1761,9 @@ class XMonitorWatchTaskTests(unittest.TestCase):
     验证 X 推文监控任务的新推文通知行为。
     """
 
-    def test_new_post_notice_env_sends_one_text_before_media(self) -> None:
+    def test_new_post_notice_is_delegated_to_media_sender(self) -> None:
         """
-        开启环境变量时，一批新推文应先发送一条关注用户文字。
+        开启环境变量时，监控任务也应将通知统一交给媒体发送器。
         """
         events: list[tuple[str, object]] = []
         task = _XWatchTask(
@@ -1706,10 +1805,7 @@ class XMonitorWatchTaskTests(unittest.TestCase):
 
         self.assertEqual(
             events,
-            [
-                ("text", "[NEW] Kana Hanaiwa 更新了推文"),
-                ("media", ["1", "2"]),
-            ],
+            [("media", ["1", "2"])],
         )
 
     def test_new_post_notice_env_disabled_keeps_media_only(self) -> None:
@@ -2551,6 +2647,7 @@ class QQBotXMonitorCommandTests(unittest.TestCase):
             access_token: str,
             text: str,
             items: list[XPostResult],
+            tag: str = "",
         ) -> None:
             """
             记录 X 图文发送参数。
@@ -2561,6 +2658,7 @@ class QQBotXMonitorCommandTests(unittest.TestCase):
                 access_token (str): API Token。
                 text (str): 文本内容。
                 items (list[XPostResult]): 推文列表。
+                tag (str): 通知标签。
 
             Returns:
                 None
@@ -2575,6 +2673,7 @@ class QQBotXMonitorCommandTests(unittest.TestCase):
                     "access_token": access_token,
                     "text": text,
                     "items": items,
+                    "tag": tag,
                 }
             )
 
@@ -2600,6 +2699,7 @@ class QQBotXMonitorCommandTests(unittest.TestCase):
             self.assertIn("[X NEW] | @kana_hanaiwa", str(sent[0]["text"]))
             self.assertIn("latest post", str(sent[0]["text"]))
             self.assertEqual(len(sent[0]["items"]), 1)
+            self.assertEqual(sent[0]["tag"], "NEW")
         finally:
             QQBotHandler.x_monitor = old_monitor
             if old_cfg is not None:

@@ -346,4 +346,5 @@ def _send_x_monitor_media(
         access_token,
         text,
         items,
+        tag=tag,
     )

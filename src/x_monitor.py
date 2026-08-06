@@ -833,11 +833,11 @@ class _XWatchTask:
         subset = list(items)[: self._limit]
         message = self._formatter(subset, "NEW")
         assert message.strip(), "通知内容不能为空"
-        if _env_flag(NEW_POST_NOTICE_ENV):
-            self._notify(self._format_new_post_notice(subset))
         if self._notify_media is not None:
             self._notify_media(message, subset, "NEW")
         else:
+            if _env_flag(NEW_POST_NOTICE_ENV):
+                self._notify(self._format_new_post_notice(subset))
             self._notify(message)
         print(
             f"[XMonitor] 发现新推文 {len(subset)}/{len(items)} 条，用户=@{self._username}",
