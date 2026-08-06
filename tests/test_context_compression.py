@@ -393,6 +393,7 @@ def test_agent_summary_model_uses_configured_soft_token_limit(
     init_model.assert_called_once_with(
         "google_genai:test-model",
         max_tokens=3150,
+        max_retries=2,
     )
 
 

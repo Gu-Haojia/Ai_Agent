@@ -4,7 +4,12 @@ Gemini 环境校验测试。
 
 from __future__ import annotations
 
+from unittest import mock
+
 import pytest
+from google.genai.errors import ClientError
+from google.genai.types import HttpRetryOptions
+from tenacity import Retrying, wait_none
 
 import sql_agent_cli_stream_plus as target
 
@@ -103,3 +108,102 @@ def test_ensure_gemini_env_once_rejects_missing_credentials() -> None:
     """
     with pytest.raises(AssertionError, match="缺少 Gemini 可用环境变量"):
         target._ensure_gemini_env_once()
+
+
+def test_google_sdk_retry_codes_include_cancelled() -> None:
+    """
+    验证 Google SDK 的统一重试集合包含 HTTP 499。
+
+    Returns:
+        None: 无返回值。
+
+    Raises:
+        None: 预期行为由断言验证。
+    """
+    assert target.google_genai_api_client._RETRY_HTTP_STATUS_CODES == (
+        408,
+        429,
+        499,
+        500,
+        502,
+        503,
+        504,
+    )
+
+
+def test_google_sdk_retries_cancelled_only_once() -> None:
+    """
+    验证 Google SDK 遇到 HTTP 499 时仅退避重试一次。
+
+    Returns:
+        None: 无返回值。
+
+    Raises:
+        None: 预期行为由断言验证。
+    """
+    retry_options = HttpRetryOptions(attempts=target.GOOGLE_LLM_MAX_ATTEMPTS)
+    retry_kwargs = target.google_genai_api_client.retry_args(retry_options)
+    retry_kwargs["wait"] = wait_none()
+    retrying = Retrying(**retry_kwargs)
+    operation = mock.Mock(
+        side_effect=ClientError(
+            499,
+            {"message": "request cancelled", "status": "CANCELLED"},
+        )
+    )
+
+    with pytest.raises(ClientError):
+        retrying(operation)
+
+    assert operation.call_count == 2
+
+
+def test_init_google_chat_model_limits_total_attempts_to_two() -> None:
+    """
+    验证 Google 模型仅执行首次请求与一次退避重试。
+
+    Returns:
+        None: 无返回值。
+
+    Raises:
+        None: 预期行为由断言验证。
+    """
+    fake_model = object()
+    with mock.patch.object(
+        target,
+        "init_chat_model",
+        return_value=fake_model,
+    ) as init_model:
+        result = target._init_chat_model_with_retry(
+            "google_genai:gemini-test",
+            max_tokens=512,
+        )
+
+    assert result is fake_model
+    init_model.assert_called_once_with(
+        "google_genai:gemini-test",
+        max_tokens=512,
+        max_retries=2,
+    )
+
+
+def test_init_non_google_chat_model_keeps_provider_defaults() -> None:
+    """
+    验证非 Google 模型不会继承 Gemini 的重试次数语义。
+
+    Returns:
+        None: 无返回值。
+
+    Raises:
+        None: 预期行为由断言验证。
+    """
+    fake_model = object()
+    with mock.patch.object(
+        target,
+        "init_chat_model",
+        return_value=fake_model,
+    ) as init_model:
+        result = target._init_chat_model_with_retry("openai:gpt-test")
+
+    assert result is fake_model
+    init_model.assert_called_once_with("openai:gpt-test")

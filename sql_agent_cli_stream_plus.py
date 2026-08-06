@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Annotated, Callable, Iterable, Match, Optional, Sequence, Union, Any
 from zoneinfo import ZoneInfo
 import requests
+from google.genai import _api_client as google_genai_api_client
 from pylatexenc.latex2text import LatexNodes2Text
 
 from typing_extensions import TypedDict
@@ -114,6 +115,19 @@ from src.imas_setlist_tool import (
 ANILIST_SORT_CHOICES_TEXT: str = ", ".join(ANILIST_MEDIA_SORTS)
 TAVILY_SEARCH_TOOL_NAME: str = "tavily_search"
 DEFAULT_TAVILY_SEARCH_LIMIT: int = 5
+GOOGLE_LLM_MAX_ATTEMPTS: int = 2
+GOOGLE_RETRY_HTTP_STATUS_CODES: tuple[int, ...] = (
+    408,
+    429,
+    499,
+    500,
+    502,
+    503,
+    504,
+)
+
+# Google SDK 暂未公开追加默认重试状态码的全局配置入口。
+google_genai_api_client._RETRY_HTTP_STATUS_CODES = GOOGLE_RETRY_HTTP_STATUS_CODES
 
 # ---- 环境校验：仅在首次需要时检查，避免重复消耗 ----
 _ENV_COMMON_CHECKED: bool = False
@@ -563,6 +577,27 @@ def _infer_model_provider(model_name: str) -> str:
     if normalized.startswith("gemini"):
         return "google_genai"
     return ""
+
+
+def _init_chat_model_with_retry(model_name: str, **model_kwargs: Any) -> Any:
+    """
+    初始化聊天模型，并为 Google 模型应用统一重试策略。
+
+    Args:
+        model_name (str): LangChain 统一格式的模型名称。
+        **model_kwargs (Any): 传递给 LangChain 模型工厂的参数。
+
+    Returns:
+        Any: LangChain 聊天模型实例。
+
+    Raises:
+        AssertionError: 当模型名称为空字符串时抛出。
+        Exception: 当底层模型初始化失败时透传原始异常。
+    """
+    provider = _infer_model_provider(model_name)
+    if provider.startswith("google") or provider == "gemini":
+        model_kwargs["max_retries"] = GOOGLE_LLM_MAX_ATTEMPTS
+    return init_chat_model(model_name, **model_kwargs)
 
 
 def _ensure_model_env_once(model_name: str) -> None:
@@ -2100,7 +2135,7 @@ class SQLCheckpointAgentStreamingPlus:
         model_kwargs: dict[str, int] = {}
         if max_output_tokens is not None:
             model_kwargs["max_tokens"] = max_output_tokens
-        return init_chat_model(model_name, **model_kwargs)
+        return _init_chat_model_with_retry(model_name, **model_kwargs)
 
     def _build_graph(self):
         model_name = self._config.model_name
@@ -2110,7 +2145,7 @@ class SQLCheckpointAgentStreamingPlus:
             llm_tools_auto = llm
             llm_tools_none = llm
         else:
-            llm = init_chat_model(model_name)
+            llm = _init_chat_model_with_retry(model_name)
             tools = []
             if self._enable_tools:
                 if os.environ.get("TAVILY_API_KEY"):
@@ -2126,7 +2161,7 @@ class SQLCheckpointAgentStreamingPlus:
                     assert (
                         summary_model_name
                     ), "启用 web_browser 工具时必须设置 SUMMARY_MODEL 环境变量。"
-                    summary_llm = init_chat_model(summary_model_name)
+                    summary_llm = _init_chat_model_with_retry(summary_model_name)
 
                     browser_tool = WebBrowserTool(llm=summary_llm)
                     tools.append(browser_tool)
