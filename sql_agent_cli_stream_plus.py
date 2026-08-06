@@ -115,7 +115,7 @@ from src.imas_setlist_tool import (
 ANILIST_SORT_CHOICES_TEXT: str = ", ".join(ANILIST_MEDIA_SORTS)
 TAVILY_SEARCH_TOOL_NAME: str = "tavily_search"
 DEFAULT_TAVILY_SEARCH_LIMIT: int = 5
-GOOGLE_LLM_MAX_ATTEMPTS: int = 2
+GOOGLE_LLM_MAX_ATTEMPTS: int = 3
 GOOGLE_RETRY_HTTP_STATUS_CODES: tuple[int, ...] = (
     408,
     429,

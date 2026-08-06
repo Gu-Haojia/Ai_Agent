@@ -131,9 +131,9 @@ def test_google_sdk_retry_codes_include_cancelled() -> None:
     )
 
 
-def test_google_sdk_retries_cancelled_only_once() -> None:
+def test_google_sdk_retries_cancelled_twice() -> None:
     """
-    验证 Google SDK 遇到 HTTP 499 时仅退避重试一次。
+    验证 Google SDK 遇到 HTTP 499 时最多退避重试两次。
 
     Returns:
         None: 无返回值。
@@ -155,4 +155,4 @@ def test_google_sdk_retries_cancelled_only_once() -> None:
     with pytest.raises(ClientError):
         retrying(operation)
 
-    assert operation.call_count == 2
+    assert operation.call_count == 3
