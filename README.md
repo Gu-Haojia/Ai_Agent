@@ -115,6 +115,7 @@ LangGraph/
 | `THREAD_STORE_FILE` | 群 + Prompt → 线程 ID 映射文件，默认 `.qq_group_threads.json` |
 | `DAILY_TASK` / `NIGHTLY_TASK` | 需要播报的群号（逗号分隔） |
 | `DAILY_TASK_TIME` / `NIGHTLY_TASK_TIME` | HH:MM（24 小时制） |
+| `DAILY_TASK_CITY` | 早晚天气简报的查询城市，默认为“京都市中京区” |
 | `TICKET_TASK` | 接收 Ticket 更新的群号 |
 | `TICKET_TASK_TIME` | 单个或逗号分隔的多个 HH:MM（例：`02:05,16:05,22:05`） |
 | `TICKET_TASK_PROMPT` | （可选）覆盖 Ticket 更新时给 Agent 的提示 |
@@ -189,7 +190,7 @@ brew services stop postgresql
 
 `daily_task.py` 暴露两个调度器：
 
-- `DailyWeatherTask`：在 `DAILY_TASK_TIME` / `NIGHTLY_TASK_TIME` 触发，对配置的群号推送早晚播报（日期、节日、京都天气、抽选列表与机器人寄语）。
+- `DailyWeatherTask`：在 `DAILY_TASK_TIME` / `NIGHTLY_TASK_TIME` 触发，对配置的群号推送早晚播报（日期、节日、`DAILY_TASK_CITY` 配置城市的天气、抽选列表与机器人寄语）。
 - `DailyTicketTask`：调用 `AsobiTicketQuery` 的 `check` / `update` 模式，一旦检测到新抽选立刻向群广播并可附带提醒。`TICKET_TASK_TIME` 支持多个时间点，以“02:05, 16:05, 22:05”形式配置即可。
 
 两类任务都通过 QQ Bot 的 `_send_daily_text` 回调发送消息，可直接复用或扩展。缓存文件位于 `ticket_data/`，用于避免重复推送。
