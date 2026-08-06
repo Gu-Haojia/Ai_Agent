@@ -198,7 +198,9 @@ def _load_env_from_files(files: list[str]) -> None:
 _load_env_from_files([".env.local", ".env"])
 
 # 复用现有 Agent
+from google.genai.errors import ClientError
 from langchain.chat_models import init_chat_model
+from langchain_google_genai.chat_models import ChatGoogleGenerativeAIError
 from sql_agent_cli_stream_plus import (
     AgentConfig,
     SQLCheckpointAgentStreamingPlus,
@@ -2163,6 +2165,13 @@ class QQBotHandler(BaseHTTPRequestHandler):
             generated_images = []
         except AssertionError as e:
             answer = f"（配置错误）{e}"
+            generated_images = []
+        except ChatGoogleGenerativeAIError as e:
+            cause = e.__cause__
+            if isinstance(cause, ClientError) and cause.code == 429:
+                answer = "（服务繁忙）诶...？模型服务好像有点忙呢，请稍后再试吧~"
+            else:
+                answer = f"（内部错误）{e}"
             generated_images = []
         except Exception as e:
             answer = f"（内部错误）{e}"
