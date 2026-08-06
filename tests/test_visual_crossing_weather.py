@@ -6,6 +6,9 @@ from __future__ import annotations
 
 import json
 import unittest
+from unittest import mock
+
+import requests
 
 from src.visual_crossing_weather import (
     VisualCrossingWeatherClient,
@@ -146,6 +149,43 @@ class VisualCrossingWeatherTests(unittest.TestCase):
         )
         url = client._compose_url(request)
         self.assertTrue(url.endswith("/Tokyo/2024-05-01/2024-05-05"))
+
+    def test_fetch_retries_network_errors_twice_with_backoff(self) -> None:
+        """
+        验证网络异常最多重试两次，并按一秒、两秒退避。
+
+        Args:
+            None
+
+        Returns:
+            None
+
+        Raises:
+            None
+        """
+
+        client = VisualCrossingWeatherClient(api_key="dummy")
+        request = VisualCrossingWeatherRequest(
+            location="Shanghai",
+            start_time="2026-08-06",
+            hour=False,
+        )
+        response = mock.Mock(status_code=200)
+        response.json.return_value = {"days": []}
+
+        with mock.patch(
+            "src.visual_crossing_weather.requests.get",
+            side_effect=[
+                requests.ReadTimeout("first timeout"),
+                requests.ReadTimeout("second timeout"),
+                response,
+            ],
+        ) as request_get, mock.patch("tenacity.nap.time.sleep") as sleep:
+            result = client.fetch(request)
+
+        self.assertEqual(result, {"days": []})
+        self.assertEqual(request_get.call_count, 3)
+        sleep.assert_has_calls([mock.call(1.0), mock.call(2.0)])
 
 
 if __name__ == "__main__":
