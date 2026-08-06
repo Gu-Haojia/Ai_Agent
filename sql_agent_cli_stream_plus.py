@@ -579,27 +579,6 @@ def _infer_model_provider(model_name: str) -> str:
     return ""
 
 
-def _init_chat_model_with_retry(model_name: str, **model_kwargs: Any) -> Any:
-    """
-    初始化聊天模型，并为 Google 模型应用统一重试策略。
-
-    Args:
-        model_name (str): LangChain 统一格式的模型名称。
-        **model_kwargs (Any): 传递给 LangChain 模型工厂的参数。
-
-    Returns:
-        Any: LangChain 聊天模型实例。
-
-    Raises:
-        AssertionError: 当模型名称为空字符串时抛出。
-        Exception: 当底层模型初始化失败时透传原始异常。
-    """
-    provider = _infer_model_provider(model_name)
-    if provider.startswith("google") or provider == "gemini":
-        model_kwargs["max_retries"] = GOOGLE_LLM_MAX_ATTEMPTS
-    return init_chat_model(model_name, **model_kwargs)
-
-
 def _ensure_model_env_once(model_name: str) -> None:
     """
     根据模型名称触发相应的密钥校验逻辑。
@@ -2135,7 +2114,11 @@ class SQLCheckpointAgentStreamingPlus:
         model_kwargs: dict[str, int] = {}
         if max_output_tokens is not None:
             model_kwargs["max_tokens"] = max_output_tokens
-        return _init_chat_model_with_retry(model_name, **model_kwargs)
+        return init_chat_model(
+            model_name,
+            max_retries=GOOGLE_LLM_MAX_ATTEMPTS,
+            **model_kwargs,
+        )
 
     def _build_graph(self):
         model_name = self._config.model_name
@@ -2145,7 +2128,10 @@ class SQLCheckpointAgentStreamingPlus:
             llm_tools_auto = llm
             llm_tools_none = llm
         else:
-            llm = _init_chat_model_with_retry(model_name)
+            llm = init_chat_model(
+                model_name,
+                max_retries=GOOGLE_LLM_MAX_ATTEMPTS,
+            )
             tools = []
             if self._enable_tools:
                 if os.environ.get("TAVILY_API_KEY"):
@@ -2161,7 +2147,10 @@ class SQLCheckpointAgentStreamingPlus:
                     assert (
                         summary_model_name
                     ), "启用 web_browser 工具时必须设置 SUMMARY_MODEL 环境变量。"
-                    summary_llm = _init_chat_model_with_retry(summary_model_name)
+                    summary_llm = init_chat_model(
+                        summary_model_name,
+                        max_retries=GOOGLE_LLM_MAX_ATTEMPTS,
+                    )
 
                     browser_tool = WebBrowserTool(llm=summary_llm)
                     tools.append(browser_tool)
