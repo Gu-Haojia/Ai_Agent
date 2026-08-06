@@ -11,6 +11,12 @@ from urllib.parse import quote
 
 import requests
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from tenacity import (
+    Retrying,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 
 class VisualCrossingWeatherRequest(BaseModel):
@@ -213,7 +219,18 @@ class VisualCrossingWeatherClient:
         url = self._compose_url(request)
         params = self._build_params(request)
         try:
-            response = requests.get(url, params=params, timeout=self._timeout)
+            retrying = Retrying(
+                stop=stop_after_attempt(3),
+                wait=wait_exponential(multiplier=1, min=1, max=2),
+                retry=retry_if_exception_type(requests.RequestException),
+                reraise=True,
+            )
+            response = retrying(
+                requests.get,
+                url,
+                params=params,
+                timeout=self._timeout,
+            )
         except requests.RequestException as exc:  # pragma: no cover
             raise RuntimeError(f"调用 Visual Crossing API 失败: {exc}") from exc
 
