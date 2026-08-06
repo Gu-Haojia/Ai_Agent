@@ -131,9 +131,9 @@ def test_google_sdk_retry_codes_include_cancelled() -> None:
     )
 
 
-def test_google_sdk_retries_cancelled_twice() -> None:
+def test_google_sdk_uses_default_retry_attempts_for_cancelled() -> None:
     """
-    验证 Google SDK 遇到 HTTP 499 时最多退避重试两次。
+    验证 Google SDK 遇到 HTTP 499 时使用默认重试次数。
 
     Returns:
         None: 无返回值。
@@ -141,7 +141,7 @@ def test_google_sdk_retries_cancelled_twice() -> None:
     Raises:
         None: 预期行为由断言验证。
     """
-    retry_options = HttpRetryOptions(attempts=target.GOOGLE_LLM_MAX_ATTEMPTS)
+    retry_options = HttpRetryOptions()
     retry_kwargs = target.google_genai_api_client.retry_args(retry_options)
     retry_kwargs["wait"] = wait_none()
     retrying = Retrying(**retry_kwargs)
@@ -155,4 +155,4 @@ def test_google_sdk_retries_cancelled_twice() -> None:
     with pytest.raises(ClientError):
         retrying(operation)
 
-    assert operation.call_count == 3
+    assert operation.call_count == 5

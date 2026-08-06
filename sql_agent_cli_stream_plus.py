@@ -115,7 +115,6 @@ from src.imas_setlist_tool import (
 ANILIST_SORT_CHOICES_TEXT: str = ", ".join(ANILIST_MEDIA_SORTS)
 TAVILY_SEARCH_TOOL_NAME: str = "tavily_search"
 DEFAULT_TAVILY_SEARCH_LIMIT: int = 5
-GOOGLE_LLM_MAX_ATTEMPTS: int = 3
 GOOGLE_RETRY_HTTP_STATUS_CODES: tuple[int, ...] = (
     408,
     429,
@@ -2151,11 +2150,7 @@ class SQLCheckpointAgentStreamingPlus:
         model_kwargs: dict[str, int] = {}
         if max_output_tokens is not None:
             model_kwargs["max_tokens"] = max_output_tokens
-        return init_chat_model(
-            model_name,
-            max_retries=GOOGLE_LLM_MAX_ATTEMPTS,
-            **model_kwargs,
-        )
+        return init_chat_model(model_name, **model_kwargs)
 
     def _build_graph(self):
         model_name = self._config.model_name
@@ -2165,10 +2160,7 @@ class SQLCheckpointAgentStreamingPlus:
             llm_tools_auto = llm
             llm_tools_none = llm
         else:
-            llm = init_chat_model(
-                model_name,
-                max_retries=GOOGLE_LLM_MAX_ATTEMPTS,
-            )
+            llm = init_chat_model(model_name)
             tools = []
             if self._enable_tools:
                 if os.environ.get("TAVILY_API_KEY"):
@@ -2184,10 +2176,7 @@ class SQLCheckpointAgentStreamingPlus:
                     assert (
                         summary_model_name
                     ), "启用 web_browser 工具时必须设置 SUMMARY_MODEL 环境变量。"
-                    summary_llm = init_chat_model(
-                        summary_model_name,
-                        max_retries=GOOGLE_LLM_MAX_ATTEMPTS,
-                    )
+                    summary_llm = init_chat_model(summary_model_name)
 
                     browser_tool = WebBrowserTool(llm=summary_llm)
                     tools.append(browser_tool)
