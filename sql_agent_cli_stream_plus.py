@@ -610,12 +610,10 @@ def _ensure_model_env_once(model_name: str) -> None:
 
 
 def _cap_messages(prev: list | None, new: list | object) -> list:
-    """基于内置 `add_messages` 的消息合并器。
+    """基于内置 ``add_messages`` 的纯消息合并器。
 
-    先使用 `add_messages(prev, new)` 完成标准的消息合并（与内置追加行为一致），
-    再将新增消息内容追加到日志文件中，便于后续排查与回放。
-    上下文截断与摘要由独立的 ``ContextCompressor`` 节点负责，避免在 reducer
-    阶段丢失待压缩的旧消息。
+    日志记录由图的 ``updates`` 流统一处理，避免 LangGraph 为条件路由构造
+    临时状态时重复触发 reducer 副作用。
 
     Args:
         prev (list|None): 既有消息列表。
@@ -623,8 +621,26 @@ def _cap_messages(prev: list | None, new: list | object) -> list:
 
     Returns:
         list: 合并后的消息列表。
+
+    Raises:
+        None: 参数校验与合并错误由 ``add_messages`` 显式抛出。
     """
-    combined = add_messages(prev or [], new)
+    return add_messages(prev or [], new)
+
+
+def _append_message_log(messages: object) -> None:
+    """
+    将单次图消息更新追加到按日期划分的日志文件。
+
+    Args:
+        messages (object): 用户输入或图节点产生的消息更新。
+
+    Returns:
+        None: 函数无返回值。
+
+    Raises:
+        None: 日志写入失败时向标准错误输出明确错误信息。
+    """
 
     log_dir = Path(os.environ.get("AGENT_MESSAGE_LOG_DIR", "logs")).expanduser()
     # 按日期分日志
@@ -634,13 +650,34 @@ def _cap_messages(prev: list | None, new: list | object) -> list:
     try:
         log_dir.mkdir(parents=True, exist_ok=True)
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-        log_text = _sanitize_for_logging(new)
+        log_text = _sanitize_for_logging(messages)
         with log_path.open("a", encoding="utf-8") as fp:
             fp.write(f"{timestamp} | {log_text}\n")
     except Exception as err:
-        sys.stderr.write(f"[CapMessages] 记录消息失败: {err}\n")
+        sys.stderr.write(f"[MessageLog] 记录消息失败: {err}\n")
 
-    return combined
+
+def _append_graph_update_logs(event: object) -> None:
+    """
+    记录 LangGraph ``updates`` 流事件中的消息更新。
+
+    Args:
+        event (object): 单次 ``updates`` 流事件。
+
+    Returns:
+        None: 函数无返回值。
+
+    Raises:
+        None: 非字典事件或不含消息的节点更新会被明确忽略。
+    """
+    if not isinstance(event, dict):
+        return
+    for node_update in event.values():
+        if not isinstance(node_update, dict):
+            continue
+        message_update = node_update.get("messages")
+        if message_update:
+            _append_message_log(message_update)
 
 
 def _read_positive_int_env(name: str, default: int) -> int:
@@ -3435,12 +3472,17 @@ class SQLCheckpointAgentStreamingPlus:
         else:
             raise AssertionError("user_input 类型不受支持")
 
+        _append_message_log(payload["messages"])
         try:
-            for ev in graph.stream(
+            for mode, ev in graph.stream(
                 payload,
                 cfg,
-                stream_mode="values",
+                stream_mode=["values", "updates"],
             ):
+                if mode == "updates":
+                    _append_graph_update_logs(ev)
+                    continue
+                assert mode == "values", f"未知流模式：{mode}"
                 if not (isinstance(ev, dict) and "messages" in ev and ev["messages"]):
                     continue
                 m = ev["messages"][-1]
@@ -3539,11 +3581,13 @@ class SQLCheckpointAgentStreamingPlus:
 
         try:
             # 指定 as_node=START，避免触发 chatbot 上的 tools_condition 条件边读取 messages
+            message_update = [RemoveMessage(id=REMOVE_ALL_MESSAGES)]
             self._graph.update_state(
                 base_cfg,
-                {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES)]},
+                {"messages": message_update},
                 as_node=START,
             )
+            _append_message_log(message_update)
         except Exception as e:  # pragma: no cover
             raise AssertionError(f"清空最新消息失败：{e}") from e
 
@@ -3734,7 +3778,15 @@ class SQLCheckpointAgentStreamingPlus:
         assert 0 <= index < len(states), f"索引越界：0..{len(states)-1}"
         target = states[index]
         print(f"从检查点 [{index}] 回放 …")
-        for ev in self._graph.stream(None, target.config, stream_mode="values"):
+        for mode, ev in self._graph.stream(
+            None,
+            target.config,
+            stream_mode=["values", "updates"],
+        ):
+            if mode == "updates":
+                _append_graph_update_logs(ev)
+                continue
+            assert mode == "values", f"未知流模式：{mode}"
             if "messages" in ev and ev["messages"]:
                 m = ev["messages"][-1]
                 try:

@@ -298,7 +298,7 @@ def test_agent_prunes_only_after_graph_stream_completes() -> None:
     """
     graph = mock.Mock()
     graph.stream.return_value = iter(
-        [{"messages": [AIMessage(content="已完成")]}]
+        [("values", {"messages": [AIMessage(content="已完成")]})]
     )
     agent = object.__new__(SQLCheckpointAgentStreamingPlus)
     agent._graph = graph
@@ -325,7 +325,7 @@ def test_agent_uses_stateless_graph_without_thread_id() -> None:
     persistent_graph = mock.Mock()
     stateless_graph = mock.Mock()
     stateless_graph.stream.return_value = iter(
-        [{"messages": [AIMessage(content="无状态完成")]}]
+        [("values", {"messages": [AIMessage(content="无状态完成")]})]
     )
     agent = object.__new__(SQLCheckpointAgentStreamingPlus)
     agent._graph = persistent_graph
@@ -341,7 +341,7 @@ def test_agent_uses_stateless_graph_without_thread_id() -> None:
     stateless_graph.stream.assert_called_once_with(
         {"messages": [{"role": "user", "content": "你好"}]},
         {"configurable": {}},
-        stream_mode="values",
+        stream_mode=["values", "updates"],
     )
     agent._prune_completed_thread.assert_not_called()
 
