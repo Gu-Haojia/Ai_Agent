@@ -325,7 +325,7 @@ def test_update_command_still_restarts_when_success_message_fails() -> None:
 
 
 def test_update_command_propagates_repository_failure() -> None:
-    """验证仓库更新失败时异常向上传递且不安排重启。
+    """验证未知仓库更新异常继续向上传递且不安排重启。
 
     Returns:
         None: 测试通过时无返回值。
@@ -355,3 +355,59 @@ def test_update_command_propagates_repository_failure() -> None:
 
     restart_scheduler.schedule.assert_not_called()
     send_mock.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_message"),
+    [
+        (AssertionError("工作区存在未提交修改"), "工作区存在未提交修改"),
+        (
+            subprocess.CalledProcessError(
+                128,
+                ["git", "fetch"],
+                stderr="无法访问远端仓库",
+            ),
+            "无法访问远端仓库",
+        ),
+        (subprocess.TimeoutExpired(["git", "fetch"], 120), "Git 命令执行超时"),
+        (OSError("无法启动 Git"), "无法启动 Git"),
+    ],
+)
+def test_update_command_reports_known_repository_failure(
+    error: BaseException,
+    expected_message: str,
+) -> None:
+    """验证已知更新失败会回群说明原因且不安排重启。
+
+    Args:
+        error (BaseException): 模拟的仓库更新异常。
+        expected_message (str): 群消息中应包含的原因。
+
+    Returns:
+        None: 测试通过时无返回值。
+
+    Raises:
+        None: 测试用例不主动抛出异常。
+    """
+    handler = object.__new__(QQBotHandler)
+    handler.bot_cfg = SimpleNamespace(
+        api_base="http://onebot",
+        access_token="token",
+        cmd_allowed_users=(),
+    )
+    updater = mock.Mock()
+    updater.update.side_effect = error
+    restart_scheduler = mock.Mock()
+
+    with mock.patch.object(qq_group_bot, "_REPOSITORY_UPDATER", updater), mock.patch.object(
+        qq_group_bot,
+        "_APP_RESTART_SCHEDULER",
+        restart_scheduler,
+    ), mock.patch.object(qq_group_bot, "_send_group_msg") as send_mock:
+        handled = handler._handle_commands(10001, 20002, "/update")
+
+    assert handled is True
+    restart_scheduler.schedule.assert_not_called()
+    message = send_mock.call_args.args[2]
+    assert expected_message in message
+    assert "app 未重启" in message

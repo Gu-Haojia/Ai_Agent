@@ -39,6 +39,7 @@ import json
 import os
 import re
 import shlex
+import subprocess
 import sys
 import time
 import unicodedata
@@ -240,6 +241,38 @@ _REPOSITORY_UPDATER = GitRepositoryUpdater(
     repository_url="https://github.com/Gu-Haojia/Ai_Agent.git",
 )
 _APP_RESTART_SCHEDULER = ApplicationRestartScheduler()
+
+
+def _format_repository_update_error(
+    error: Union[
+        AssertionError,
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        OSError,
+    ],
+) -> str:
+    """生成适合回群展示的仓库更新失败消息。
+
+    Args:
+        error: 仓库检查或 Git 子进程产生的已知异常。
+
+    Returns:
+        str: 不包含命令参数的简洁失败说明。
+
+    Raises:
+        AssertionError: 当 Git 标准错误不是文本时抛出。
+    """
+    if isinstance(error, subprocess.CalledProcessError):
+        assert error.stderr is None or isinstance(error.stderr, str), (
+            "Git 标准错误必须为文本"
+        )
+        detail = (error.stderr or "").strip()
+        reason = detail[-300:] if detail else f"Git 命令退出码 {error.returncode}"
+    elif isinstance(error, subprocess.TimeoutExpired):
+        reason = "Git 命令执行超时"
+    else:
+        reason = str(error).strip() or error.__class__.__name__
+    return f"更新失败：{reason}。app 未重启。"
 
 
 def _get_reverse_image_uploader() -> ReverseImageUploader:
@@ -3006,7 +3039,21 @@ class QQBotHandler(BaseHTTPRequestHandler):
             return True
 
         if cmd == "/update" and len(parts) == 1:
-            result = _REPOSITORY_UPDATER.update()
+            try:
+                result = _REPOSITORY_UPDATER.update()
+            except (
+                AssertionError,
+                subprocess.CalledProcessError,
+                subprocess.TimeoutExpired,
+                OSError,
+            ) as error:
+                _send_group_msg(
+                    self.bot_cfg.api_base,
+                    group_id,
+                    _format_repository_update_error(error),
+                    self.bot_cfg.access_token,
+                )
+                return True
             if not result.updated:
                 msg = (
                     "当前已经是最新版本，无需重启。\n"
