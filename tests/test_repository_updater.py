@@ -11,7 +11,11 @@ import pytest
 
 import qq_group_bot
 from qq_group_bot import QQBotHandler
-from src.repository_updater import GitRepositoryUpdater, RepositoryUpdateResult
+from src.repository_updater import (
+    ApplicationRestartScheduler,
+    GitRepositoryUpdater,
+    RepositoryUpdateResult,
+)
 
 
 def _completed(stdout: str = "") -> subprocess.CompletedProcess[str]:
@@ -45,6 +49,24 @@ def _build_updater(repository_path: Path) -> GitRepositoryUpdater:
         repository_path=repository_path,
         repository_url="https://github.com/example/project.git",
     )
+
+
+def test_restart_scheduler_exits_container_main_process_directly() -> None:
+    """验证重启调度器直接退出进程而不依赖 PID 1 的 SIGTERM 行为。
+
+    Returns:
+        None: 测试通过时无返回值。
+
+    Raises:
+        None: 测试用例不主动抛出异常。
+    """
+    with mock.patch("src.repository_updater.os._exit") as exit_mock, mock.patch(
+        "src.repository_updater.os.kill"
+    ) as kill_mock:
+        ApplicationRestartScheduler._terminate_current_process()
+
+    exit_mock.assert_called_once_with(0)
+    kill_mock.assert_not_called()
 
 
 def test_repository_updater_skips_merge_when_already_up_to_date(

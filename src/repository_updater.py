@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import signal
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -194,7 +193,7 @@ class ApplicationRestartScheduler:
         self._delay_seconds = delay_seconds
 
     def schedule(self) -> None:
-        """调度当前进程在短暂延迟后接收 SIGTERM。
+        """调度当前进程在短暂延迟后直接退出。
 
         Returns:
             None: 调度完成后不返回额外值。
@@ -208,12 +207,12 @@ class ApplicationRestartScheduler:
 
     @staticmethod
     def _terminate_current_process() -> None:
-        """向当前应用进程发送 SIGTERM。
+        """直接退出当前应用进程以触发 Docker 重启策略。
 
         Returns:
-            None: 信号发送成功后不返回额外值。
+            None: 进程会立即退出，正常情况下不会返回。
 
         Raises:
-            OSError: 当系统无法发送进程信号时抛出。
+            None: 不主动抛出异常。
         """
-        os.kill(os.getpid(), signal.SIGTERM)
+        os._exit(0)
