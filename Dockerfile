@@ -7,9 +7,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 # 安装系统依赖、字体与 psql 工具，便于健康检查；tzdata 用于时区同步
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
     tzdata \
     build-essential \
     ffmpeg \
+    git \
     fontconfig \
     fonts-liberation \
     fonts-noto-cjk \
