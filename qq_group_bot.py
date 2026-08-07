@@ -210,8 +210,12 @@ from src.google_reverse_image_tool import ReverseImageUploader
 from src.meru_monitor import DEFAULT_LIMIT, MeruMonitorManager, MeruSearchResult
 from src.meru_watch_media import send_meru_message_with_images
 from src.napcat_account_profile import PromptAccountProfileManager
-from src.timer_reminder import JsonReminderStore, TimerReminderManager
+from src.repository_updater import (
+    ApplicationRestartScheduler,
+    GitRepositoryUpdater,
+)
 from src.runtime_settings import RuntimeSettings, RuntimeSettingsStore
+from src.timer_reminder import JsonReminderStore, TimerReminderManager
 from src.x_monitor import (
     DEFAULT_LIMIT as X_DEFAULT_LIMIT,
     XMonitorManager,
@@ -231,6 +235,11 @@ from daily_task import (
 
 _IMAGE_UPLOADER: Optional[ReverseImageUploader] = None
 _IMAGE_UPLOADER_LOCK = Lock()
+_REPOSITORY_UPDATER = GitRepositoryUpdater(
+    repository_path=Path(__file__).resolve().parent,
+    repository_url="https://github.com/Gu-Haojia/Ai_Agent.git",
+)
+_APP_RESTART_SCHEDULER = ApplicationRestartScheduler()
 
 
 def _get_reverse_image_uploader() -> ReverseImageUploader:
@@ -2917,6 +2926,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
         - /summary            → 查看当前线程的上下文压缩摘要
         - /forget             → 清空当前线程的全部历史消息
         - /apicheck           → 使用当前模型自检 API 调用耗时
+        - /update             → 快进更新 main，并在有新提交时重启 app
 
         Args:
             group_id (int): 群号
@@ -2987,11 +2997,41 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 "18) /xlink <推文链接> - 解析指定 X 推文并按当前翻译模式发图\n"
                 "19) /dl <链接> - 下载视频并直接发送到群聊\n"
                 "20) /summary - 查看当前线程的上下文压缩摘要\n"
-                "21) /searchlimit [5-999] - 查看或修改搜索上限"
+                "21) /searchlimit [5-999] - 查看或修改搜索上限\n"
+                "22) /update - 更新 main，并在有新提交时重启 app"
             )
             _send_group_msg(
                 self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
             )
+            return True
+
+        if cmd == "/update" and len(parts) == 1:
+            result = _REPOSITORY_UPDATER.update()
+            if not result.updated:
+                msg = (
+                    "当前已经是最新版本，无需重启。\n"
+                    f"提交：{result.new_commit[:7]}"
+                )
+                _send_group_msg(
+                    self.bot_cfg.api_base,
+                    group_id,
+                    msg,
+                    self.bot_cfg.access_token,
+                )
+            else:
+                msg = (
+                    f"更新成功：{result.old_commit[:7]} → "
+                    f"{result.new_commit[:7]}，正在重启 app。"
+                )
+                try:
+                    _send_group_msg(
+                        self.bot_cfg.api_base,
+                        group_id,
+                        msg,
+                        self.bot_cfg.access_token,
+                    )
+                finally:
+                    _APP_RESTART_SCHEDULER.schedule()
             return True
 
         if cmd == "/searchlimit" and len(parts) in {1, 2}:
