@@ -16,6 +16,7 @@ from src.repository_updater import (
     GitRepositoryUpdater,
     RepositoryUpdateResult,
 )
+from src.runtime_settings import RuntimeSettings
 
 
 def _completed(stdout: str = "") -> subprocess.CompletedProcess[str]:
@@ -265,15 +266,27 @@ def test_update_command_schedules_restart_after_fast_forward() -> None:
         new_commit,
     )
     restart_scheduler = mock.Mock()
+    settings_store = mock.Mock()
 
     with mock.patch.object(qq_group_bot, "_REPOSITORY_UPDATER", updater), mock.patch.object(
         qq_group_bot,
         "_APP_RESTART_SCHEDULER",
         restart_scheduler,
+    ), mock.patch.object(
+        QQBotHandler,
+        "runtime_settings",
+        RuntimeSettings(),
+    ), mock.patch.object(
+        QQBotHandler,
+        "runtime_settings_store",
+        settings_store,
+        create=True,
     ), mock.patch.object(qq_group_bot, "_send_group_msg") as send_mock:
         handled = handler._handle_commands(10001, 20002, "/update")
 
     assert handled is True
+    saved_settings = settings_store.save.call_args.args[0]
+    assert saved_settings.restart_notification_group_id == 10001
     restart_scheduler.schedule.assert_called_once_with()
     assert f"{old_commit[:7]} → {new_commit[:7]}" in send_mock.call_args.args[2]
 
@@ -328,11 +341,21 @@ def test_update_command_still_restarts_when_success_message_fails() -> None:
         "b" * 40,
     )
     restart_scheduler = mock.Mock()
+    settings_store = mock.Mock()
 
     with mock.patch.object(qq_group_bot, "_REPOSITORY_UPDATER", updater), mock.patch.object(
         qq_group_bot,
         "_APP_RESTART_SCHEDULER",
         restart_scheduler,
+    ), mock.patch.object(
+        QQBotHandler,
+        "runtime_settings",
+        RuntimeSettings(),
+    ), mock.patch.object(
+        QQBotHandler,
+        "runtime_settings_store",
+        settings_store,
+        create=True,
     ), mock.patch.object(
         qq_group_bot,
         "_send_group_msg",
