@@ -275,6 +275,39 @@ def _format_repository_update_error(
     return f"更新失败：{reason}。app 未重启。"
 
 
+def _send_pending_restart_notification(
+    bot_config: BotConfig,
+    settings_store: RuntimeSettingsStore,
+    settings: RuntimeSettings,
+) -> RuntimeSettings:
+    """发送待处理的重启成功通知并清空目标群号。
+
+    Args:
+        bot_config (BotConfig): OneBot 连接配置。
+        settings_store (RuntimeSettingsStore): 运行时设置存储。
+        settings (RuntimeSettings): 当前运行时设置。
+
+    Returns:
+        RuntimeSettings: 未触发通知时返回原设置，成功后返回已清空的设置。
+
+    Raises:
+        OSError: 当消息发送或设置保存失败时抛出。
+        RuntimeError: 当 OneBot 返回失败状态时抛出。
+    """
+    group_id = settings.restart_notification_group_id
+    if group_id is None:
+        return settings
+    _send_group_msg(
+        bot_config.api_base,
+        group_id,
+        "✅ app 重启成功。",
+        bot_config.access_token,
+    )
+    cleared_settings = replace(settings, restart_notification_group_id=None)
+    settings_store.save(cleared_settings)
+    return cleared_settings
+
+
 def _get_reverse_image_uploader() -> ReverseImageUploader:
     """
     获取 ReverseImageUploader 单例实例。
@@ -3066,6 +3099,12 @@ class QQBotHandler(BaseHTTPRequestHandler):
                     self.bot_cfg.access_token,
                 )
             else:
+                settings = replace(
+                    self.runtime_settings,
+                    restart_notification_group_id=group_id,
+                )
+                self.runtime_settings_store.save(settings)
+                QQBotHandler.runtime_settings = settings
                 msg = (
                     f"更新成功：{result.old_commit[:7]} → "
                     f"{result.new_commit[:7]}，正在重启 app。"
@@ -3842,6 +3881,20 @@ def main() -> None:
         started_at=datetime.now().astimezone(),
         startup_seconds=time.monotonic() - startup_started,
     ).print_to_console()
+    try:
+        runtime_settings = _send_pending_restart_notification(
+            bot_cfg,
+            runtime_settings_store,
+            runtime_settings,
+        )
+    except (OSError, RuntimeError) as error:
+        print(
+            f"[QQBot] 重启成功通知发送失败，将在下次启动重试：{error}",
+            file=sys.stderr,
+            flush=True,
+        )
+    else:
+        QQBotHandler.runtime_settings = runtime_settings
     # 释放局部对 Agent 的引用，避免 /boost 重建后旧实例因本地变量滞留无法回收
     del agent
     try:

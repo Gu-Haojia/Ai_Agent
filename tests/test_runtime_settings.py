@@ -10,7 +10,7 @@ from unittest import mock
 import pytest
 
 import qq_group_bot
-from qq_group_bot import QQBotHandler
+from qq_group_bot import BotConfig, QQBotHandler, _send_pending_restart_notification
 from src.runtime_settings import RuntimeSettings, RuntimeSettingsStore
 
 
@@ -35,11 +35,111 @@ def test_runtime_settings_store_creates_and_loads_default_file(
 
     assert settings == RuntimeSettings()
     assert json.loads(path.read_text(encoding="utf-8")) == {
-        "schema_version": 1,
+        "schema_version": 2,
         "tavily_search_limit": 5,
         "prompt_file": "",
+        "restart_notification_group_id": None,
     }
     assert store.load() == settings
+
+
+def test_runtime_settings_store_migrates_version_one(tmp_path: Path) -> None:
+    """验证现有版本 1 配置会保留设置并增加重启通知字段。
+
+    Args:
+        tmp_path (Path): pytest 临时目录。
+
+    Returns:
+        None: 测试通过时无返回值。
+
+    Raises:
+        None: 测试用例不主动抛出异常。
+    """
+    path = tmp_path / ".runtime_settings.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "tavily_search_limit": 9,
+                "prompt_file": "takina.txt",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    settings = RuntimeSettingsStore(path).load()
+
+    assert settings == RuntimeSettings(
+        tavily_search_limit=9,
+        prompt_file="takina.txt",
+    )
+    assert json.loads(path.read_text(encoding="utf-8"))[
+        "restart_notification_group_id"
+    ] is None
+
+
+def test_pending_restart_notification_sends_and_clears_group(
+    tmp_path: Path,
+) -> None:
+    """验证启动通知发送成功后清空持久化群号。
+
+    Args:
+        tmp_path (Path): pytest 临时目录。
+
+    Returns:
+        None: 测试通过时无返回值。
+
+    Raises:
+        None: 测试用例不主动抛出异常。
+    """
+    store = RuntimeSettingsStore(tmp_path / ".runtime_settings.json")
+    settings = RuntimeSettings(restart_notification_group_id=10001)
+    store.save(settings)
+    bot_config = BotConfig(api_base="http://onebot", access_token="token")
+
+    with mock.patch.object(qq_group_bot, "_send_group_msg") as send_mock:
+        updated_settings = _send_pending_restart_notification(
+            bot_config,
+            store,
+            settings,
+        )
+
+    send_mock.assert_called_once_with(
+        "http://onebot",
+        10001,
+        "✅ app 重启成功。",
+        "token",
+    )
+    assert updated_settings.restart_notification_group_id is None
+    assert store.load().restart_notification_group_id is None
+
+
+def test_pending_restart_notification_keeps_group_when_send_fails(
+    tmp_path: Path,
+) -> None:
+    """验证启动通知发送失败时保留群号供下次启动重试。
+
+    Args:
+        tmp_path (Path): pytest 临时目录。
+
+    Returns:
+        None: 测试通过时无返回值。
+
+    Raises:
+        None: 预期的 OSError 由测试捕获。
+    """
+    store = RuntimeSettingsStore(tmp_path / ".runtime_settings.json")
+    settings = RuntimeSettings(restart_notification_group_id=10001)
+    store.save(settings)
+
+    with mock.patch.object(
+        qq_group_bot,
+        "_send_group_msg",
+        side_effect=OSError("onebot unavailable"),
+    ), pytest.raises(OSError, match="onebot unavailable"):
+        _send_pending_restart_notification(BotConfig(), store, settings)
+
+    assert store.load().restart_notification_group_id == 10001
 
 
 def test_searchlimit_command_saves_and_updates_current_agent(
