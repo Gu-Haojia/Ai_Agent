@@ -52,6 +52,7 @@ from src.visual_crossing_weather import (
     VisualCrossingWeatherClient,
     VisualCrossingWeatherFormatter,
     VisualCrossingWeatherRequest,
+    VisualCrossingWeatherService,
 )
 from src.exchange_rate_tool import ExchangeRateClient, ExchangeRateToolInput
 from src.exchange_rate_chart import TwelveDataIntradayClient
@@ -2191,6 +2192,10 @@ class SQLCheckpointAgentStreamingPlus:
                         api_key=visual_crossing_key
                     )
                     visual_crossing_formatter = VisualCrossingWeatherFormatter()
+                    visual_crossing_service = VisualCrossingWeatherService(
+                        client=visual_crossing_client,
+                        formatter=visual_crossing_formatter,
+                    )
 
                     @tool(
                         "visual_crossing_weather",
@@ -2216,11 +2221,10 @@ class SQLCheckpointAgentStreamingPlus:
                                 示例 {"hour": true} 表示返回小时级数据；{"hour": false} 表示仅返回天级数据。
 
                         Returns:
-                            str: 整理后的天气信息 JSON 字符串。
+                            str: 整理后的天气信息或结构化错误 JSON 字符串。
 
                         Raises:
                             ValueError: 当参数组合不符合要求时抛出。
-                            RuntimeError: 当调用 Visual Crossing API 失败时抛出。
                         """
 
                         request_obj = VisualCrossingWeatherRequest(
@@ -2229,10 +2233,7 @@ class SQLCheckpointAgentStreamingPlus:
                             end_time=end_time,
                             hour=hour,
                         )
-                        payload = visual_crossing_client.fetch(request_obj)
-                        formatted = visual_crossing_formatter.format(
-                            request_obj, payload
-                        )
+                        formatted = visual_crossing_service.query(request_obj)
                         print(
                             f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [VisualCrossing Tool Output] {formatted}",
                             flush=True,
