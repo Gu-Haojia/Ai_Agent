@@ -14,6 +14,7 @@ from src.visual_crossing_weather import (
     VisualCrossingWeatherClient,
     VisualCrossingWeatherFormatter,
     VisualCrossingWeatherRequest,
+    VisualCrossingWeatherService,
 )
 
 
@@ -186,6 +187,62 @@ class VisualCrossingWeatherTests(unittest.TestCase):
         self.assertEqual(result, {"days": []})
         self.assertEqual(request_get.call_count, 3)
         sleep.assert_has_calls([mock.call(1.0), mock.call(2.0)])
+
+    def test_service_returns_structured_client_error(self) -> None:
+        """
+        验证天气客户端失败时由服务层返回结构化错误。
+
+        Args:
+            None
+
+        Returns:
+            None
+
+        Raises:
+            None
+        """
+
+        client = VisualCrossingWeatherClient(api_key="dummy")
+        formatter = VisualCrossingWeatherFormatter()
+        service = VisualCrossingWeatherService(client=client, formatter=formatter)
+        request = VisualCrossingWeatherRequest(
+            location="常州市天宁区",
+            start_time="2026-08-08",
+            hour=False,
+        )
+
+        with mock.patch.object(
+            client,
+            "fetch",
+            side_effect=RuntimeError(
+                "Visual Crossing API 返回异常状态码: 400，"
+                "详情片段: No valid locations"
+            ),
+        ):
+            output = service.query(request)
+
+        payload = json.loads(output)
+        self.assertEqual(payload["success"], False)
+        self.assertIsNone(payload["data"])
+        self.assertEqual(
+            payload["error"],
+            {
+                "code": "VISUAL_CROSSING_REQUEST_FAILED",
+                "message": (
+                    "Visual Crossing API 返回异常状态码: 400，"
+                    "详情片段: No valid locations"
+                ),
+                "retryable": False,
+            },
+        )
+        self.assertEqual(
+            payload["query"],
+            {
+                "location": "常州市天宁区",
+                "start_time": "2026-08-08",
+                "granularity": "day",
+            },
+        )
 
 
 if __name__ == "__main__":

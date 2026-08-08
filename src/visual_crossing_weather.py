@@ -350,6 +350,37 @@ class VisualCrossingWeatherFormatter:
 
         return json.dumps(result, ensure_ascii=False, indent=2)
 
+    def format_error(
+        self,
+        request: VisualCrossingWeatherRequest,
+        error: RuntimeError,
+    ) -> str:
+        """
+        将天气客户端错误格式化为 Agent 可处理的结构化结果。
+
+        Args:
+            request (VisualCrossingWeatherRequest): 用户请求参数。
+            error (RuntimeError): 天气客户端抛出的明确执行错误。
+
+        Returns:
+            str: 包含错误信息与查询上下文的 JSON 字符串。
+
+        Raises:
+            None
+        """
+
+        result: dict[str, Any] = {
+            "success": False,
+            "data": None,
+            "error": {
+                "code": "VISUAL_CROSSING_REQUEST_FAILED",
+                "message": str(error),
+                "retryable": False,
+            },
+            "query": self._build_query_context(request),
+        }
+        return json.dumps(result, ensure_ascii=False, indent=2)
+
     def _build_query_context(
         self, request: VisualCrossingWeatherRequest
     ) -> dict[str, Any]:
@@ -531,8 +562,69 @@ class VisualCrossingWeatherFormatter:
         return {k: source.get(k) for k in keys if source.get(k) is not None}
 
 
+class VisualCrossingWeatherService:
+    """
+    在天气工具边界统一处理成功结果与可预期客户端错误。
+
+    Args:
+        client (VisualCrossingWeatherClient): Visual Crossing API 客户端。
+        formatter (VisualCrossingWeatherFormatter): 天气结果格式化器。
+
+    Raises:
+        AssertionError: 当依赖实例类型不正确时抛出。
+    """
+
+    def __init__(
+        self,
+        client: VisualCrossingWeatherClient,
+        formatter: VisualCrossingWeatherFormatter,
+    ) -> None:
+        """
+        初始化天气工具服务。
+
+        Args:
+            client (VisualCrossingWeatherClient): Visual Crossing API 客户端。
+            formatter (VisualCrossingWeatherFormatter): 天气结果格式化器。
+
+        Returns:
+            None
+
+        Raises:
+            AssertionError: 当依赖实例类型不正确时抛出。
+        """
+
+        assert isinstance(client, VisualCrossingWeatherClient), "client 类型无效。"
+        assert isinstance(formatter, VisualCrossingWeatherFormatter), (
+            "formatter 类型无效。"
+        )
+        self._client = client
+        self._formatter = formatter
+
+    def query(self, request: VisualCrossingWeatherRequest) -> str:
+        """
+        查询并格式化天气，客户端错误以结构化 JSON 返回。
+
+        Args:
+            request (VisualCrossingWeatherRequest): 已校验的天气请求。
+
+        Returns:
+            str: 成功天气数据或结构化错误 JSON 字符串。
+
+        Raises:
+            AssertionError: 当 request 类型不正确时抛出。
+        """
+
+        assert isinstance(request, VisualCrossingWeatherRequest), "request 类型无效。"
+        try:
+            payload = self._client.fetch(request)
+        except RuntimeError as error:
+            return self._formatter.format_error(request, error)
+        return self._formatter.format(request, payload)
+
+
 __all__ = [
     "VisualCrossingWeatherClient",
     "VisualCrossingWeatherFormatter",
     "VisualCrossingWeatherRequest",
+    "VisualCrossingWeatherService",
 ]
