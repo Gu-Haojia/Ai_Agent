@@ -3588,6 +3588,32 @@ def _build_daily_question(daily_city: str) -> str:
     )
 
 
+def _build_nightly_question(daily_city: str) -> str:
+    """
+    构建每日晚间简报问题。
+
+    Args:
+        daily_city (str): 天气查询和展示使用的城市名称。
+
+    Returns:
+        str: 每日晚间简报问题。
+
+    Raises:
+        AssertionError: 当城市名称为空或类型非法时抛出。
+    """
+    assert isinstance(daily_city, str) and daily_city.strip(), (
+        "daily_city 必须为非空字符串"
+    )
+    city = daily_city.strip()
+    return (
+        "这是每日晚间简报任务。请使用中文和阿拉伯数字，只保留关键信息，不要扩写。\n\n"
+        "1. 用一段自然的话介绍现在的东京时间、明天的日期和星期。如果明天是中国或日本的节日，自然地带出节日信息。查询从明天起7天内中国和日本的法定假日；如有，用自然的方式提醒具体日期和节日，不要在正文中说明查询范围。没有相关节日时直接略过，不要输出否定说明。不要输出国际日或世界纪念日。\n"
+        f"2. 使用visual_crossing_weather查询明天{city}的逐小时天气，hour设为true。天气部分按以下格式输出，每项单独一行：{{天气emoji}} {{目标地点}}｜{{主要天气}} {{最低温}}～{{最高温}}℃；🌡️体感温度：{{最低体感温度}}～{{最高体感温度}}℃；🌧️降水时段：{{降水时段}}；⚠️气象预警：{{预警内容}}。没有降水或预警时省略对应行；湿度、风速或降水量明显异常时，分别按💧相对湿度：{{相对湿度}}、💨风速：{{风速}}、🌧️降水量：{{降水量}}另起一行。\n"
+        "3. 最后，自由说一段想说的话，80字以内\n\n"
+        "各部分之间空行，不要为了凑字数补充内容。正文第一行开头不要添加emoji。"
+    )
+
+
 def _print_startup_begin() -> None:
     """输出 QQ Bot 开始启动的即时日志。
 
@@ -3722,7 +3748,7 @@ def main() -> None:
     )
     daily_task.start(announce=False)
 
-    nightly_question = f"这是一个晚间简报任务，请只要突出简报的关键信息，不要说太多其他内容，默认使用中文和阿拉伯数字表述。你需要包含：1.现在是几点几分(JST)，明天是星期几，明天是否是重要节假日（中国/日本/世界通用）[没有就不回答，不要声明不是节日，不要提示非常不重要的节日，不是节日就跳过这一段][分段]；2.明天{daily_city}的天气预报如何（配上对应的emoji，查询使用{daily_city}，本段可使用列表列出天气、气温，降水时段、其他重要信息，表达清晰明确）[分段]；3.以及想说的话，一句话即可。\n总字数控制在大于180字，250字以内。"
+    nightly_question = _build_nightly_question(daily_city)
     nightly_env = os.environ.get("NIGHTLY_TASK", "").strip()
     nightly_time = os.environ.get("NIGHTLY_TASK_TIME", "21:00").strip()
     nightly_groups = parse_daily_task_groups(nightly_env)
