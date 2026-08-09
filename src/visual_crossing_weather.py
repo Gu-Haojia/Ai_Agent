@@ -292,6 +292,7 @@ class VisualCrossingWeatherClient:
             includes.append("hours")
         if request.use_days:
             includes.append("days")
+        includes.append("alerts")
 
         params: dict[str, Any] = {
             "key": self._api_key,
@@ -335,6 +336,7 @@ class VisualCrossingWeatherFormatter:
             "location": payload.get("resolvedAddress") or payload.get("address"),
             "timezone": payload.get("timezone"),
             "query": self._build_query_context(request),
+            "alerts": self._extract_alerts(payload.get("alerts")),
         }
 
         current_conditions = payload.get("currentConditions")
@@ -349,6 +351,35 @@ class VisualCrossingWeatherFormatter:
             result["days"] = days_info
 
         return json.dumps(result, ensure_ascii=False, indent=2)
+
+    @staticmethod
+    def _extract_alerts(alerts_payload: Any) -> list[dict[str, Any]]:
+        """
+        提取当前查询范围内生效的气象预警。
+
+        Args:
+            alerts_payload (Any): Visual Crossing 返回的 alerts 字段。
+
+        Returns:
+            list[dict[str, Any]]: 仅保留类型、标题、说明和起止时间的预警列表。
+
+        Raises:
+            AssertionError: 当 alerts 字段不是列表时抛出。
+        """
+        if alerts_payload is None:
+            return []
+        assert isinstance(alerts_payload, list), "alerts 必须为列表。"
+        alerts: list[dict[str, Any]] = []
+        for alert in alerts_payload:
+            assert isinstance(alert, dict), "alerts 元素必须为字典。"
+            selected = {
+                key: alert[key]
+                for key in ("event", "headline", "description", "onset", "ends")
+                if alert.get(key) is not None
+            }
+            if selected:
+                alerts.append(selected)
+        return alerts
 
     def format_error(
         self,
