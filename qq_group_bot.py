@@ -228,8 +228,11 @@ from src.x_monitor_translate import TRANSLATION_MODE_ENV, XTweetTranslationMode
 from image_storage import GeneratedImage, ImageStorageManager, StoredImage, StoredVideo
 from src.yt_dlp_downloader import YtDlpVideoDownloader
 from daily_task import (
+    DEFAULT_DAILY_CITY,
     DailyTicketTask,
     DailyWeatherTask,
+    build_daily_question,
+    build_nightly_question,
     parse_daily_task_groups,
     parse_schedule_times,
 )
@@ -2982,6 +2985,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
         - /switch <name>      → 切换到 prompts/<name>.txt（设置 SYS_MSG_FILE）并重建 Agent
         - /boost              → 在 Gemini 文本模型之间切换并重建 Agent
         - /searchlimit [数量] → 查看或修改单轮 Tavily 搜索提醒阈值
+        - /location [地点]    → 查看或修改早晚简报地点
         - /image              → 在 Gemini 生图模型之间切换
         - /imageprovider      → 在 Gemini 与环境指定的生图服务商之间切换
         - /xtrans             → 循环切换 XMonitor 推文翻译模式
@@ -3064,7 +3068,8 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 "19) /dl <链接> - 下载视频并直接发送到群聊\n"
                 "20) /summary - 查看当前线程的上下文压缩摘要\n"
                 "21) /searchlimit [5-999] - 查看或修改搜索上限\n"
-                "22) /update - 更新 main，并在有新提交时重启 app"
+                "22) /update - 更新 main，并在有新提交时重启 app\n"
+                "23) /location [地点] - 查看或修改早晚简报地点"
             )
             _send_group_msg(
                 self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
@@ -3141,6 +3146,28 @@ class QQBotHandler(BaseHTTPRequestHandler):
                     msg = f"设置失败：{error}。用法：/searchlimit [5-999]"
                 except OSError as error:
                     msg = f"设置保存失败：{error}"
+            _send_group_msg(
+                self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
+            )
+            return True
+
+        if cmd == "/location":
+            location = text[len(cmd) :].strip()
+            if not location:
+                current_location = os.environ.get(
+                    "DAILY_TASK_CITY", DEFAULT_DAILY_CITY
+                ).strip()
+                msg = f"当前早晚简报地点：{current_location}"
+            else:
+                try:
+                    settings = replace(self.runtime_settings, daily_city=location)
+                    self.runtime_settings_store.save(settings)
+                except (AssertionError, OSError) as error:
+                    msg = f"地点设置失败：{error}"
+                else:
+                    QQBotHandler.runtime_settings = settings
+                    os.environ["DAILY_TASK_CITY"] = location
+                    msg = f"早晚简报地点已设置为：{location}"
             _send_group_msg(
                 self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
             )
@@ -3561,59 +3588,6 @@ def _get_shared_agent() -> SQLCheckpointAgentStreamingPlus:
     return shared_agent
 
 
-def _build_daily_question(daily_city: str) -> str:
-    """
-    构建每日早间简报问题。
-
-    Args:
-        daily_city (str): 天气查询和展示使用的城市名称。
-
-    Returns:
-        str: 每日早间简报问题。
-
-    Raises:
-        AssertionError: 当城市名称为空或类型非法时抛出。
-    """
-    assert isinstance(daily_city, str) and daily_city.strip(), (
-        "daily_city 必须为非空字符串"
-    )
-    city = daily_city.strip()
-    return (
-        "这是每日早间简报任务。请使用中文和阿拉伯数字，只保留关键信息，不要扩写。\n\n"
-        "1. 用一段自然的话介绍今天的日期、星期和东京时间。如果今天是中国或日本的节日，自然地带出节日信息。查询接下来7天内中国和日本的法定假日；如有，用自然的方式提醒具体日期和节日，不要在正文中说明查询范围。没有相关节日时直接略过，不要输出否定说明。不要输出国际日或世界纪念日。\n"
-        f"2. 使用visual_crossing_weather查询今天{city}的逐小时天气，hour设为true。天气部分按以下格式输出，每项单独一行：今日{{目标地点}}的天气：；{{天气emoji}} {{主要天气}} {{最低温}}～{{最高温}}℃；🌡️体感温度：{{最低体感温度}}～{{最高体感温度}}℃；🌧️降水时段：{{降水时段}}；⚠️气象预警：{{预警内容}}。没有降水或预警时省略对应行；湿度、风速或降水量明显异常时，分别按💧相对湿度：{{相对湿度}}、💨风速：{{风速}}、🌧️降水量：{{降水量}}另起一行。\n"
-        "3. 调用imas_ticket_tool的list模式；只有存在今天截止的抽选时才输出，名称保持原文。\n"
-        "4. 最后，自由说一段想说的话，80字以内\n\n"
-        "各部分之间空行，不要为了凑字数补充内容。正文第一行开头不要添加emoji。"
-    )
-
-
-def _build_nightly_question(daily_city: str) -> str:
-    """
-    构建每日晚间简报问题。
-
-    Args:
-        daily_city (str): 天气查询和展示使用的城市名称。
-
-    Returns:
-        str: 每日晚间简报问题。
-
-    Raises:
-        AssertionError: 当城市名称为空或类型非法时抛出。
-    """
-    assert isinstance(daily_city, str) and daily_city.strip(), (
-        "daily_city 必须为非空字符串"
-    )
-    city = daily_city.strip()
-    return (
-        "这是每日晚间简报任务。请使用中文和阿拉伯数字，只保留关键信息，不要扩写。\n\n"
-        "1. 用一段自然的话介绍现在的东京时间、明天的日期和星期。如果明天是中国或日本的节日，自然地带出节日信息。查询从明天起7天内中国和日本的法定假日；如有，用自然的方式提醒具体日期和节日，不要在正文中说明查询范围。没有相关节日时直接略过，不要输出否定说明。不要输出国际日或世界纪念日。\n"
-        f"2. 使用visual_crossing_weather查询明天{city}的逐小时天气，hour设为true。天气部分按以下格式输出，每项单独一行：明日{{目标地点}}的天气：；{{天气emoji}} {{主要天气}} {{最低温}}～{{最高温}}℃；🌡️体感温度：{{最低体感温度}}～{{最高体感温度}}℃；🌧️降水时段：{{降水时段}}；⚠️气象预警：{{预警内容}}。没有降水或预警时省略对应行；湿度、风速或降水量明显异常时，分别按💧相对湿度：{{相对湿度}}、💨风速：{{风速}}、🌧️降水量：{{降水量}}另起一行。\n"
-        "3. 最后，自由说一段想说的话，80字以内\n\n"
-        "各部分之间空行，不要为了凑字数补充内容。正文第一行开头不要添加emoji。"
-    )
-
-
 def _print_startup_begin() -> None:
     """输出 QQ Bot 开始启动的即时日志。
 
@@ -3671,6 +3645,13 @@ def main() -> None:
                 prompt_file=Path(environment_prompt).name,
             )
             runtime_settings_store.save(runtime_settings)
+    daily_city = runtime_settings.daily_city.strip()
+    if not daily_city:
+        daily_city = os.environ.get("DAILY_TASK_CITY", DEFAULT_DAILY_CITY).strip()
+        assert daily_city, "DAILY_TASK_CITY 必须为非空城市名称"
+        runtime_settings = replace(runtime_settings, daily_city=daily_city)
+        runtime_settings_store.save(runtime_settings)
+    os.environ["DAILY_TASK_CITY"] = daily_city
     reminder_store = JsonReminderStore(
         os.environ.get("REMINDER_STORE_FILE", ".qq_reminders.json")
     )
@@ -3733,29 +3714,25 @@ def main() -> None:
         assert isinstance(text, str) and text.strip(), "text 必须为非空文本"
         _send_group_msg(bot_cfg.api_base, group_id, text, bot_cfg.access_token)
 
-    daily_city = os.environ.get("DAILY_TASK_CITY", "京都市中京区").strip()
-    assert daily_city, "DAILY_TASK_CITY 必须为非空城市名称"
-    daily_question = _build_daily_question(daily_city)
     daily_env = os.environ.get("DAILY_TASK", "").strip()
     daily_time = os.environ.get("DAILY_TASK_TIME", "09:00").strip()
     daily_groups = parse_daily_task_groups(daily_env)
     daily_task = DailyWeatherTask(
         _send_daily_text,
         daily_groups,
-        question=daily_question,
+        question_builder=build_daily_question,
         run_time=daily_time,
         agent_provider=_get_shared_agent,
     )
     daily_task.start(announce=False)
 
-    nightly_question = _build_nightly_question(daily_city)
     nightly_env = os.environ.get("NIGHTLY_TASK", "").strip()
     nightly_time = os.environ.get("NIGHTLY_TASK_TIME", "21:00").strip()
     nightly_groups = parse_daily_task_groups(nightly_env)
     nightly_task = DailyWeatherTask(
         _send_daily_text,
         nightly_groups,
-        question=nightly_question,
+        question_builder=build_nightly_question,
         run_time=nightly_time,
         agent_provider=_get_shared_agent,
     )

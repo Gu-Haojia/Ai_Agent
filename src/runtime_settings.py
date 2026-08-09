@@ -11,7 +11,7 @@ from pathlib import Path
 RUNTIME_SETTINGS_PATH: Path = Path(".runtime_settings.json")
 MIN_TAVILY_SEARCH_LIMIT: int = 5
 MAX_TAVILY_SEARCH_LIMIT: int = 999
-CURRENT_SCHEMA_VERSION: int = 2
+CURRENT_SCHEMA_VERSION: int = 3
 
 
 @dataclass(frozen=True)
@@ -22,6 +22,7 @@ class RuntimeSettings:
         schema_version (int): 配置文件结构版本。
         tavily_search_limit (int): 单轮 Tavily 搜索提醒阈值。
         prompt_file (str): 持久化的 Prompt 文件名，空字符串表示使用环境变量。
+        daily_city (str): 早晚简报地点，空字符串表示使用环境变量。
         restart_notification_group_id (int | None): 重启成功通知的目标群号。
 
     Returns:
@@ -34,6 +35,7 @@ class RuntimeSettings:
     schema_version: int = CURRENT_SCHEMA_VERSION
     tavily_search_limit: int = 5
     prompt_file: str = ""
+    daily_city: str = ""
     restart_notification_group_id: int | None = None
 
     def __post_init__(self) -> None:
@@ -58,6 +60,8 @@ class RuntimeSettings:
             <= MAX_TAVILY_SEARCH_LIMIT
         ), "tavily_search_limit 必须在 5 到 999 之间"
         assert isinstance(self.prompt_file, str), "prompt_file 必须为字符串"
+        assert isinstance(self.daily_city, str), "daily_city 必须为字符串"
+        assert not self.daily_city or self.daily_city.strip(), "daily_city 不能为空白字符串"
         assert self.restart_notification_group_id is None or (
             type(self.restart_notification_group_id) is int
             and self.restart_notification_group_id > 0
@@ -112,7 +116,8 @@ class RuntimeSettingsStore:
             "tavily_search_limit",
             "prompt_file",
         }
-        current_fields = legacy_fields | {"restart_notification_group_id"}
+        version_two_fields = legacy_fields | {"restart_notification_group_id"}
+        current_fields = version_two_fields | {"daily_city"}
         if set(data) == legacy_fields:
             assert data["schema_version"] == 1, "旧版运行时设置版本必须为 1"
             settings = RuntimeSettings(
@@ -121,11 +126,21 @@ class RuntimeSettingsStore:
             )
             self.save(settings)
             return settings
+        if set(data) == version_two_fields:
+            assert data["schema_version"] == 2, "旧版运行时设置版本必须为 2"
+            settings = RuntimeSettings(
+                tavily_search_limit=data["tavily_search_limit"],
+                prompt_file=data["prompt_file"],
+                restart_notification_group_id=data["restart_notification_group_id"],
+            )
+            self.save(settings)
+            return settings
         assert set(data) == current_fields, "运行时设置字段不完整或包含未知字段"
         return RuntimeSettings(
             schema_version=data["schema_version"],
             tavily_search_limit=data["tavily_search_limit"],
             prompt_file=data["prompt_file"],
+            daily_city=data["daily_city"],
             restart_notification_group_id=data["restart_notification_group_id"],
         )
 

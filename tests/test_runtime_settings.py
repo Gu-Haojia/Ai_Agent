@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -35,9 +36,10 @@ def test_runtime_settings_store_creates_and_loads_default_file(
 
     assert settings == RuntimeSettings()
     assert json.loads(path.read_text(encoding="utf-8")) == {
-        "schema_version": 2,
+        "schema_version": 3,
         "tavily_search_limit": 5,
         "prompt_file": "",
+        "daily_city": "",
         "restart_notification_group_id": None,
     }
     assert store.load() == settings
@@ -76,6 +78,42 @@ def test_runtime_settings_store_migrates_version_one(tmp_path: Path) -> None:
     assert json.loads(path.read_text(encoding="utf-8"))[
         "restart_notification_group_id"
     ] is None
+    assert json.loads(path.read_text(encoding="utf-8"))["daily_city"] == ""
+
+
+def test_runtime_settings_store_migrates_version_two(tmp_path: Path) -> None:
+    """验证版本 2 配置迁移后增加简报地点字段。
+
+    Args:
+        tmp_path (Path): pytest 临时目录。
+
+    Returns:
+        None: 测试通过时无返回值。
+
+    Raises:
+        None: 断言失败时由 pytest 报告。
+    """
+    path = tmp_path / ".runtime_settings.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "tavily_search_limit": 9,
+                "prompt_file": "takina.txt",
+                "restart_notification_group_id": 10001,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    settings = RuntimeSettingsStore(path).load()
+
+    assert settings == RuntimeSettings(
+        tavily_search_limit=9,
+        prompt_file="takina.txt",
+        restart_notification_group_id=10001,
+    )
+    assert json.loads(path.read_text(encoding="utf-8"))["daily_city"] == ""
 
 
 def test_pending_restart_notification_sends_and_clears_group(
@@ -188,6 +226,46 @@ def test_searchlimit_command_saves_and_updates_current_agent(
     assert QQBotHandler.runtime_settings.tavily_search_limit == 7
     agent.set_tavily_search_limit.assert_called_once_with(7)
     assert "已设置为：7" in send_mock.call_args.args[2]
+
+
+def test_location_command_saves_and_updates_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """验证地点命令完整保存含空格的地点并同步环境变量。
+
+    Args:
+        tmp_path (Path): pytest 临时目录。
+        monkeypatch (pytest.MonkeyPatch): pytest 环境变量替换工具。
+
+    Returns:
+        None: 测试通过时无返回值。
+
+    Raises:
+        None: 测试用例不主动抛出异常。
+    """
+    handler = object.__new__(QQBotHandler)
+    handler.bot_cfg = SimpleNamespace(
+        api_base="http://onebot",
+        access_token="token",
+        cmd_allowed_users=(),
+    )
+    store = RuntimeSettingsStore(tmp_path / ".runtime_settings.json")
+    monkeypatch.setattr(
+        QQBotHandler, "runtime_settings", RuntimeSettings(), raising=False
+    )
+    monkeypatch.setattr(
+        QQBotHandler, "runtime_settings_store", store, raising=False
+    )
+
+    with mock.patch.object(qq_group_bot, "_send_group_msg") as send_mock:
+        handled = handler._handle_commands(10001, 20002, "/location New York,US")
+
+    assert handled is True
+    assert store.load().daily_city == "New York,US"
+    assert QQBotHandler.runtime_settings.daily_city == "New York,US"
+    assert os.environ["DAILY_TASK_CITY"] == "New York,US"
+    assert "已设置为：New York,US" in send_mock.call_args.args[2]
 
 
 @pytest.mark.parametrize("search_limit", [5, 999])

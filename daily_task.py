@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 from datetime import datetime
@@ -24,6 +25,61 @@ if False:  # pragma: no cover - 类型检查使用，避免循环导入
 
 SendGroupText: TypeAlias = Callable[[int, str], None]
 AgentProvider: TypeAlias = Callable[[], SQLCheckpointAgentStreamingPlus]
+QuestionBuilder: TypeAlias = Callable[[], str]
+DEFAULT_DAILY_CITY: str = "京都市中京区"
+
+
+def _current_daily_city() -> str:
+    """读取当前早晚简报使用的地点。
+
+    Returns:
+        str: 当前进程环境变量中的简报地点。
+
+    Raises:
+        AssertionError: 当地点为空时抛出。
+    """
+    city = os.environ.get("DAILY_TASK_CITY", DEFAULT_DAILY_CITY).strip()
+    assert city, "DAILY_TASK_CITY 必须为非空城市名称"
+    return city
+
+
+def build_daily_question() -> str:
+    """根据最新环境变量构建每日早间简报问题。
+
+    Returns:
+        str: 每日早间简报问题。
+
+    Raises:
+        AssertionError: 当地点为空时抛出。
+    """
+    city = _current_daily_city()
+    return (
+        "这是每日早间简报任务。请使用中文和阿拉伯数字，只保留关键信息，不要扩写。\n\n"
+        "1. 用一段自然的话介绍今天的日期、星期和东京时间。如果今天是中国或日本的节日，自然地带出节日信息。查询接下来7天内中国和日本的法定假日；如有，用自然的方式提醒具体日期和节日，不要在正文中说明查询范围。没有相关节日时直接略过，不要输出否定说明。不要输出国际日或世界纪念日。\n"
+        f"2. 使用visual_crossing_weather查询今天{city}的逐小时天气，hour设为true。天气部分按以下格式输出，每项单独一行：今日{{目标地点}}的天气：；{{天气emoji}} {{主要天气}} {{最低温}}～{{最高温}}℃；🌡️体感温度：{{最低体感温度}}～{{最高体感温度}}℃；🌧️降水时段：{{降水时段}}；⚠️气象预警：{{预警内容}}。没有降水或预警时省略对应行；湿度、风速或降水量明显异常时，分别按💧相对湿度：{{相对湿度}}、💨风速：{{风速}}、🌧️降水量：{{降水量}}另起一行。\n"
+        "3. 调用imas_ticket_tool的list模式；只有存在今天截止的抽选时才输出，名称保持原文。\n"
+        "4. 最后，自由说一段想说的话，80字以内\n\n"
+        "各部分之间空行，不要为了凑字数补充内容。正文第一行开头不要添加emoji。"
+    )
+
+
+def build_nightly_question() -> str:
+    """根据最新环境变量构建每日晚间简报问题。
+
+    Returns:
+        str: 每日晚间简报问题。
+
+    Raises:
+        AssertionError: 当地点为空时抛出。
+    """
+    city = _current_daily_city()
+    return (
+        "这是每日晚间简报任务。请使用中文和阿拉伯数字，只保留关键信息，不要扩写。\n\n"
+        "1. 用一段自然的话介绍现在的东京时间、明天的日期和星期。如果明天是中国或日本的节日，自然地带出节日信息。查询从明天起7天内中国和日本的法定假日；如有，用自然的方式提醒具体日期和节日，不要在正文中说明查询范围。没有相关节日时直接略过，不要输出否定说明。不要输出国际日或世界纪念日。\n"
+        f"2. 使用visual_crossing_weather查询明天{city}的逐小时天气，hour设为true。天气部分按以下格式输出，每项单独一行：明日{{目标地点}}的天气：；{{天气emoji}} {{主要天气}} {{最低温}}～{{最高温}}℃；🌡️体感温度：{{最低体感温度}}～{{最高体感温度}}℃；🌧️降水时段：{{降水时段}}；⚠️气象预警：{{预警内容}}。没有降水或预警时省略对应行；湿度、风速或降水量明显异常时，分别按💧相对湿度：{{相对湿度}}、💨风速：{{风速}}、🌧️降水量：{{降水量}}另起一行。\n"
+        "3. 最后，自由说一段想说的话，80字以内\n\n"
+        "各部分之间空行，不要为了凑字数补充内容。正文第一行开头不要添加emoji。"
+    )
 
 
 def parse_daily_task_groups(raw: str) -> tuple[int, ...]:
@@ -104,7 +160,7 @@ class DailyWeatherTask:
         send_func: SendGroupText,
         group_ids: Sequence[int],
         run_time: str = "09:00",
-        question: str = "今天的天气",
+        question_builder: QuestionBuilder = build_daily_question,
         *,
         agent_provider: AgentProvider,
     ) -> None:
@@ -115,13 +171,13 @@ class DailyWeatherTask:
             send_func (SendGroupText): 发送文本到群聊的回调函数。
             group_ids (Sequence[int]): 准备广播的目标群号列表。
             run_time (str): 每日触发时间，必须为 HH:MM（24 小时制）。
-            question (str): 提问内容，默认“今天的天气”。
+            question_builder (QuestionBuilder): 每次执行时构建提问内容的函数。
             agent_provider (AgentProvider): 获取 Agent 的回调，必须提供。
 
         Raises:
             AssertionError: 当参数不符合预期时抛出。
         """
-        assert isinstance(question, str) and question.strip(), "question 不能为空"
+        assert callable(question_builder), "question_builder 必须可调用"
         assert isinstance(run_time, str) and run_time.strip(), "run_time 不能为空"
         try:
             datetime.strptime(run_time, "%H:%M")
@@ -135,7 +191,7 @@ class DailyWeatherTask:
         self._agent_provider: AgentProvider = agent_provider
         self._group_ids: tuple[int, ...] = normalized_groups
         self._run_time = run_time
-        self._question = question.strip()
+        self._question_builder = question_builder
         self._scheduler = schedule.Scheduler()
         self._stop_event = Event()
         self._thread: Optional[Thread] = None
@@ -193,15 +249,18 @@ class DailyWeatherTask:
 
     def _execute_once(self) -> None:
         """执行一次提问并广播结果。"""
+        question = self._question_builder()
+        assert isinstance(question, str) and question.strip(), "question 不能为空"
+        question = question.strip()
         timestamp = time.strftime("[%m-%d %H:%M:%S]", time.localtime())
         print(
-            f"\033[94m{timestamp}\033[0m [DailyTask] 准备提问：{self._question}",
+            f"\033[94m{timestamp}\033[0m [DailyTask] 准备提问：{question}",
             flush=True,
         )
         try:
             agent = self._agent_provider()
             assert isinstance(agent, SQLCheckpointAgentStreamingPlus), "Agent 未初始化或类型非法"
-            answer = agent.chat_once_stream(self._question)
+            answer = agent.chat_once_stream(question)
             assert isinstance(answer, str) and answer.strip(), "Agent 未返回文本内容"
             reply = answer.strip()
         except Exception as err:

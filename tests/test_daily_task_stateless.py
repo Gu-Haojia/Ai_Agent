@@ -105,7 +105,7 @@ def test_daily_weather_task_calls_agent_without_thread_id() -> None:
     task = DailyWeatherTask(
         send_func,
         [10001],
-        question="今日简报",
+        question_builder=lambda: "今日简报",
         agent_provider=agent_provider,
     )
 
@@ -118,6 +118,42 @@ def test_daily_weather_task_calls_agent_without_thread_id() -> None:
 
     chat_once_stream.assert_called_once_with("今日简报")
     send_func.assert_called_once_with(10001, "📅 简报内容")
+
+
+def test_daily_weather_task_reads_latest_location(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """验证每日简报每次执行都会读取最新地点。
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): pytest 环境变量替换工具。
+
+    Returns:
+        None: 测试通过时无返回值。
+
+    Raises:
+        None: 断言失败时由 pytest 报告。
+    """
+    agent = object.__new__(SQLCheckpointAgentStreamingPlus)
+    task = DailyWeatherTask(
+        mock.Mock(),
+        [10001],
+        agent_provider=mock.Mock(return_value=agent),
+    )
+
+    with mock.patch.object(
+        SQLCheckpointAgentStreamingPlus,
+        "chat_once_stream",
+        return_value="简报内容",
+    ) as chat_once_stream:
+        monkeypatch.setenv("DAILY_TASK_CITY", "Tokyo")
+        task._execute_once()
+        monkeypatch.setenv("DAILY_TASK_CITY", "Changzhou,CN")
+        task._execute_once()
+
+    questions = [call.args[0] for call in chat_once_stream.call_args_list]
+    assert "今天Tokyo的逐小时天气" in questions[0]
+    assert "今天Changzhou,CN的逐小时天气" in questions[1]
 
 
 def test_daily_ticket_task_calls_agent_without_thread_id() -> None:
