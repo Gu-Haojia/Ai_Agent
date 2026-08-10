@@ -1120,6 +1120,36 @@ class ParsedMessage:
     videos: tuple[VideoSegmentInfo, ...]
 
 
+_VIDEO_FILE_SUFFIXES: frozenset[str] = frozenset(
+    {".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv"}
+)
+
+
+def _is_video_file_segment(data: dict[str, object]) -> bool:
+    """
+    判断 file 消息段是否明确表示视频文件。
+
+    Args:
+        data (dict[str, object]): OneBot file 消息段的 data 字段。
+
+    Returns:
+        bool: MIME 类型或文件名、URL 后缀表示视频时返回 True。
+
+    Raises:
+        AssertionError: 当 data 不是字典时抛出。
+    """
+    assert isinstance(data, dict), "file 消息段 data 必须为字典"
+    mime_type = str(data.get("mime_type") or data.get("content_type") or "")
+    if mime_type.strip().lower().startswith("video/"):
+        return True
+    for value in (data.get("name"), data.get("file"), data.get("url")):
+        normalized = str(value or "").strip().lower()
+        normalized = normalized.split("?", 1)[0].split("#", 1)[0]
+        if any(normalized.endswith(suffix) for suffix in _VIDEO_FILE_SUFFIXES):
+            return True
+    return False
+
+
 def _extract_cq_images(raw: str) -> tuple[ImageSegmentInfo, ...]:
     """
     从原始 CQ 文本中解析图像段。
@@ -1262,7 +1292,9 @@ def _normalize_message_segments(
                     break
             if candidate:
                 reply_ids.append(candidate)
-        elif typ == "video":
+        elif typ == "video" or (
+            typ == "file" and _is_video_file_segment(data)
+        ):
             url = data.get("url")
             file_id = data.get("file") or data.get("file_id")
             filename = data.get("name") or data.get("file")
