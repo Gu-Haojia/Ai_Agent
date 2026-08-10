@@ -217,6 +217,7 @@ from src.repository_updater import (
 )
 from src.runtime_settings import RuntimeSettings, RuntimeSettingsStore
 from src.timer_reminder import JsonReminderStore, TimerReminderManager
+from src.token_usage_logger import TOKEN_USAGE_LOGGER
 from src.x_monitor import (
     DEFAULT_LIMIT as X_DEFAULT_LIMIT,
     XMonitorManager,
@@ -2522,7 +2523,10 @@ class QQBotHandler(BaseHTTPRequestHandler):
         assert model_name and model_name.strip(), "模型名称不可为空"
 
         def _invoke() -> str:
-            chat_model = init_chat_model(model_name)
+            chat_model = init_chat_model(
+                model_name,
+                callbacks=[TOKEN_USAGE_LOGGER],
+            )
             result = chat_model.invoke("现在是api测试，不要进行任何推理，只需回复 'Hello, world!' 即可。")
             content = getattr(result, "content", None)
             text = content if isinstance(content, str) else str(result)

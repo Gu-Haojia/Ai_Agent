@@ -14,6 +14,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.graph.message import add_messages
 
 import qq_group_bot
+import sql_agent_cli_stream_plus
 from qq_group_bot import QQBotHandler
 from sql_agent_cli_stream_plus import (
     AgentConfig,
@@ -392,6 +393,7 @@ def test_agent_summary_model_uses_configured_soft_token_limit(
     ensure_env.assert_called_once_with("google_genai:test-model")
     init_model.assert_called_once_with(
         "google_genai:test-model",
+        callbacks=[sql_agent_cli_stream_plus.TOKEN_USAGE_LOGGER],
         max_tokens=3150,
     )
 

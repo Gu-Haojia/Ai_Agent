@@ -81,6 +81,7 @@ from src.serper_image_search_tool import SerperImageSearchTool
 from src.tavily_search_tool import RoutedTavilySearch
 from src.anilist_client import AniListAPI, ANILIST_MEDIA_SORTS
 from src.timer_reminder import TimerReminderManager
+from src.token_usage_logger import TOKEN_USAGE_LOGGER
 from src.asobi_ticket_agent import AsobiTicketQuery
 from src.checkpoint_retention import (
     CheckpointRetentionError,
@@ -2151,7 +2152,11 @@ class SQLCheckpointAgentStreamingPlus:
         model_kwargs: dict[str, int] = {}
         if max_output_tokens is not None:
             model_kwargs["max_tokens"] = max_output_tokens
-        return init_chat_model(model_name, **model_kwargs)
+        return init_chat_model(
+            model_name,
+            callbacks=[TOKEN_USAGE_LOGGER],
+            **model_kwargs,
+        )
 
     def _build_graph(self):
         model_name = self._config.model_name
@@ -2161,7 +2166,7 @@ class SQLCheckpointAgentStreamingPlus:
             llm_tools_auto = llm
             llm_tools_none = llm
         else:
-            llm = init_chat_model(model_name)
+            llm = init_chat_model(model_name, callbacks=[TOKEN_USAGE_LOGGER])
             tools = []
             if self._enable_tools:
                 if os.environ.get("TAVILY_API_KEY"):
@@ -2177,7 +2182,10 @@ class SQLCheckpointAgentStreamingPlus:
                     assert (
                         summary_model_name
                     ), "启用 web_browser 工具时必须设置 SUMMARY_MODEL 环境变量。"
-                    summary_llm = init_chat_model(summary_model_name)
+                    summary_llm = init_chat_model(
+                        summary_model_name,
+                        callbacks=[TOKEN_USAGE_LOGGER],
+                    )
 
                     browser_tool = WebBrowserTool(llm=summary_llm)
                     tools.append(browser_tool)
