@@ -3112,6 +3112,67 @@ class QQBotHandler(BaseHTTPRequestHandler):
             )
             return True
 
+        if cmd == "/log":
+            argument = text[len(cmd) :].strip()
+            if argument == "clear":
+                try:
+                    TOKEN_USAGE_LOGGER.clear()
+                    msg = "Token 消费记录已清空。"
+                except OSError as error:
+                    msg = f"Token 消费记录清空失败：{error}"
+                _send_group_msg(
+                    self.bot_cfg.api_base,
+                    group_id,
+                    msg,
+                    self.bot_cfg.access_token,
+                )
+                return True
+
+            start_time: datetime | None = None
+            if argument:
+                try:
+                    start_time = datetime.strptime(
+                        argument,
+                        "%Y-%m-%d %H:%M",
+                    ).replace(tzinfo=ZoneInfo("Asia/Tokyo"))
+                except ValueError:
+                    _send_group_msg(
+                        self.bot_cfg.api_base,
+                        group_id,
+                        "时间格式错误，用法：/log YYYY-MM-DD HH:MM",
+                        self.bot_cfg.access_token,
+                    )
+                    return True
+            try:
+                summary = TOKEN_USAGE_LOGGER.summarize(start_time)
+                if summary.start_time is None:
+                    msg = (
+                        f"{argument} 之后暂无 Token 消费记录。"
+                        if argument
+                        else "暂无 Token 消费记录。"
+                    )
+                else:
+                    display_time = summary.start_time.astimezone(
+                        ZoneInfo("Asia/Tokyo")
+                    ).strftime("%Y-%m-%d %H:%M")
+                    msg = (
+                        "Token 消费记录\n"
+                        f"记录开始时间：{display_time}\n"
+                        f"总消费：{summary.total_tokens:,}\n"
+                        f"输入消费：{summary.input_tokens:,}\n"
+                        f"输入命中：{summary.cache_read:,}\n"
+                        f"输出消费：{summary.output_tokens:,}"
+                    )
+            except (AssertionError, KeyError, OSError, TypeError, ValueError) as error:
+                msg = f"Token 消费记录读取失败：{error}"
+            _send_group_msg(
+                self.bot_cfg.api_base,
+                group_id,
+                msg,
+                self.bot_cfg.access_token,
+            )
+            return True
+
         if cmd == "/update" and len(parts) == 1:
             try:
                 result = _REPOSITORY_UPDATER.update()
