@@ -100,6 +100,7 @@ class TokenUsageLogger(BaseCallbackHandler):
             output_details = usage.get("output_token_details") or {}
             record = {
                 "time": datetime.now().astimezone().isoformat(),
+                "model_name": str(message.response_metadata.get("model_name") or ""),
                 "input_tokens": usage.get("input_tokens") or 0,
                 "output_tokens": usage.get("output_tokens") or 0,
                 "total_tokens": usage.get("total_tokens") or 0,

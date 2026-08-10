@@ -30,6 +30,7 @@ def test_token_usage_logger_writes_flat_usage_fields(tmp_path: Path) -> None:
     logger = TokenUsageLogger(log_path)
     message = AIMessage(
         content="完成",
+        response_metadata={"model_name": "gemini-3.6-flash"},
         usage_metadata={
             "input_tokens": 120,
             "output_tokens": 30,
@@ -47,12 +48,14 @@ def test_token_usage_logger_writes_flat_usage_fields(tmp_path: Path) -> None:
     record = json.loads(log_path.read_text(encoding="utf-8"))
     assert set(record) == {
         "time",
+        "model_name",
         "input_tokens",
         "output_tokens",
         "total_tokens",
         "cache_read",
         "reasoning",
     }
+    assert record["model_name"] == "gemini-3.6-flash"
     assert record["input_tokens"] == 120
     assert record["output_tokens"] == 30
     assert record["total_tokens"] == 150
@@ -83,6 +86,7 @@ def test_token_usage_logger_fills_missing_usage_with_zero(tmp_path: Path) -> Non
 
     record = json.loads(log_path.read_text(encoding="utf-8"))
     assert record["input_tokens"] == 0
+    assert record["model_name"] == ""
     assert record["output_tokens"] == 0
     assert record["total_tokens"] == 0
     assert record["cache_read"] == 0
