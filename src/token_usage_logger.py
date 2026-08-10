@@ -40,6 +40,54 @@ class TokenUsageSummary:
     output_tokens: int
 
 
+@dataclass(frozen=True)
+class TokenUsageRecord:
+    """单次模型调用的 Token 使用记录。
+
+    Args:
+        recorded_at (datetime): 调用完成时间。
+        model_name (str): API 返回的模型名称。
+        total_tokens (int): 总 Token 数。
+        input_tokens (int): 输入 Token 数。
+        cache_read (int): 缓存命中 Token 数。
+        output_tokens (int): 输出 Token 数。
+
+    Returns:
+        None: 数据类初始化不返回额外值。
+
+    Raises:
+        None: 数据类初始化不主动抛出异常。
+    """
+
+    recorded_at: datetime
+    model_name: str
+    total_tokens: int
+    input_tokens: int
+    cache_read: int
+    output_tokens: int
+
+
+@dataclass(frozen=True)
+class TokenUsageReport:
+    """同一日志快照中的汇总结果与明细记录。
+
+    Args:
+        summary (TokenUsageSummary): Token 汇总结果。
+        records (tuple[TokenUsageRecord, ...]): 符合筛选条件的调用记录。
+        end_time (datetime | None): 汇总记录中的最晚时间。
+
+    Returns:
+        None: 数据类初始化不返回额外值。
+
+    Raises:
+        None: 数据类初始化不主动抛出异常。
+    """
+
+    summary: TokenUsageSummary
+    records: tuple[TokenUsageRecord, ...]
+    end_time: datetime | None
+
+
 class TokenUsageLogger(BaseCallbackHandler):
     """将模型成功调用的 token 使用量追加到 JSONL 文件。
 
@@ -129,9 +177,25 @@ class TokenUsageLogger(BaseCallbackHandler):
             OSError: 当日志文件无法读取时抛出。
             ValueError: 当日志内容不是有效 JSON 或时间格式非法时抛出。
         """
+        return self.report(start_time).summary
+
+    def report(self, start_time: datetime | None = None) -> TokenUsageReport:
+        """读取同一日志快照并返回汇总结果与明细。
+
+        Args:
+            start_time (datetime | None): 筛选起始时间；为空时读取全部记录。
+
+        Returns:
+            TokenUsageReport: 符合时间条件的日志报告。
+
+        Raises:
+            AssertionError: 当筛选时间不含时区或日志字段非法时抛出。
+            OSError: 当日志文件无法读取时抛出。
+            ValueError: 当日志内容不是有效 JSON 或时间格式非法时抛出。
+        """
         if start_time is not None:
             assert start_time.tzinfo is not None, "筛选时间必须包含时区"
-        earliest: datetime | None = None
+        records: list[TokenUsageRecord] = []
         totals = {
             "total_tokens": 0,
             "input_tokens": 0,
@@ -139,30 +203,47 @@ class TokenUsageLogger(BaseCallbackHandler):
             "output_tokens": 0,
         }
         with self._lock:
-            if not self._log_path.exists():
-                return TokenUsageSummary(None, 0, 0, 0, 0)
-            with self._log_path.open("r", encoding="utf-8") as file:
-                for line in file:
-                    if not line.strip():
-                        continue
-                    record = json.loads(line)
-                    recorded_at = datetime.fromisoformat(record["time"])
-                    assert recorded_at.tzinfo is not None, "日志时间必须包含时区"
-                    if start_time is not None and recorded_at < start_time:
-                        continue
-                    if earliest is None or recorded_at < earliest:
-                        earliest = recorded_at
-                    for field in totals:
-                        value = record[field]
-                        assert isinstance(value, int), f"{field} 必须为整数"
-                        totals[field] += value
-        return TokenUsageSummary(
+            if self._log_path.exists():
+                with self._log_path.open("r", encoding="utf-8") as file:
+                    for line in file:
+                        if not line.strip():
+                            continue
+                        raw_record = json.loads(line)
+                        recorded_at = datetime.fromisoformat(raw_record["time"])
+                        assert recorded_at.tzinfo is not None, (
+                            "日志时间必须包含时区"
+                        )
+                        if start_time is not None and recorded_at < start_time:
+                            continue
+                        values: dict[str, int] = {}
+                        for field in totals:
+                            value = raw_record[field]
+                            assert isinstance(value, int), f"{field} 必须为整数"
+                            values[field] = value
+                            totals[field] += value
+                        model_name = raw_record.get("model_name", "")
+                        assert isinstance(model_name, str), "model_name 必须为字符串"
+                        records.append(
+                            TokenUsageRecord(
+                                recorded_at=recorded_at,
+                                model_name=model_name,
+                                total_tokens=values["total_tokens"],
+                                input_tokens=values["input_tokens"],
+                                cache_read=values["cache_read"],
+                                output_tokens=values["output_tokens"],
+                            )
+                        )
+        records.sort(key=lambda record: record.recorded_at)
+        earliest = records[0].recorded_at if records else None
+        end_time = records[-1].recorded_at if records else None
+        summary = TokenUsageSummary(
             start_time=earliest,
             total_tokens=totals["total_tokens"],
             input_tokens=totals["input_tokens"],
             cache_read=totals["cache_read"],
             output_tokens=totals["output_tokens"],
         )
+        return TokenUsageReport(summary, tuple(records), end_time)
 
     def clear(self) -> None:
         """清空 token 使用量日志内容。

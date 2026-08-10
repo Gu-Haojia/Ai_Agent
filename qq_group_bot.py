@@ -217,6 +217,7 @@ from src.repository_updater import (
 )
 from src.runtime_settings import RuntimeSettings, RuntimeSettingsStore
 from src.timer_reminder import JsonReminderStore, TimerReminderManager
+from src.token_usage_chart import TOKEN_USAGE_CHART_RENDERER
 from src.token_usage_logger import TOKEN_USAGE_LOGGER
 from src.x_monitor import (
     DEFAULT_LIMIT as X_DEFAULT_LIMIT,
@@ -876,6 +877,36 @@ def _send_group_msg(
     with urlopen(req, timeout=60) as resp:
         if resp.status != 200:
             raise RuntimeError(f"send_group_msg HTTP {resp.status}")
+
+
+def _build_token_usage_image_message(
+    image_bytes: bytes,
+) -> list[dict[str, dict[str, str]]]:
+    """构造可独立发送的 Token 图表图片消息。
+
+    Args:
+        image_bytes (bytes): PNG 图片字节。
+
+    Returns:
+        list[dict[str, dict[str, str]]]: OneBot 图片消息段。
+
+    Raises:
+        AssertionError: 当图片不是有效 PNG 时抛出。
+    """
+    assert image_bytes.startswith(b"\x89PNG\r\n\x1a\n"), (
+        "Token 图表必须是 PNG"
+    )
+    encoded = base64.b64encode(image_bytes).decode("ascii")
+    return [
+        {
+            "type": "image",
+            "data": {
+                "file": f"base64://{encoded}",
+                "name": "token_usage.png",
+                "cache": "0",
+            },
+        }
+    ]
 
 
 def _send_group_at_message(
@@ -3143,8 +3174,10 @@ class QQBotHandler(BaseHTTPRequestHandler):
                         self.bot_cfg.access_token,
                     )
                     return True
+            report = None
             try:
-                summary = TOKEN_USAGE_LOGGER.summarize(start_time)
+                report = TOKEN_USAGE_LOGGER.report(start_time)
+                summary = report.summary
                 if summary.start_time is None:
                     msg = (
                         f"{argument} 之后暂无 Token 消费记录。"
@@ -3171,6 +3204,29 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 msg,
                 self.bot_cfg.access_token,
             )
+            if report is not None and report.records:
+                try:
+                    image_bytes = TOKEN_USAGE_CHART_RENDERER.render_to_png_bytes(
+                        report
+                    )
+                    image_message = _build_token_usage_image_message(image_bytes)
+                    _send_group_msg(
+                        self.bot_cfg.api_base,
+                        group_id,
+                        image_message,
+                        self.bot_cfg.access_token,
+                    )
+                except (
+                    AssertionError,
+                    OSError,
+                    RuntimeError,
+                    TypeError,
+                    ValueError,
+                ) as error:
+                    print(
+                        f"[TokenUsageChart] Token 图表发送失败：{error}",
+                        flush=True,
+                    )
             return True
 
         if cmd == "/update" and len(parts) == 1:

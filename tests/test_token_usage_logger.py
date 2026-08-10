@@ -133,6 +133,7 @@ def test_token_usage_logger_summarizes_from_selected_time(tmp_path: Path) -> Non
     records = [
         {
             "time": "2026-08-10T10:00:00+09:00",
+            "model_name": "gemini-3.6-flash",
             "input_tokens": 100,
             "output_tokens": 20,
             "total_tokens": 120,
@@ -141,6 +142,7 @@ def test_token_usage_logger_summarizes_from_selected_time(tmp_path: Path) -> Non
         },
         {
             "time": "2026-08-10T12:00:00+09:00",
+            "model_name": "gemini-3.1-pro-preview",
             "input_tokens": 200,
             "output_tokens": 30,
             "total_tokens": 230,
@@ -164,6 +166,14 @@ def test_token_usage_logger_summarizes_from_selected_time(tmp_path: Path) -> Non
     assert summary.cache_read == 80
     assert summary.output_tokens == 30
 
+    report = logger.report(
+        datetime(2026, 8, 10, 11, 0, tzinfo=timezone(timedelta(hours=9)))
+    )
+    assert report.summary == summary
+    assert report.end_time == datetime.fromisoformat(records[1]["time"])
+    assert len(report.records) == 1
+    assert report.records[0].model_name == "gemini-3.1-pro-preview"
+
 
 def test_token_usage_logger_clear_keeps_empty_file(tmp_path: Path) -> None:
     """验证清空操作保留空日志文件。
@@ -185,3 +195,35 @@ def test_token_usage_logger_clear_keeps_empty_file(tmp_path: Path) -> None:
 
     assert log_path.exists()
     assert log_path.read_text(encoding="utf-8") == ""
+
+
+def test_token_usage_report_defaults_missing_model_name(tmp_path: Path) -> None:
+    """验证旧日志缺少模型名称时仍可生成报告。
+
+    Args:
+        tmp_path (Path): pytest 临时目录。
+
+    Returns:
+        None: 测试完成后不返回额外值。
+
+    Raises:
+        None: 预期行为由断言验证。
+    """
+    log_path = tmp_path / "token_usage.jsonl"
+    log_path.write_text(
+        json.dumps(
+            {
+                "time": "2026-08-10T10:00:00+09:00",
+                "input_tokens": 100,
+                "output_tokens": 20,
+                "total_tokens": 120,
+                "cache_read": 40,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = TokenUsageLogger(log_path).report()
+
+    assert report.records[0].model_name == ""
