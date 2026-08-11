@@ -131,7 +131,18 @@ class TokenUsageChartBuilder:
             model_name = record.model_name or "未知模型"
             index = model_index.get(model_name, len(model_names) - 1)
             values[index] += record.total_tokens
-        ordered = sorted(buckets.items())
+        first_bucket = min(buckets)
+        last_bucket = max(buckets)
+        ordered: list[tuple[datetime, list[int]]] = []
+        bucket_start = first_bucket
+        while bucket_start <= last_bucket:
+            ordered.append(
+                (
+                    bucket_start,
+                    buckets.get(bucket_start, [0] * len(model_names)),
+                )
+            )
+            bucket_start = self._next_bucket(bucket_start, granularity)
         totals = [sum(values) for _, values in ordered]
         points: list[TokenUsageChartPoint] = []
         for index, (bucket_start, values) in enumerate(ordered):
@@ -256,6 +267,34 @@ class TokenUsageChartBuilder:
             second=0,
             microsecond=0,
         )
+
+    @staticmethod
+    def _next_bucket(
+        bucket_start: datetime,
+        granularity: TokenUsageGranularity,
+    ) -> datetime:
+        """返回当前时间桶之后的下一个连续时间桶。
+
+        Args:
+            bucket_start (datetime): 当前时间桶起始时间。
+            granularity (TokenUsageGranularity): 时间聚合粒度。
+
+        Returns:
+            datetime: 下一个时间桶起始时间。
+
+        Raises:
+            AssertionError: 当时间缺少时区时抛出。
+        """
+        assert bucket_start.tzinfo is not None, "时间桶必须包含时区"
+        if granularity is TokenUsageGranularity.HOUR:
+            return bucket_start + timedelta(hours=1)
+        if granularity is TokenUsageGranularity.DAY:
+            return bucket_start + timedelta(days=1)
+        if granularity is TokenUsageGranularity.WEEK:
+            return bucket_start + timedelta(weeks=1)
+        year = bucket_start.year + bucket_start.month // 12
+        month = bucket_start.month % 12 + 1
+        return bucket_start.replace(year=year, month=month)
 
 
 class TokenUsageChartRenderer:
