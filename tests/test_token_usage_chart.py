@@ -233,6 +233,10 @@ def test_chart_renderer_embeds_local_d3_and_fixed_font() -> None:
     assert "自动粒度" in html
     assert '.token-value{color:#9aa0a6' in html
     assert 'attr("class","token-value").text(d=>compact(d.value))' in html
+    assert 'background:#f7f9fc;border:1px solid #eaecf0;border-radius:12px' in html
+    assert '.chart-frame{fill:transparent;stroke:none}' in html
+    assert 'background:#fafbfc;border:1px solid #eef0f3;border-radius:12px' in html
+    assert 'attr("stroke","#fff").attr("stroke-width",6)' not in html
 
 
 def test_chart_renderer_outputs_fixed_png() -> None:
