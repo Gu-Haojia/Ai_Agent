@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -87,6 +88,70 @@ def test_token_usage_logger_fills_missing_usage_with_zero(tmp_path: Path) -> Non
     record = json.loads(log_path.read_text(encoding="utf-8"))
     assert record["input_tokens"] == 0
     assert record["model_name"] == ""
+    assert record["output_tokens"] == 0
+    assert record["total_tokens"] == 0
+    assert record["cache_read"] == 0
+    assert record["reasoning"] == 0
+
+
+def test_token_usage_logger_records_google_response(tmp_path: Path) -> None:
+    """验证 Google 响应字段转换为统一 token 日志。
+
+    Args:
+        tmp_path (Path): pytest 临时目录。
+
+    Returns:
+        None: 测试完成后不返回额外值。
+
+    Raises:
+        None: 预期行为由断言验证。
+    """
+    log_path = tmp_path / "token_usage.jsonl"
+    logger = TokenUsageLogger(log_path)
+    response = SimpleNamespace(
+        model_version="gemini-3.1-flash-image-001",
+        usage_metadata=SimpleNamespace(
+            prompt_token_count=120,
+            candidates_token_count=300,
+            total_token_count=450,
+            cached_content_token_count=80,
+            thoughts_token_count=30,
+        ),
+    )
+
+    logger.record_google_response(response, "gemini-3.1-flash-image")
+
+    record = json.loads(log_path.read_text(encoding="utf-8"))
+    assert record["model_name"] == "gemini-3.1-flash-image-001"
+    assert record["input_tokens"] == 120
+    assert record["output_tokens"] == 300
+    assert record["total_tokens"] == 450
+    assert record["cache_read"] == 80
+    assert record["reasoning"] == 30
+
+
+def test_token_usage_logger_fills_missing_google_usage_with_zero(
+    tmp_path: Path,
+) -> None:
+    """验证 Google 响应缺失 token 字段时补零。
+
+    Args:
+        tmp_path (Path): pytest 临时目录。
+
+    Returns:
+        None: 测试完成后不返回额外值。
+
+    Raises:
+        None: 预期行为由断言验证。
+    """
+    log_path = tmp_path / "token_usage.jsonl"
+    logger = TokenUsageLogger(log_path)
+
+    logger.record_google_response(SimpleNamespace(), "gemini-fallback")
+
+    record = json.loads(log_path.read_text(encoding="utf-8"))
+    assert record["model_name"] == "gemini-fallback"
+    assert record["input_tokens"] == 0
     assert record["output_tokens"] == 0
     assert record["total_tokens"] == 0
     assert record["cache_read"] == 0

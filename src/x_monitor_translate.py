@@ -11,6 +11,7 @@ import json
 import os
 from typing import Any, Optional, Protocol, Sequence
 
+from src.token_usage_logger import TOKEN_USAGE_LOGGER
 from src.x_monitor_render import XRenderedTweet
 
 TRANSLATION_MODE_ENV = "X_MONITOR_TRANSLATION_MODE"
@@ -147,6 +148,7 @@ class GeminiTweetTranslator:
         assert len(translations) == len(originals), "Gemini 翻译数量与输入不一致"
         result = [str(item).strip() for item in translations]
         assert all(result), "Gemini 翻译结果不能包含空字符串"
+        TOKEN_USAGE_LOGGER.record_google_response(response, self._model)
         return result
 
     def _create_client(self) -> Any:

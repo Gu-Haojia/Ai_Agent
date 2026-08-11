@@ -146,14 +146,80 @@ class TokenUsageLogger(BaseCallbackHandler):
             usage = message.usage_metadata or {}
             input_details = usage.get("input_token_details") or {}
             output_details = usage.get("output_token_details") or {}
+            self.record_usage(
+                model_name=str(message.response_metadata.get("model_name") or ""),
+                input_tokens=usage.get("input_tokens"),
+                output_tokens=usage.get("output_tokens"),
+                total_tokens=usage.get("total_tokens"),
+                cache_read=input_details.get("cache_read"),
+                reasoning=output_details.get("reasoning"),
+            )
+        except Exception as exc:
+            print(f"[TokenUsageLog] token 使用记录失败：{exc}", flush=True)
+
+    def record_google_response(self, response: Any, requested_model: str) -> None:
+        """解析 Google GenAI 响应并记录 token 使用量。
+
+        Args:
+            response (Any): Google GenAI 的生成响应。
+            requested_model (str): 请求使用的模型名称。
+
+        Returns:
+            None: 记录完成后不返回额外值。
+
+        Raises:
+            None: 解析或记录失败只输出控制台日志。
+        """
+        try:
+            usage = getattr(response, "usage_metadata", None)
+            self.record_usage(
+                model_name=str(
+                    getattr(response, "model_version", None) or requested_model
+                ),
+                input_tokens=getattr(usage, "prompt_token_count", 0),
+                output_tokens=getattr(usage, "candidates_token_count", 0),
+                total_tokens=getattr(usage, "total_token_count", 0),
+                cache_read=getattr(usage, "cached_content_token_count", 0),
+                reasoning=getattr(usage, "thoughts_token_count", 0),
+            )
+        except Exception as exc:
+            print(f"[TokenUsageLog] token 使用记录失败：{exc}", flush=True)
+
+    def record_usage(
+        self,
+        *,
+        model_name: str,
+        input_tokens: int | None,
+        output_tokens: int | None,
+        total_tokens: int | None,
+        cache_read: int | None,
+        reasoning: int | None,
+    ) -> None:
+        """将标准化 token 使用量追加到 JSONL 文件。
+
+        Args:
+            model_name (str): API 返回或请求使用的模型名称。
+            input_tokens (int | None): 输入 token 数。
+            output_tokens (int | None): 输出 token 数。
+            total_tokens (int | None): 总 token 数。
+            cache_read (int | None): 缓存命中 token 数。
+            reasoning (int | None): 推理 token 数。
+
+        Returns:
+            None: 记录完成后不返回额外值。
+
+        Raises:
+            None: 写入失败只输出控制台日志。
+        """
+        try:
             record = {
                 "time": datetime.now().astimezone().isoformat(),
-                "model_name": str(message.response_metadata.get("model_name") or ""),
-                "input_tokens": usage.get("input_tokens") or 0,
-                "output_tokens": usage.get("output_tokens") or 0,
-                "total_tokens": usage.get("total_tokens") or 0,
-                "cache_read": input_details.get("cache_read") or 0,
-                "reasoning": output_details.get("reasoning") or 0,
+                "model_name": model_name,
+                "input_tokens": input_tokens or 0,
+                "output_tokens": output_tokens or 0,
+                "total_tokens": total_tokens or 0,
+                "cache_read": cache_read or 0,
+                "reasoning": reasoning or 0,
             }
             line = json.dumps(record, ensure_ascii=False, separators=(",", ":"))
             with self._lock:

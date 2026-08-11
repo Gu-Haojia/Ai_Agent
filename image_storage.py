@@ -29,6 +29,8 @@ from google.genai import types
 from google.genai import errors
 from PIL import Image, ImageOps, UnidentifiedImageError
 
+from src.token_usage_logger import TOKEN_USAGE_LOGGER
+
 if TYPE_CHECKING:
     from openai.types.images_response import ImagesResponse
 
@@ -1228,4 +1230,10 @@ class ImageStorageManager:
 
         prompt_text = " ".join(text_outputs).strip() or prompt_clean
 
-        return self.save_generated_image(b64_data, prompt_text, cleaned_mime)
+        generated_image = self.save_generated_image(
+            b64_data,
+            prompt_text,
+            cleaned_mime,
+        )
+        TOKEN_USAGE_LOGGER.record_google_response(response, model_name)
+        return generated_image

@@ -778,14 +778,25 @@ class MultimodalUnitTest(unittest.TestCase):
                 mock.patch.object(image_storage.genai, "Client", return_value=fake_client),
                 mock.patch.object(image_storage.errors, "ClientError", FakeClientError),
                 mock.patch.object(image_storage.time, "sleep") as sleep_mock,
+                mock.patch.object(
+                    image_storage.TOKEN_USAGE_LOGGER,
+                    "record_google_response",
+                ) as record_usage,
             ):
-                result = manager.generate_image_via_gemini("draw a cat")
+                result = manager.generate_image_via_gemini(
+                    "draw a cat",
+                    model="gemini-2.5-flash-image",
+                )
             self.assertTrue(result.path.exists())
 
         self.assertEqual([call.args[0] for call in sleep_mock.call_args_list], [5, 10, 30])
         self.assertEqual(fake_models.calls, 4)
         self.assertEqual(result.mime_type, "image/png")
         self.assertEqual(result.prompt, "draw a cat")
+        record_usage.assert_called_once_with(
+            mock.ANY,
+            "gemini-2.5-flash-image",
+        )
 
 
 if __name__ == "__main__":

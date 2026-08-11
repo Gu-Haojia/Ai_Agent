@@ -1191,11 +1191,18 @@ class XMonitorTranslationTests(unittest.TestCase):
         fake_models = FakeModels()
         client = SimpleNamespace(models=fake_models)
 
-        result = GeminiTweetTranslator(client=client).translate_texts(["hello"])
+        with mock.patch(
+            "src.x_monitor_translate.TOKEN_USAGE_LOGGER.record_google_response"
+        ) as record_usage:
+            result = GeminiTweetTranslator(client=client).translate_texts(["hello"])
 
         self.assertEqual(result, ["你好"])
         self.assertEqual(fake_models.calls[0]["model"], TRANSLATION_MODEL)
         self.assertIn("hello", str(fake_models.calls[0]["contents"]))
+        record_usage.assert_called_once_with(
+            mock.ANY,
+            TRANSLATION_MODEL,
+        )
 
     def test_gemini_translator_uses_model_from_environment(self) -> None:
         """
@@ -1241,10 +1248,14 @@ class XMonitorTranslationTests(unittest.TestCase):
         with mock.patch.dict(
             os.environ, {TRANSLATION_MODEL_ENV: "gemini-2.5-flash"}
         ):
-            result = GeminiTweetTranslator(client=client).translate_texts(["hello"])
+            with mock.patch(
+                "src.x_monitor_translate.TOKEN_USAGE_LOGGER.record_google_response"
+            ) as record_usage:
+                result = GeminiTweetTranslator(client=client).translate_texts(["hello"])
 
         self.assertEqual(result, ["你好"])
         self.assertEqual(fake_models.calls[0]["model"], "gemini-2.5-flash")
+        record_usage.assert_called_once_with(mock.ANY, "gemini-2.5-flash")
 
     def test_rendered_tweet_translator_can_replace_text_only(self) -> None:
         """
