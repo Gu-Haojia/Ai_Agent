@@ -231,6 +231,8 @@ def test_chart_renderer_embeds_local_d3_and_fixed_font() -> None:
     assert f'font-family:"{CHART_FONT_FAMILY}"' in html
     assert "innerRadius(0)" in html
     assert "自动粒度" in html
+    assert '.token-value{color:#9aa0a6' in html
+    assert 'attr("class","token-value").text(d=>compact(d.value))' in html
 
 
 def test_chart_renderer_outputs_fixed_png() -> None:
