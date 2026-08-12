@@ -1437,6 +1437,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
     runtime_settings: RuntimeSettings = RuntimeSettings()
     runtime_settings_store: RuntimeSettingsStore
     _post_lock: ClassVar[Lock] = Lock()  # 串行化处理 POST 请求
+    power_enabled: ClassVar[bool] = True
     # 群/Prompt -> 线程ID 映射，用于在 Prompt 间恢复各自的群对话线程
     _group_threads: dict[str, str] = {}
     _thread_store_file: str = ""
@@ -2168,6 +2169,10 @@ class QQBotHandler(BaseHTTPRequestHandler):
         # 内部命令：当文本完全命中命令格式时优先处理，并直接在群内回复
         t = parsed.text.strip()
         if self._handle_commands(group_id, user_id, t):
+            self._send_no_content()
+            return
+
+        if not self.__class__.power_enabled:
             self._send_no_content()
             return
         
@@ -3053,6 +3058,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
         - /switch <name>      → 切换到 prompts/<name>.txt（设置 SYS_MSG_FILE）并重建 Agent
         - /boost              → 在 Gemini 文本模型之间切换并重建 Agent
         - /luna               → 在 Luna 与启动时配置的模型之间切换并重建 Agent
+        - /power              → 开关非命令消息输入
         - /searchlimit [数量] → 查看或修改单轮 Tavily 搜索提醒阈值
         - /location [地点]    → 查看或修改早晚简报地点
         - /image              → 在 Gemini 生图模型之间切换
@@ -3138,7 +3144,8 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 "20) /summary - 查看当前线程的上下文压缩摘要\n"
                 "21) /searchlimit [5-999] - 查看或修改搜索上限\n"
                 "22) /update - 更新 main，并在有新提交时重启 app\n"
-                "23) /location [地点] - 查看或修改早晚简报地点"
+                "23) /location [地点] - 查看或修改早晚简报地点\n"
+                "24) /power - 开关非命令消息输入"
             )
             _send_group_msg(
                 self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
@@ -3564,6 +3571,17 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 self.bot_cfg.api_base,
                 group_id,
                 f"模型已切换：{current_model} -> {next_model}，Agent 已重建。",
+                self.bot_cfg.access_token,
+            )
+            return True
+
+        if cmd == "/power" and len(parts) == 1:
+            self.__class__.power_enabled = not self.__class__.power_enabled
+            status = "开启" if self.__class__.power_enabled else "关闭"
+            _send_group_msg(
+                self.bot_cfg.api_base,
+                group_id,
+                f"非命令消息输入已{status}。",
                 self.bot_cfg.access_token,
             )
             return True
