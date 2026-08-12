@@ -3578,9 +3578,15 @@ class QQBotHandler(BaseHTTPRequestHandler):
         if cmd == "/power" and len(parts) == 1:
             self.__class__.power_enabled = not self.__class__.power_enabled
             status = (
-                "制作人先生，我开机啦！随时可以叫我哦~"
+                "制作人先生，我回来啦！随时可以叫我哦~"
                 if self.__class__.power_enabled
-                else "制作人先生，我先关机休息啦，再输入一次 /power 就能叫醒我哦~"
+                else "制作人先生，我先休息啦，再输入一次 /power 就能叫醒我哦~"
+            )
+            print(
+                f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m "
+                f"\033[33m[QQBot]\033[0m /power 已切换："
+                f"{'接收普通消息' if self.__class__.power_enabled else '忽略普通消息'}。",
+                flush=True,
             )
             _send_group_msg(
                 self.bot_cfg.api_base,
