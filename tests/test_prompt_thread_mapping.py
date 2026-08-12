@@ -380,7 +380,33 @@ def test_clear_replaces_only_current_prompt_thread(
 
 
 def test_forget_targets_only_current_prompt_thread() -> None:
-    """验证 `/forget` 删除当前 Prompt 对应的 checkpoint 线程。
+    """验证 `/forget` 只清空当前 Prompt 对应线程的消息上下文。
+
+    Returns:
+        None: 测试通过时无返回值。
+
+    Raises:
+        None: 测试用例不主动抛出异常。
+    """
+    handler = _handler()
+    clear_messages = mock.Mock()
+    agent = _agent()
+    agent.del_latest_messages = clear_messages
+    QQBotHandler.agent = agent
+    QQBotHandler._group_threads = {
+        "10001/default": "thread-10001-mother-101",
+        "10001/kotone": "thread-10001-mother-202",
+    }
+
+    with mock.patch.object(qq_group_bot, "_send_group_msg"):
+        handled = handler._handle_commands(10001, 20002, "/forget")
+
+    assert handled is True
+    clear_messages.assert_called_once_with(thread_id="thread-10001-mother-101")
+
+
+def test_forget_hard_clears_current_prompt_thread() -> None:
+    """验证 `/forget hard` 删除当前 Prompt 对应的完整 checkpoint 线程。
 
     Returns:
         None: 测试通过时无返回值。
@@ -399,7 +425,7 @@ def test_forget_targets_only_current_prompt_thread() -> None:
     }
 
     with mock.patch.object(qq_group_bot, "_send_group_msg"):
-        handled = handler._handle_commands(10001, 20002, "/forget")
+        handled = handler._handle_commands(10001, 20002, "/forget hard")
 
     assert handled is True
     clear_thread.assert_called_once_with(thread_id="thread-10001-mother-101")
