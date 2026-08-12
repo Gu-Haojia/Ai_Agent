@@ -3275,6 +3275,26 @@ class SQLCheckpointAgentStreamingPlus:
                 + basic_msg
             )
             state_messages = list(state.get("messages", []))
+            if model_name.lower() != "openai:gpt-5.6-luna":
+                state_messages = [
+                    message.model_copy(
+                        update={
+                            "content": [
+                                block
+                                for block in message.content
+                                if not (
+                                    isinstance(block, dict)
+                                    and block.get("type") == "reasoning"
+                                    and "reasoning" not in block
+                                )
+                            ]
+                        }
+                    )
+                    if isinstance(message, AIMessage)
+                    and isinstance(message.content, list)
+                    else message
+                    for message in state_messages
+                ]
             messages = [sys_msg]
             tavily_notice = _build_tavily_prompt_notice(
                 _count_current_turn_tavily_calls(state_messages),
