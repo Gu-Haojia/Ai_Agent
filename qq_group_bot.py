@@ -197,6 +197,7 @@ def _load_env_from_files(files: list[str]) -> None:
 
 
 _load_env_from_files([".env.local", ".env"])
+_INITIAL_MODEL_NAME = os.environ.get("MODEL_NAME", "openai:gpt-4o-mini")
 
 # 复用现有 Agent
 from google.genai.errors import ClientError
@@ -3051,6 +3052,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
         - /switch             → 列出 prompts 目录下可用文件名（不含后缀）
         - /switch <name>      → 切换到 prompts/<name>.txt（设置 SYS_MSG_FILE）并重建 Agent
         - /boost              → 在 Gemini 文本模型之间切换并重建 Agent
+        - /luna               → 在 Luna 与启动时配置的模型之间切换并重建 Agent
         - /searchlimit [数量] → 查看或修改单轮 Tavily 搜索提醒阈值
         - /location [地点]    → 查看或修改早晚简报地点
         - /image              → 在 Gemini 生图模型之间切换
@@ -3546,6 +3548,23 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 msg = f"切换失败（内部错误）：{e}"
             _send_group_msg(
                 self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
+            )
+            return True
+
+        if cmd == "/luna" and len(parts) == 1:
+            current_model = self.agent._config.model_name
+            next_model = (
+                _INITIAL_MODEL_NAME
+                if current_model == "openai:gpt-5.6-luna"
+                else "openai:gpt-5.6-luna"
+            )
+            os.environ["MODEL_NAME"] = next_model
+            self.rebuild_agent()
+            _send_group_msg(
+                self.bot_cfg.api_base,
+                group_id,
+                f"模型已切换：{current_model} -> {next_model}，Agent 已重建。",
+                self.bot_cfg.access_token,
             )
             return True
 
