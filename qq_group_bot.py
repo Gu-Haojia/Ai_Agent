@@ -3577,11 +3577,15 @@ class QQBotHandler(BaseHTTPRequestHandler):
 
         if cmd == "/power" and len(parts) == 1:
             self.__class__.power_enabled = not self.__class__.power_enabled
-            status = "开启" if self.__class__.power_enabled else "关闭"
+            status = (
+                "制作人先生，我开机啦！随时可以叫我哦~"
+                if self.__class__.power_enabled
+                else "制作人先生，我先关机休息啦，再输入一次 /power 就能叫醒我哦~"
+            )
             _send_group_msg(
                 self.bot_cfg.api_base,
                 group_id,
-                f"非命令消息输入已{status}。",
+                status,
                 self.bot_cfg.access_token,
             )
             return True
