@@ -143,6 +143,51 @@ def test_repository_updater_fast_forwards_to_remote_commit(tmp_path: Path) -> No
     assert ["merge", "--ff-only", new_commit] in commands
 
 
+def test_repository_updater_updates_origin_tracking_ref(
+    tmp_path: Path,
+) -> None:
+    """验证拉取时同步更新 origin/main 远程跟踪分支。
+
+    Args:
+        tmp_path (Path): pytest 临时目录。
+
+    Returns:
+        None: 测试通过时无返回值。
+
+    Raises:
+        None: 测试用例不主动抛出异常。
+    """
+    updater = _build_updater(tmp_path)
+    old_commit = "a" * 40
+    new_commit = "b" * 40
+    responses = [
+        _completed("main\n"),
+        _completed(),
+        _completed(),
+        _completed(f"{old_commit}\n"),
+        _completed(f"{new_commit}\n"),
+        _completed(),
+        _completed(),
+        _completed(f"{new_commit}\n"),
+    ]
+
+    with mock.patch(
+        "src.repository_updater.subprocess.run",
+        side_effect=responses,
+    ) as run_mock:
+        updater.update()
+
+    fetch_command = run_mock.call_args_list[2].args[0][3:]
+    assert fetch_command == [
+        "fetch",
+        "--no-tags",
+        "https://github.com/example/project.git",
+        "main:refs/remotes/origin/main",
+    ]
+    commands = [call.args[0][3:] for call in run_mock.call_args_list]
+    assert ["rev-parse", "refs/remotes/origin/main"] in commands
+
+
 def test_repository_updater_rejects_dirty_worktree(tmp_path: Path) -> None:
     """验证共享工作区存在修改时直接终止更新。
 

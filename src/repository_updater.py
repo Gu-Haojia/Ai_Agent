@@ -107,14 +107,15 @@ class GitRepositoryUpdater:
             worktree_status = self._run_git("status", "--porcelain")
             assert not worktree_status, "工作区存在未提交修改，已终止更新"
 
+            tracking_ref = f"refs/remotes/origin/{self._branch}"
             self._run_git(
                 "fetch",
                 "--no-tags",
                 self._repository_url,
-                self._branch,
+                f"{self._branch}:{tracking_ref}",
             )
             old_commit = self._run_git("rev-parse", "HEAD")
-            remote_commit = self._run_git("rev-parse", "FETCH_HEAD")
+            remote_commit = self._run_git("rev-parse", tracking_ref)
             if old_commit == remote_commit:
                 return RepositoryUpdateResult(
                     updated=False,
