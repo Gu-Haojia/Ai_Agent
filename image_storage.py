@@ -742,7 +742,7 @@ class ImageStorageManager:
 
         assert isinstance(filename, str) and filename.strip(), "filename 不能为空"
         normalized = filename.strip()
-        assert Path(normalized).name == normalized, "filename 不允许包含路径"
+        assert Path(normalized).name == normalized, "filename 仅支持文件名，不支持文件夹路径"
 
         def _read_from(path: Path) -> StoredImage:
             data_bytes = path.read_bytes()

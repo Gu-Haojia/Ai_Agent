@@ -3160,7 +3160,10 @@ class SQLCheckpointAgentStreamingPlus:
                         )
                         reference_paths.append(stored_remote.path)
                     else:
-                        stored_image = manager.load_stored_image(name_or_url)
+                        try:
+                            stored_image = manager.load_stored_image(name_or_url)
+                        except AssertionError as exc:
+                            return f"参考图像加载失败：{exc}"
                         references.append(
                             (stored_image.mime_type, stored_image.base64_data)
                         )

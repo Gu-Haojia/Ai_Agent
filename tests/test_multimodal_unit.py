@@ -617,6 +617,11 @@ class MultimodalUnitTest(unittest.TestCase):
             self.assertTrue(loaded.base64_data)
             with self.assertRaises(AssertionError):
                 manager.load_stored_image("missing.png")
+            with self.assertRaisesRegex(
+                AssertionError,
+                "filename 仅支持文件名，不支持文件夹路径",
+            ):
+                manager.load_stored_image("folder/image.png")
 
     def test_save_base64_image_resizes_when_pixels_exceed_limit(self) -> None:
         """确认超过像素上限的入站图片会自动缩放后保存。"""
