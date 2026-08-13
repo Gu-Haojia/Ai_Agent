@@ -6,6 +6,8 @@ import json
 from types import SimpleNamespace
 from unittest import mock
 
+import httpx
+import pytest
 from google.genai.errors import ClientError
 from langchain_google_genai.chat_models import ChatGoogleGenerativeAIError
 
@@ -13,9 +15,25 @@ import qq_group_bot
 from qq_group_bot import BotConfig, QQBotHandler
 
 
-def test_gemini_rate_limit_uses_fixed_group_message() -> None:
+@pytest.mark.parametrize(
+    ("model_error", "expected_message"),
+    (
+        (
+            ChatGoogleGenerativeAIError("raw Gemini HTTP 429 detail"),
+            "（服务繁忙）诶...？模型服务好像有点忙呢，请稍后再试吧~",
+        ),
+        (
+            httpx.ReadTimeout("request timed out"),
+            "（请求超时）诶...？模型服务好像有点忙呢，请稍后再试吧~",
+        ),
+    ),
+)
+def test_gemini_model_error_uses_fixed_group_message(
+    model_error: Exception,
+    expected_message: str,
+) -> None:
     """
-    验证 Gemini 最终返回 HTTP 429 时不向群聊暴露原始异常。
+    验证 Gemini 限流或超时时向群聊返回固定提示。
 
     Returns:
         None: 无返回值。
@@ -23,19 +41,19 @@ def test_gemini_rate_limit_uses_fixed_group_message() -> None:
     Raises:
         None: 预期行为由断言验证。
     """
-    rate_limit_error = ChatGoogleGenerativeAIError("raw Gemini HTTP 429 detail")
-    rate_limit_error.__cause__ = ClientError(
-        429,
-        {
-            "message": "quota exceeded",
-            "status": "RESOURCE_EXHAUSTED",
-        },
-    )
+    if isinstance(model_error, ChatGoogleGenerativeAIError):
+        model_error.__cause__ = ClientError(
+            429,
+            {
+                "message": "quota exceeded",
+                "status": "RESOURCE_EXHAUSTED",
+            },
+        )
     agent = SimpleNamespace(
         _config=SimpleNamespace(model_name="google_genai:gemini-test"),
         set_token_printer=mock.Mock(),
         set_memory_namespace=mock.Mock(),
-        chat_once_stream=mock.Mock(side_effect=rate_limit_error),
+        chat_once_stream=mock.Mock(side_effect=model_error),
     )
     handler = object.__new__(QQBotHandler)
     handler.bot_cfg = BotConfig(
@@ -83,6 +101,6 @@ def test_gemini_rate_limit_uses_fixed_group_message() -> None:
     send_group_msg.assert_called_once_with(
         "http://onebot",
         10001,
-        "（服务繁忙）诶...？模型服务好像有点忙呢，请稍后再试吧~",
+        expected_message,
         "token",
     )

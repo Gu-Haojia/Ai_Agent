@@ -2166,7 +2166,12 @@ class SQLCheckpointAgentStreamingPlus:
             llm_tools_auto = llm
             llm_tools_none = llm
         else:
-            llm = init_chat_model(model_name, callbacks=[TOKEN_USAGE_LOGGER], **({"use_responses_api": True} if model_name.lower() == "openai:gpt-5.6-luna" else {}))
+            llm = init_chat_model(
+                model_name,
+                callbacks=[TOKEN_USAGE_LOGGER],
+                request_timeout=90 if _is_truthy_env(os.environ.get("GOOGLE_GENAI_USE_VERTEXAI")) else None,
+                **({"use_responses_api": True} if model_name.lower() == "openai:gpt-5.6-luna" else {}),
+            )
             tools = []
             if self._enable_tools:
                 if os.environ.get("TAVILY_API_KEY"):
