@@ -74,6 +74,46 @@ def _search_payload() -> dict[str, object]:
     }
 
 
+def _detail_payload() -> dict[str, object]:
+    """
+    构造固定的网易云歌曲详情响应。
+
+    Returns:
+        dict[str, object]: 包含歌曲、歌手和封面的详情响应。
+
+    Raises:
+        None: 本函数不主动抛出异常。
+    """
+    return {
+        "code": 200,
+        "songs": [
+            {
+                "id": 1357375695,
+                "name": "海阔天空",
+                "artists": [{"name": "Beyond"}],
+                "album": {"picUrl": "https://image.example/cover.jpg"},
+            }
+        ],
+    }
+
+
+def _signed_ark() -> dict[str, object]:
+    """
+    构造固定的已签名音乐 Ark。
+
+    Returns:
+        dict[str, object]: 可发送给 QQ 的 Ark 对象。
+
+    Raises:
+        None: 本函数不主动抛出异常。
+    """
+    return {
+        "app": "com.tencent.music.lua",
+        "config": {"token": "signed-token"},
+        "view": "music",
+    }
+
+
 class NeteaseMusicClientTests(unittest.TestCase):
     """验证网易云音乐搜索客户端的参数和响应校验。"""
 
@@ -160,8 +200,15 @@ class NeteaseMusicClientTests(unittest.TestCase):
 class OneBotMusicCardSenderTests(unittest.TestCase):
     """验证 OneBot 音乐卡片发送参数和业务响应处理。"""
 
-    def test_send_builds_music_segment_and_returns_message_id(self) -> None:
-        """发送成功时应构造 163 音乐段并返回消息 ID。"""
+    def test_send_builds_signed_json_segment_and_returns_message_id(self) -> None:
+        """发送成功时应构造签名 JSON 音乐段并返回消息 ID。"""
+        ark = _signed_ark()
+        http_get = mock.Mock(
+            side_effect=[
+                _response(_detail_payload()),
+                _response({"code": 200, "msg": "success", "data": ark}),
+            ]
+        )
         http_post = mock.Mock(
             return_value=_response(
                 {
@@ -175,28 +222,89 @@ class OneBotMusicCardSenderTests(unittest.TestCase):
         sender = OneBotMusicCardSender(
             api_base="http://onebot/",
             access_token="token",
+            http_get=http_get,
             http_post=http_post,
+            signed_api_key="sign-key",
         )
 
         message_id = sender.send("1357375695", 123456)
 
         self.assertEqual(message_id, "987654")
+        self.assertEqual(http_get.call_count, 2)
+        http_get.assert_has_calls(
+            [
+                mock.call(
+                    "https://music.163.com/api/song/detail/",
+                    params={"id": "1357375695", "ids": "[1357375695]"},
+                    timeout=60.0,
+                ),
+                mock.call(
+                    "https://apii.xianyuw.cn/api/v1/qq-musicArk",
+                    params={
+                        "key": "sign-key",
+                        "url": (
+                            "http://music.163.com/song/media/outer/url"
+                            "?id=1357375695"
+                        ),
+                        "song": "海阔天空",
+                        "singer": "Beyond",
+                        "cover": "https://image.example/cover.jpg",
+                        "jump": "https://y.music.163.com/m/song/1357375695",
+                        "format": "netease",
+                    },
+                    timeout=60.0,
+                ),
+            ]
+        )
+        sent_payload = http_post.call_args.kwargs["json"]
+        self.assertEqual(sent_payload["group_id"], 123456)
+        self.assertEqual(sent_payload["message"][0]["type"], "json")
+        self.assertEqual(
+            json.loads(sent_payload["message"][0]["data"]["data"]),
+            ark,
+        )
         http_post.assert_called_once_with(
             "http://onebot/send_group_msg",
-            json={
-                "group_id": 123456,
-                "message": [
-                    {
-                        "type": "music",
-                        "data": {"type": "163", "id": "1357375695"},
-                    }
-                ],
-            },
+            json=sent_payload,
             headers={
                 "Content-Type": "application/json",
                 "Authorization": "Bearer token",
             },
             timeout=60.0,
+        )
+
+    def test_send_keeps_legacy_music_segment(self) -> None:
+        """关闭内部开关时应继续使用原有 163 音乐段。"""
+        http_get = mock.Mock()
+        http_post = mock.Mock(
+            return_value=_response(
+                {
+                    "status": "ok",
+                    "retcode": 0,
+                    "data": {"message_id": 987654},
+                    "message": "",
+                }
+            )
+        )
+        sender = OneBotMusicCardSender(
+            api_base="http://onebot/",
+            http_get=http_get,
+            http_post=http_post,
+        )
+
+        with mock.patch("src.netease_music_tool.USE_SIGNED_MUSIC_CARD", False):
+            message_id = sender.send("1357375695", 123456)
+
+        self.assertEqual(message_id, "987654")
+        http_get.assert_not_called()
+        self.assertEqual(
+            http_post.call_args.kwargs["json"]["message"],
+            [
+                {
+                    "type": "music",
+                    "data": {"type": "163", "id": "1357375695"},
+                }
+            ],
         )
 
     def test_send_exposes_onebot_business_failure(self) -> None:
@@ -215,8 +323,9 @@ class OneBotMusicCardSenderTests(unittest.TestCase):
             ),
         )
 
-        with self.assertRaises(NeteaseMusicToolError) as caught:
-            sender.send("1357375695", 123456)
+        with mock.patch("src.netease_music_tool.USE_SIGNED_MUSIC_CARD", False):
+            with self.assertRaises(NeteaseMusicToolError) as caught:
+                sender.send("1357375695", 123456)
 
         self.assertEqual(caught.exception.error_code, "onebot_business_failed")
         self.assertIn("消息体无法解析", str(caught.exception))

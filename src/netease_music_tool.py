@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import json
+import os
 from dataclasses import dataclass
 from typing import Callable
 from urllib.parse import urljoin
@@ -17,6 +19,9 @@ HttpGet = Callable[..., requests.Response]
 HttpPost = Callable[..., requests.Response]
 DEFAULT_NETEASE_MUSIC_API_BASE = "https://nce.gqzsldy.com"
 DEFAULT_ONEBOT_API_BASE = "http://127.0.0.1:3000"
+NETEASE_SONG_DETAIL_API_URL = "https://music.163.com/api/song/detail/"
+XIANYUW_MUSIC_ARK_API_URL = "https://apii.xianyuw.cn/api/v1/qq-musicArk"
+USE_SIGNED_MUSIC_CARD = True
 
 
 def _parse_json_response(
@@ -251,7 +256,9 @@ class OneBotMusicCardSender:
         api_base: str,
         access_token: str = "",
         timeout_seconds: float = 60.0,
+        http_get: HttpGet | None = None,
         http_post: HttpPost | None = None,
+        signed_api_key: str | None = None,
     ) -> None:
         """
         初始化 OneBot 音乐卡片发送器。
@@ -260,7 +267,9 @@ class OneBotMusicCardSender:
             api_base (str): OneBot HTTP API 基地址。
             access_token (str): OneBot Bearer Token，可为空。
             timeout_seconds (float): HTTP 请求超时秒数。
+            http_get (HttpGet | None): 可注入的 HTTP GET 调用函数。
             http_post (HttpPost | None): 可注入的 HTTP POST 调用函数。
+            signed_api_key (str | None): 签名接口密钥，默认读取现有环境变量。
 
         Returns:
             None: 构造函数无返回值。
@@ -274,7 +283,13 @@ class OneBotMusicCardSender:
         self._api_base = normalized_api_base.rstrip("/")
         self._access_token = access_token.strip()
         self._timeout_seconds = timeout_seconds
+        self._http_get = http_get or requests.get
         self._http_post = http_post or requests.post
+        self._signed_api_key = (
+            os.environ.get("XIANYUW_API_KEY", "").strip()
+            if signed_api_key is None
+            else signed_api_key.strip()
+        )
 
     def send(self, song_id: str, group_id: int) -> str:
         """
@@ -295,17 +310,158 @@ class OneBotMusicCardSender:
         assert normalized_song_id.isdigit(), "song_id 必须是数字字符串"
         assert group_id > 0, "group_id 必须为正整数"
 
+        if USE_SIGNED_MUSIC_CARD:
+            message = self._build_signed_message(normalized_song_id)
+        else:
+            message = [
+                {
+                    "type": "music",
+                    "data": {"type": "163", "id": normalized_song_id},
+                }
+            ]
+        return self._send_message(message, group_id)
+
+    def _build_signed_message(self, song_id: str) -> list[dict[str, object]]:
+        """
+        获取歌曲信息和签名 Ark，并构造 OneBot JSON 消息段。
+
+        Args:
+            song_id (str): 已校验的网易云数字歌曲 ID。
+
+        Returns:
+            list[dict[str, object]]: 可直接交给 OneBot 的 JSON 消息段。
+
+        Raises:
+            AssertionError: 当密钥为空或外部响应结构不符合约定时抛出。
+            NeteaseMusicToolError: 当歌曲详情或签名接口请求失败时抛出。
+        """
+        assert self._signed_api_key, "XIANYUW_API_KEY 不能为空"
+        detail_payload = self._get_json(
+            NETEASE_SONG_DETAIL_API_URL,
+            {"id": song_id, "ids": f"[{song_id}]"},
+            "网易云歌曲详情接口",
+        )
+        assert detail_payload.get("code") == 200, "网易云歌曲详情响应 code 不是 200"
+        songs = detail_payload.get("songs")
+        assert isinstance(songs, list) and songs, "网易云歌曲详情响应缺少 songs"
+        song = songs[0]
+        assert isinstance(song, dict), "网易云歌曲详情必须是对象"
+        title = song.get("name")
+        artists = song.get("artists")
+        album = song.get("album")
+        assert isinstance(title, str) and title.strip(), "网易云歌曲详情缺少 name"
+        assert isinstance(artists, list) and artists, "网易云歌曲详情缺少 artists"
+        artist_names: list[str] = []
+        for artist in artists:
+            assert isinstance(artist, dict), "网易云歌曲歌手信息必须是对象"
+            artist_name = artist.get("name")
+            assert isinstance(artist_name, str) and artist_name.strip(), (
+                "网易云歌曲歌手信息缺少 name"
+            )
+            artist_names.append(artist_name.strip())
+        assert isinstance(album, dict), "网易云歌曲详情缺少 album"
+        cover = album.get("picUrl")
+        assert isinstance(cover, str) and cover.strip(), "网易云歌曲详情缺少封面"
+
+        signed_payload = self._get_json(
+            XIANYUW_MUSIC_ARK_API_URL,
+            {
+                "key": self._signed_api_key,
+                "url": f"http://music.163.com/song/media/outer/url?id={song_id}",
+                "song": title.strip(),
+                "singer": "/".join(artist_names),
+                "cover": cover.strip(),
+                "jump": f"https://y.music.163.com/m/song/{song_id}",
+                "format": "netease",
+            },
+            "音乐卡片签名接口",
+        )
+        assert signed_payload.get("code") == 200, "音乐卡片签名响应 code 不是 200"
+        ark = signed_payload.get("data")
+        assert isinstance(ark, dict), "音乐卡片签名响应缺少 data"
+        return [
+            {
+                "type": "json",
+                "data": {
+                    "data": json.dumps(
+                        ark,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                },
+            }
+        ]
+
+    def _get_json(
+        self,
+        url: str,
+        params: dict[str, str],
+        service_name: str,
+    ) -> dict[str, object]:
+        """
+        请求音乐卡片依赖的 GET 接口并解析 JSON。
+
+        Args:
+            url (str): 请求地址。
+            params (dict[str, str]): 查询参数。
+            service_name (str): 用于错误信息的服务名称。
+
+        Returns:
+            dict[str, object]: 已解析的 JSON 对象。
+
+        Raises:
+            NeteaseMusicToolError: 当请求超时、失败或返回非 200 时抛出。
+            AssertionError: 当响应不是有效 JSON 对象时抛出。
+        """
+        try:
+            response = self._http_get(
+                url,
+                params=params,
+                timeout=self._timeout_seconds,
+            )
+        except requests.Timeout as exc:
+            raise NeteaseMusicToolError(
+                "music_card_request_failed",
+                f"{service_name}请求超时。",
+            ) from exc
+        except requests.RequestException as exc:
+            raise NeteaseMusicToolError(
+                "music_card_request_failed",
+                f"{service_name}请求失败：{exc}",
+            ) from exc
+        if response.status_code != 200:
+            raise NeteaseMusicToolError(
+                "music_card_request_failed",
+                f"{service_name}返回 HTTP {response.status_code}。",
+            )
+        return _parse_json_response(response, service_name)
+
+    def _send_message(
+        self,
+        message: list[dict[str, object]],
+        group_id: int,
+    ) -> str:
+        """
+        通过 OneBot 发送已构造的群消息。
+
+        Args:
+            message (list[dict[str, object]]): OneBot 消息段列表。
+            group_id (int): 目标 QQ 群号。
+
+        Returns:
+            str: OneBot 返回的消息 ID。
+
+        Raises:
+            AssertionError: 当 OneBot 响应结构不符合约定时抛出。
+            NeteaseMusicToolError: 当 OneBot 请求或业务执行失败时抛出。
+        """
+
         headers = {"Content-Type": "application/json"}
         if self._access_token:
             headers["Authorization"] = f"Bearer {self._access_token}"
         payload = {
             "group_id": group_id,
-            "message": [
-                {
-                    "type": "music",
-                    "data": {"type": "163", "id": normalized_song_id},
-                }
-            ],
+            "message": message,
         }
         url = urljoin(self._api_base + "/", "send_group_msg")
         try:
