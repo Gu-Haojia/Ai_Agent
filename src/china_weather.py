@@ -26,6 +26,7 @@ class ChinaWeatherRequest(BaseModel):
 
     Args:
         location (str): 中国境内城市或区县名称。
+        adm (str | None): 可选的上级行政区关键词。
         forecast (ChinaWeatherForecast): 需要查询的天气范围。
 
     Returns:
@@ -36,6 +37,10 @@ class ChinaWeatherRequest(BaseModel):
     """
 
     location: str = Field(..., description="中国境内城市或区县，例如苏州市或天宁区。")
+    adm: str | None = Field(
+        None,
+        description="可选的上级行政区关键词，例如江苏或常州。",
+    )
     forecast: ChinaWeatherForecast = Field(
         "24h",
         description=(
@@ -62,6 +67,26 @@ class ChinaWeatherRequest(BaseModel):
 
         if not isinstance(value, str) or not value.strip():
             raise ValueError("location 必须为非空字符串。")
+        return value.strip()
+
+    @field_validator("adm")
+    @classmethod
+    def _validate_adm(cls, value: str | None) -> str | None:
+        """
+        清理可选的上级行政区关键词。
+
+        Args:
+            value (str | None): 原始上级行政区关键词。
+
+        Returns:
+            str | None: 清理后的关键词，空字符串转换为 None。
+
+        Raises:
+            None
+        """
+
+        if value is None or not value.strip():
+            return None
         return value.strip()
 
 
@@ -129,7 +154,7 @@ class ChinaWeatherClient:
         """
 
         assert isinstance(request, ChinaWeatherRequest), "request 类型无效。"
-        location = self._fetch_location(request.location)
+        location = self._fetch_location(request.location, request.adm)
         weather = self._fetch_weather(str(location["id"]), request.forecast)
         minutely = None
         if request.forecast == "now":
@@ -145,12 +170,17 @@ class ChinaWeatherClient:
             "alerts": alerts,
         }
 
-    def _fetch_location(self, location: str) -> dict[str, Any]:
+    def _fetch_location(
+        self,
+        location: str,
+        adm: str | None,
+    ) -> dict[str, Any]:
         """
         将中文地点解析为和风天气地点信息。
 
         Args:
             location (str): 中国境内城市或区县名称。
+            adm (str | None): 可选的上级行政区关键词。
 
         Returns:
             dict[str, Any]: 排名第一的地点信息。
@@ -159,15 +189,15 @@ class ChinaWeatherClient:
             RuntimeError: 当地点不存在或 GeoAPI 响应异常时抛出。
         """
 
-        payload = self._request_json(
-            "/geo/v2/city/lookup",
-            {
-                "location": location,
-                "range": "cn",
-                "number": 1,
-                "lang": "zh",
-            },
-        )
+        params: dict[str, Any] = {
+            "location": location,
+            "range": "cn",
+            "number": 1,
+            "lang": "zh",
+        }
+        if adm is not None:
+            params["adm"] = adm
+        payload = self._request_json("/geo/v2/city/lookup", params)
         self._validate_qweather_code(payload, "GeoAPI")
         locations = payload.get("location")
         if not isinstance(locations, list) or not locations:
@@ -439,6 +469,12 @@ class ChinaWeatherFormatter:
             None
         """
 
+        query: dict[str, Any] = {
+            "location": request.location,
+            "forecast": request.forecast,
+        }
+        if request.adm is not None:
+            query["adm"] = request.adm
         result = {
             "success": False,
             "error": {
@@ -446,10 +482,7 @@ class ChinaWeatherFormatter:
                 "message": str(error),
                 "retryable": False,
             },
-            "query": {
-                "location": request.location,
-                "forecast": request.forecast,
-            },
+            "query": query,
         }
         return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
 

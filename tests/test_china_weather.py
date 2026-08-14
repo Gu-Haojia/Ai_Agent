@@ -46,8 +46,14 @@ class ChinaWeatherTests(unittest.TestCase):
             None
         """
 
-        request = ChinaWeatherRequest(location="  苏州市  ", forecast="24h")
+        request = ChinaWeatherRequest(
+            location="  苏州市  ",
+            adm="  江苏省  ",
+            forecast="24h",
+        )
         self.assertEqual(request.location, "苏州市")
+        self.assertEqual(request.adm, "江苏省")
+        self.assertIsNone(ChinaWeatherRequest(location="上海", adm=" ").adm)
         with self.assertRaises(ValidationError):
             ChinaWeatherRequest(location="苏州市", forecast="14d")
 
@@ -109,7 +115,11 @@ class ChinaWeatherTests(unittest.TestCase):
             side_effect=[geo_response, weather_response, alert_response],
         ) as request_get:
             result = client.fetch(
-                ChinaWeatherRequest(location="苏州市", forecast="24h")
+                ChinaWeatherRequest(
+                    location="苏州市",
+                    adm="江苏",
+                    forecast="24h",
+                )
             )
 
         self.assertEqual(request_get.call_count, 3)
@@ -127,6 +137,10 @@ class ChinaWeatherTests(unittest.TestCase):
         self.assertEqual(
             request_get.call_args_list[0].kwargs["headers"],
             {"X-QW-Api-Key": "secret"},
+        )
+        self.assertEqual(
+            request_get.call_args_list[0].kwargs["params"]["adm"],
+            "江苏",
         )
         self.assertEqual(len(result["alerts"]), 1)
 

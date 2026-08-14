@@ -2278,6 +2278,7 @@ class SQLCheckpointAgentStreamingPlus:
                     @tool("china_weather", args_schema=ChinaWeatherRequest)
                     def china_weather_tool(
                         location: str,
+                        adm: str | None = None,
                         forecast: str = "24h",
                     ) -> str:
                         """
@@ -2292,8 +2293,10 @@ class SQLCheckpointAgentStreamingPlus:
                         now 和 24h。
 
                         Args:
-                            location (str): 中国境内城市或区县名称，例如苏州市、
-                                常州市天宁区。
+                            location (str): 目标城市或区县关键词，例如上海、松江、
+                                天宁。
+                            adm (str | None): 可选的上级行政区关键词，例如江苏、
+                                常州。
                             forecast (str): 天气范围，可选 now、24h、72h、3d、7d，
                                 默认为 24h。now 用于当前实况与短时降水；24h、72h
                                 不提供当前实况。
@@ -2307,6 +2310,7 @@ class SQLCheckpointAgentStreamingPlus:
 
                         request_obj = ChinaWeatherRequest(
                             location=location,
+                            adm=adm,
                             forecast=forecast,
                         )
                         formatted = china_weather_service.query(request_obj)
