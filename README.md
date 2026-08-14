@@ -46,7 +46,7 @@ LangGraph/
 | --- | --- |
 | `src/web_browser_tool.py` | 将 LangChain Web Browser 能力接入 Graph，提供半结构化网页解析。 |
 | `src/google_reverse_image_tool.py` | 上传并比对图片，支持 NapCat 群内以图搜图。 |
-| `src/china_weather.py` | 调用和风天气 API，查询国内近期天气和实时预警。 |
+| `src/china_weather.py` | 调用和风天气 API，查询国内近期天气、分钟级降水和实时预警。 |
 | `src/visual_crossing_weather.py` | 调用 Visual Crossing API，供每日播报与 CLI 使用。 |
 | `src/agent_with_timetravel.py` | 通过 checkpoint “时间旅行”快速复盘会话。 |
 | `image_storage.py` | 对生成图片进行哈希、落盘、回查，支持 QQ Bot 与多模态测试。 |
@@ -206,7 +206,9 @@ brew services stop postgresql
 - **音乐**：检索网易云歌曲候选，并通过 NapCat 向指定群发送音乐卡片。
 - **Setlist**：搜索 imas-db 演出候选，通过精确候选 ID 查询曲目，
   或生成一张适合 QQ 阅读的 1280px 歌单长图并加入现有生图队列。
-- **天气**：Visual Crossing 支持海外、历史和日期区间查询；和风天气支持国内近期天气与实时预警。
+- **天气**：Visual Crossing 支持海外、历史和日期区间查询；和风天气的
+  `now` 支持国内实时天气与未来两小时分钟级降水，`24h`、`72h`
+  仅提供逐小时预报，所有范围均附带实时预警。
 - **票务**：Asobi Ticket 抓取 + `imas_ticket_tool` 便捷命令。
 - **图像**：Reverse Image 上传 + `image_storage.py` 文件存档。
 - **提醒**：`timer_reminder.py` 提供跨轮的定时提醒、清单管理。

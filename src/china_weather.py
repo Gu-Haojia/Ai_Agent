@@ -38,7 +38,10 @@ class ChinaWeatherRequest(BaseModel):
     location: str = Field(..., description="中国境内城市或区县，例如苏州市或天宁区。")
     forecast: ChinaWeatherForecast = Field(
         "24h",
-        description="天气范围，可选 now、24h、72h、3d、7d。",
+        description=(
+            "天气范围，可选 now、24h、72h、3d、7d。now 包含当前实况和"
+            "未来2小时分钟级降水摘要；24h、72h 仅包含逐小时预报，不包含当前实况。"
+        ),
     )
 
     @field_validator("location")
@@ -113,13 +116,13 @@ class ChinaWeatherClient:
 
     def fetch(self, request: ChinaWeatherRequest) -> dict[str, Any]:
         """
-        解析地点并查询天气与实时预警。
+        解析地点并查询天气、分钟级降水与实时预警。
 
         Args:
             request (ChinaWeatherRequest): 已校验的国内天气请求。
 
         Returns:
-            dict[str, Any]: 地点、天气和预警组成的内部响应。
+            dict[str, Any]: 地点、天气、分钟级降水和预警组成的内部响应。
 
         Raises:
             RuntimeError: 当地点不存在、请求失败或响应结构异常时抛出。
@@ -128,8 +131,19 @@ class ChinaWeatherClient:
         assert isinstance(request, ChinaWeatherRequest), "request 类型无效。"
         location = self._fetch_location(request.location)
         weather = self._fetch_weather(str(location["id"]), request.forecast)
+        minutely = None
+        if request.forecast == "now":
+            minutely = self._fetch_minutely(
+                latitude=str(location["lat"]),
+                longitude=str(location["lon"]),
+            )
         alerts = self._fetch_alerts(str(location["lat"]), str(location["lon"]))
-        return {"location": location, "weather": weather, "alerts": alerts}
+        return {
+            "location": location,
+            "weather": weather,
+            "minutely": minutely,
+            "alerts": alerts,
+        }
 
     def _fetch_location(self, location: str) -> dict[str, Any]:
         """
@@ -227,6 +241,34 @@ class ChinaWeatherClient:
             raise RuntimeError("和风天气预警 API 包含格式异常的预警。")
         return alerts
 
+    def _fetch_minutely(
+        self,
+        latitude: str,
+        longitude: str,
+    ) -> dict[str, Any]:
+        """
+        查询未来两小时的分钟级降水预报。
+
+        Args:
+            latitude (str): 地点纬度。
+            longitude (str): 地点经度。
+
+        Returns:
+            dict[str, Any]: 和风天气分钟级降水原始响应。
+
+        Raises:
+            RuntimeError: 当分钟级降水接口响应异常时抛出。
+            ValueError: 当经纬度无法转换为数字时抛出。
+        """
+
+        coordinates = f"{float(longitude):.2f},{float(latitude):.2f}"
+        payload = self._request_json(
+            "/v7/minutely/5m",
+            {"location": coordinates, "lang": "zh"},
+        )
+        self._validate_qweather_code(payload, "分钟级降水 API")
+        return payload
+
     def _request_json(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
         """
         发送带 API Key 的 GET 请求并解析 JSON。
@@ -321,6 +363,7 @@ class ChinaWeatherFormatter:
 
         location = payload.get("location")
         weather = payload.get("weather")
+        minutely = payload.get("minutely")
         alerts = payload.get("alerts")
         assert isinstance(location, dict), "location 必须为字典。"
         assert isinstance(weather, dict), "weather 必须为字典。"
@@ -331,7 +374,9 @@ class ChinaWeatherFormatter:
             "updated_at": weather.get("updateTime"),
         }
         if request.forecast == "now":
+            assert isinstance(minutely, dict), "实时天气响应缺少分钟级降水。"
             result["current"] = self._format_current(weather)
+            result["next_2h_rain"] = self._format_minutely(minutely)
         elif request.forecast in ("24h", "72h"):
             result["hourly_fields"] = [
                 "time",
@@ -357,6 +402,27 @@ class ChinaWeatherFormatter:
             result["daily"] = self._format_daily(weather)
         result["alerts"] = self._format_alerts(alerts)
         return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
+
+    @staticmethod
+    def _format_minutely(minutely: dict[str, Any]) -> dict[str, str]:
+        """
+        提取未来两小时分钟级降水摘要。
+
+        Args:
+            minutely (dict[str, Any]): 分钟级降水原始响应。
+
+        Returns:
+            dict[str, str]: 仅包含自然语言降水摘要的精简结果。
+
+        Raises:
+            AssertionError: 当分钟级降水摘要缺失时抛出。
+        """
+
+        summary = minutely.get("summary")
+        assert isinstance(summary, str) and summary.strip(), (
+            "分钟级降水响应缺少 summary。"
+        )
+        return {"summary": summary.strip()}
 
     def format_error(self, request: ChinaWeatherRequest, error: Exception) -> str:
         """

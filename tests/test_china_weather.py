@@ -160,6 +160,14 @@ class ChinaWeatherTests(unittest.TestCase):
         weather_response = self._response(
             {"code": "200", "updateTime": "2026-08-15T00:33+08:00", "now": {}}
         )
+        minutely_response = self._response(
+            {
+                "code": "200",
+                "updateTime": "2026-08-15T00:35+08:00",
+                "summary": "未来2小时无降水",
+                "minutely": [],
+            }
+        )
         alert_response = self._response(
             {"metadata": {"zeroResult": True}, "alerts": []}
         )
@@ -167,12 +175,26 @@ class ChinaWeatherTests(unittest.TestCase):
 
         with mock.patch(
             "src.china_weather.requests.get",
-            side_effect=[geo_response, weather_response, alert_response],
-        ):
+            side_effect=[
+                geo_response,
+                weather_response,
+                minutely_response,
+                alert_response,
+            ],
+        ) as request_get:
             result = client.fetch(
                 ChinaWeatherRequest(location="湖州市", forecast="now")
             )
 
+        self.assertEqual(request_get.call_count, 4)
+        self.assertTrue(
+            request_get.call_args_list[2].args[0].endswith("/v7/minutely/5m")
+        )
+        self.assertEqual(
+            request_get.call_args_list[2].kwargs["params"]["location"],
+            "120.09,30.89",
+        )
+        self.assertEqual(result["minutely"]["summary"], "未来2小时无降水")
         self.assertEqual(result["alerts"], [])
 
     def test_formatter_compacts_complete_hourly_result(self) -> None:
@@ -232,6 +254,8 @@ class ChinaWeatherTests(unittest.TestCase):
 
         self.assertEqual(result["location"], "江苏省苏州")
         self.assertEqual(len(result["hourly"]), 2)
+        self.assertNotIn("current", result)
+        self.assertNotIn("next_2h_rain", result)
         self.assertEqual(
             result["hourly"][1],
             [
@@ -283,6 +307,12 @@ class ChinaWeatherTests(unittest.TestCase):
                             "windScale": "1-3",
                         },
                     },
+                    "minutely": {
+                        "code": "200",
+                        "updateTime": "2026-08-15T00:35+08:00",
+                        "summary": "35分钟后雨就停了",
+                        "minutely": [],
+                    },
                     "alerts": [],
                 },
             )
@@ -316,6 +346,10 @@ class ChinaWeatherTests(unittest.TestCase):
         )
 
         self.assertEqual(current["current"]["feels_like_c"], 27)
+        self.assertEqual(
+            current["next_2h_rain"],
+            {"summary": "35分钟后雨就停了"},
+        )
         self.assertNotIn("hourly", current)
         self.assertEqual(
             daily["daily"][0],
