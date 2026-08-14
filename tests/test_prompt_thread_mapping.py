@@ -144,6 +144,9 @@ def test_boost_command_prints_model_rebuild_log(
     """
     handler = _handler()
     agent = _agent()
+    monkeypatch.setattr(
+        qq_group_bot, "_INITIAL_MODEL_NAME", "google_genai:gemini-3.6-flash"
+    )
     agent._config.model_name = "google_genai:gemini-3.6-flash"
     QQBotHandler.agent = agent
 
