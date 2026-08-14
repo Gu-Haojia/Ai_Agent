@@ -2293,8 +2293,8 @@ class SQLCheckpointAgentStreamingPlus:
                         now 和 24h。
 
                         Args:
-                            location (str): 目标城市或区县关键词，例如上海、松江、
-                                天宁。
+                            location (str): 目标城市或区县的最小关键词，不包括
+                                上级行政区。
                             adm (str | None): 可选的上级行政区关键词，例如江苏、
                                 常州。
                             forecast (str): 天气范围，可选 now、24h、72h、3d、7d，

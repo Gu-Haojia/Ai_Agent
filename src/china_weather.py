@@ -36,7 +36,10 @@ class ChinaWeatherRequest(BaseModel):
         ValueError: 当地点为空或预报范围不受支持时抛出。
     """
 
-    location: str = Field(..., description="中国境内城市或区县，例如苏州市或天宁区。")
+    location: str = Field(
+        ...,
+        description="目标城市或区县的最小关键词，不包括上级行政区。",
+    )
     adm: str | None = Field(
         None,
         description="可选的上级行政区关键词，例如江苏或常州。",

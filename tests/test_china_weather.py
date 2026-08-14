@@ -54,6 +54,12 @@ class ChinaWeatherTests(unittest.TestCase):
         self.assertEqual(request.location, "苏州市")
         self.assertEqual(request.adm, "江苏省")
         self.assertIsNone(ChinaWeatherRequest(location="上海", adm=" ").adm)
+        self.assertEqual(
+            ChinaWeatherRequest.model_json_schema()["properties"]["location"][
+                "description"
+            ],
+            "目标城市或区县的最小关键词，不包括上级行政区。",
+        )
         with self.assertRaises(ValidationError):
             ChinaWeatherRequest(location="苏州市", forecast="14d")
 
