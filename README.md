@@ -7,7 +7,7 @@
 - **LangGraph SQL Agent**：`sql_agent_cli_stream_plus.py` 提供流式 SSE、可中断执行、自动/强制工具调用及“基于工具结论输出”策略，配合 PostgreSQL / 内存检查点可实现会话回放与时间旅行调试。
 - **NapCat QQ 机器人**：`qq_group_bot.py` 结合 OneBot v11 回调、命令白名单、线程持久化及健康检查，为多个群提供安全的 @ 交互体验。
 - **自动化任务**：`daily_task.py` 内置日间/夜间播报与偶像大师抽选监控，可多时段触发并向多个群广播，支持提醒与 Ticket 数据缓存。
-- **工具矩阵**：内置 Tavily 搜索、Visual Crossing 天气、Google Directions/Flights/Hotels、Web Browser、Reverse Image、定时提醒等工具节点，可按需扩展。
+- **工具矩阵**：内置 Tavily 搜索、Visual Crossing/和风天气、Google Directions/Flights/Hotels、Web Browser、Reverse Image、定时提醒等工具节点，可按需扩展。
 - **可观测与可维护**：命令行 REPL 自带 `:history` / `:replay` / `:thread`，QQ Bot 通过 `.qq_group_threads.json`、`ticket_data/` 与 `logs/` 让状态可追踪；测试用例覆盖天气、多模态链路，确保改动可验证。
 
 ## 📁 项目结构
@@ -28,6 +28,7 @@ LangGraph/
 |   |-- chatbot.py / addtools.py      # Agent 主体与工具注册
 |   |-- asobi_ticket_agent.py         # 偶像大师抽选抓取与解析
 |   |-- google_* / web_browser_tool.py# 多种外部工具客户端
+|   |-- china_weather.py              # 和风天气国内天气工具
 |   |-- visual_crossing_weather.py    # 天气工具封装
 |   |-- timer_reminder.py             # 定时/提醒工具
 |   `-- ...                           # 其余功能模块
@@ -45,6 +46,7 @@ LangGraph/
 | --- | --- |
 | `src/web_browser_tool.py` | 将 LangChain Web Browser 能力接入 Graph，提供半结构化网页解析。 |
 | `src/google_reverse_image_tool.py` | 上传并比对图片，支持 NapCat 群内以图搜图。 |
+| `src/china_weather.py` | 调用和风天气 API，查询国内近期天气和实时预警。 |
 | `src/visual_crossing_weather.py` | 调用 Visual Crossing API，供每日播报与 CLI 使用。 |
 | `src/agent_with_timetravel.py` | 通过 checkpoint “时间旅行”快速复盘会话。 |
 | `image_storage.py` | 对生成图片进行哈希、落盘、回查，支持 QQ Bot 与多模态测试。 |
@@ -100,6 +102,7 @@ LangGraph/
 | `TAVILY_API_KEY` | Tavily 搜索工具 Key | 可选 |
 | `SERPER_API_KEY` | Serper 图片搜索工具 Key | 可选 |
 | `TWELVE_API_KEY` | Twelve Data 分时汇率 API Key | 可选 |
+| `QWEATHER_API_HOST` / `QWEATHER_API_KEY` | 和风天气专属 API Host 与 API Key | 可选 |
 | `NETEASE_MUSIC_API_BASE` | 网易云歌曲检索 API 基地址 | `https://nce.gqzsldy.com` |
 
 ### QQ 机器人 & 自动任务
@@ -203,7 +206,7 @@ brew services stop postgresql
 - **音乐**：检索网易云歌曲候选，并通过 NapCat 向指定群发送音乐卡片。
 - **Setlist**：搜索 imas-db 演出候选，通过精确候选 ID 查询曲目，
   或生成一张适合 QQ 阅读的 1280px 歌单长图并加入现有生图队列。
-- **天气**：Visual Crossing 天气查询，支持多地点、多时段。
+- **天气**：Visual Crossing 支持海外、历史和日期区间查询；和风天气支持国内近期天气与实时预警。
 - **票务**：Asobi Ticket 抓取 + `imas_ticket_tool` 便捷命令。
 - **图像**：Reverse Image 上传 + `image_storage.py` 文件存档。
 - **提醒**：`timer_reminder.py` 提供跨轮的定时提醒、清单管理。

@@ -44,6 +44,12 @@ from langchain_core.messages import (
     RemoveMessage,
 )
 from image_storage import GeneratedImage, ImageStorageManager
+from src.china_weather import (
+    ChinaWeatherClient,
+    ChinaWeatherFormatter,
+    ChinaWeatherRequest,
+    ChinaWeatherService,
+)
 from src.playwright_browser_toolkit_runner import (
     PLAYWRIGHT_BROWSER_TOOL_NAMES,
     PlaywrightBrowserThreadRunner,
@@ -2255,6 +2261,57 @@ class SQLCheckpointAgentStreamingPlus:
                         return formatted
 
                     tools.append(visual_crossing_weather_tool)
+
+                qweather_api_host = os.environ.get("QWEATHER_API_HOST", "").strip()
+                qweather_api_key = os.environ.get("QWEATHER_API_KEY", "").strip()
+                if qweather_api_host and qweather_api_key:
+                    china_weather_client = ChinaWeatherClient(
+                        api_host=qweather_api_host,
+                        api_key=qweather_api_key,
+                    )
+                    china_weather_formatter = ChinaWeatherFormatter()
+                    china_weather_service = ChinaWeatherService(
+                        client=china_weather_client,
+                        formatter=china_weather_formatter,
+                    )
+
+                    @tool("china_weather", args_schema=ChinaWeatherRequest)
+                    def china_weather_tool(
+                        location: str,
+                        forecast: str = "24h",
+                    ) -> str:
+                        """
+                        查询中国境内城市或区县的近期天气和实时气象预警。
+
+                        国内天气优先使用本工具；海外天气、历史天气和指定日期区间
+                        使用 visual_crossing_weather。输出范围支持 now、24h、72h、
+                        3d 和 7d，并固定附带当前生效的气象预警。
+
+                        Args:
+                            location (str): 中国境内城市或区县名称，例如苏州市、
+                                常州市天宁区。
+                            forecast (str): 天气范围，可选 now、24h、72h、3d、7d，
+                                默认为 24h。
+
+                        Returns:
+                            str: 精简后的天气信息或结构化错误 JSON 字符串。
+
+                        Raises:
+                            ValueError: 当地点为空或天气范围不受支持时抛出。
+                        """
+
+                        request_obj = ChinaWeatherRequest(
+                            location=location,
+                            forecast=forecast,
+                        )
+                        formatted = china_weather_service.query(request_obj)
+                        print(
+                            f"\033[94m{time.strftime('[%m-%d %H:%M:%S]', time.localtime())}\033[0m [ChinaWeather Tool Output] {formatted}",
+                            flush=True,
+                        )
+                        return formatted
+
+                    tools.append(china_weather_tool)
 
                 exchange_rate_client = ExchangeRateClient()
 
