@@ -385,6 +385,36 @@ class ChinaWeatherTests(unittest.TestCase):
         self.assertFalse(result["success"])
         self.assertEqual(result["error"]["code"], "CHINA_WEATHER_REQUEST_FAILED")
 
+    def test_service_returns_unexpected_exception_to_agent(self) -> None:
+        """
+        验证未预期的普通异常也会结构化返回给 Agent。
+
+        Args:
+            None
+
+        Returns:
+            None
+
+        Raises:
+            None
+        """
+
+        client = ChinaWeatherClient(api_host="weather.example.com", api_key="x")
+        formatter = ChinaWeatherFormatter()
+        service = ChinaWeatherService(client=client, formatter=formatter)
+        request = ChinaWeatherRequest(location="苏州市", forecast="24h")
+
+        with mock.patch.object(
+            client,
+            "fetch",
+            side_effect=KeyError("unexpected payload field"),
+        ):
+            result = json.loads(service.query(request))
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error"]["code"], "CHINA_WEATHER_REQUEST_FAILED")
+        self.assertIn("unexpected payload field", result["error"]["message"])
+
     def test_formatter_structures_validation_error(self) -> None:
         """
         验证工具入参校验错误可直接返回给 Agent。

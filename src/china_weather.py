@@ -658,7 +658,7 @@ class ChinaWeatherService:
         try:
             payload = self._client.fetch(request)
             return self._formatter.format(request, payload)
-        except (RuntimeError, AssertionError, ValueError) as error:
+        except Exception as error:
             return self._formatter.format_error(request, error)
 
 
