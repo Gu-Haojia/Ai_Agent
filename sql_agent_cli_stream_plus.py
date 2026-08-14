@@ -2311,6 +2311,9 @@ class SQLCheckpointAgentStreamingPlus:
                         )
                         return formatted
 
+                    china_weather_tool.handle_validation_error = (
+                        china_weather_formatter.format_validation_error
+                    )
                     tools.append(china_weather_tool)
 
                 exchange_rate_client = ExchangeRateClient()

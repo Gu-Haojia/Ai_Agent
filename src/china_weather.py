@@ -8,7 +8,7 @@ import json
 from typing import Any, Literal
 
 import requests
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 from tenacity import (
     Retrying,
     retry_if_exception_type,
@@ -358,13 +358,13 @@ class ChinaWeatherFormatter:
         result["alerts"] = self._format_alerts(alerts)
         return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
 
-    def format_error(self, request: ChinaWeatherRequest, error: RuntimeError) -> str:
+    def format_error(self, request: ChinaWeatherRequest, error: Exception) -> str:
         """
         将可预期的客户端错误转为结构化 JSON。
 
         Args:
             request (ChinaWeatherRequest): 用户的天气请求。
-            error (RuntimeError): 客户端抛出的明确错误。
+            error (Exception): 查询或格式化过程中抛出的明确错误。
 
         Returns:
             str: 结构化错误 JSON 字符串。
@@ -383,6 +383,31 @@ class ChinaWeatherFormatter:
             "query": {
                 "location": request.location,
                 "forecast": request.forecast,
+            },
+        }
+        return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
+
+    @staticmethod
+    def format_validation_error(error: ValidationError) -> str:
+        """
+        将工具入参校验错误转为结构化 JSON。
+
+        Args:
+            error (ValidationError): Pydantic 入参校验错误。
+
+        Returns:
+            str: 可直接返回给 Agent 的错误 JSON。
+
+        Raises:
+            None
+        """
+
+        result = {
+            "success": False,
+            "error": {
+                "code": "CHINA_WEATHER_INVALID_INPUT",
+                "message": str(error),
+                "retryable": False,
             },
         }
         return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
@@ -632,9 +657,9 @@ class ChinaWeatherService:
         assert isinstance(request, ChinaWeatherRequest), "request 类型无效。"
         try:
             payload = self._client.fetch(request)
-        except RuntimeError as error:
+            return self._formatter.format(request, payload)
+        except (RuntimeError, AssertionError, ValueError) as error:
             return self._formatter.format_error(request, error)
-        return self._formatter.format(request, payload)
 
 
 __all__ = [

@@ -356,6 +356,61 @@ class ChinaWeatherTests(unittest.TestCase):
             {"location": "不存在的地点", "forecast": "24h"},
         )
 
+    def test_service_returns_structured_formatter_error(self) -> None:
+        """
+        验证响应格式异常时不会向工具边界抛出异常。
+
+        Args:
+            None
+
+        Returns:
+            None
+
+        Raises:
+            None
+        """
+
+        client = ChinaWeatherClient(api_host="weather.example.com", api_key="x")
+        formatter = ChinaWeatherFormatter()
+        service = ChinaWeatherService(client=client, formatter=formatter)
+        request = ChinaWeatherRequest(location="苏州市", forecast="24h")
+
+        with mock.patch.object(
+            client,
+            "fetch",
+            return_value={"location": {}, "weather": {}, "alerts": []},
+        ):
+            result = json.loads(service.query(request))
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error"]["code"], "CHINA_WEATHER_REQUEST_FAILED")
+
+    def test_formatter_structures_validation_error(self) -> None:
+        """
+        验证工具入参校验错误可直接返回给 Agent。
+
+        Args:
+            None
+
+        Returns:
+            None
+
+        Raises:
+            None
+        """
+
+        with self.assertRaises(ValidationError) as validation_context:
+            ChinaWeatherRequest(location="苏州市", forecast="14d")
+
+        result = json.loads(
+            ChinaWeatherFormatter.format_validation_error(
+                validation_context.exception
+            )
+        )
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error"]["code"], "CHINA_WEATHER_INVALID_INPUT")
+
     @staticmethod
     def _response(payload: dict[str, object]) -> mock.Mock:
         """
