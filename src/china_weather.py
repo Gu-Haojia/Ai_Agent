@@ -38,7 +38,9 @@ class ChinaWeatherRequest(BaseModel):
 
     location: str = Field(
         ...,
-        description="目标城市或区县的最小关键词，不包括上级行政区。",
+        description=(
+            "目标城市或区县的最小关键词，不包括上级行政区，例如苏州市或天宁区。"
+        ),
     )
     adm: str | None = Field(
         None,

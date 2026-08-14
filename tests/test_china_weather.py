@@ -58,7 +58,7 @@ class ChinaWeatherTests(unittest.TestCase):
             ChinaWeatherRequest.model_json_schema()["properties"]["location"][
                 "description"
             ],
-            "目标城市或区县的最小关键词，不包括上级行政区。",
+            "目标城市或区县的最小关键词，不包括上级行政区，例如苏州市或天宁区。",
         )
         with self.assertRaises(ValidationError):
             ChinaWeatherRequest(location="苏州市", forecast="14d")
