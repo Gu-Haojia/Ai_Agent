@@ -113,6 +113,7 @@ from src.imas_setlist_tool import (
     build_imas_setlist_get_tool,
     imas_setlist_search,
 )
+from src.meru_search_tool import meru_search
 
 ANILIST_SORT_CHOICES_TEXT: str = ", ".join(ANILIST_MEDIA_SORTS)
 TAVILY_SEARCH_TOOL_NAME: str = "tavily_search"
@@ -3087,6 +3088,7 @@ class SQLCheckpointAgentStreamingPlus:
                         image_sink=self._store_imas_setlist_image,
                     )
                 )
+                tools.append(meru_search)
 
         @tool  # raw api 1.39.1
         def generate_local_image(
