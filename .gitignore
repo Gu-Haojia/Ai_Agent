@@ -57,6 +57,7 @@ run_qq_bot.bat
 images/
 ticket_data/
 secret/
+workspace/
 
 # Old files
 old/
