@@ -2279,27 +2279,25 @@ class SQLCheckpointAgentStreamingPlus:
                     def china_weather_tool(
                         location: str,
                         adm: str | None = None,
-                        forecast: str = "24h",
+                        forecast: str = "today",
                     ) -> str:
                         """
                         查询中国境内城市或区县的近期天气和实时气象预警。
 
                         国内天气优先使用本工具；海外天气、历史天气和指定日期区间
-                        使用 visual_crossing_weather。输出范围支持 now、24h、72h、
-                        3d 和 7d，并固定附带当前生效的气象预警。now 包含当前实况
-                        和未来2小时分钟级降水摘要。24h、72h 只有逐小时预报，完全
-                        不包含当前实况；用户询问“现在”“当前”“多久停雨”时必须
-                        使用 now。用户同时询问当前与未来24小时天气时，应分别调用
-                        now 和 24h。
+                        使用 visual_crossing_weather。输出范围支持 now、today、
+                        tomorrow 和 7d，并固定附带当前生效的气象预警。now 包含
+                        当前实况和未来2小时分钟级降水摘要；today 包含今天总览和
+                        今天剩余逐小时预报；tomorrow 包含明天总览和完整逐小时预报；
+                        7d 包含未来7天逐日预报。
 
                         Args:
                             location (str): 目标城市或区县的最小关键词，不包括
                                 上级行政区，例如上海、松江、天宁。
                             adm (str | None): 可选的上级行政区关键词，例如江苏、
                                 常州。
-                            forecast (str): 天气范围，可选 now、24h、72h、3d、7d，
-                                默认为 24h。now 用于当前实况与短时降水；24h、72h
-                                不提供当前实况。
+                            forecast (str): 天气范围，可选 now、today、tomorrow、
+                                7d，默认为 today。
 
                         Returns:
                             str: 精简后的天气信息或结构化错误 JSON 字符串。

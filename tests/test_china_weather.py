@@ -49,11 +49,12 @@ class ChinaWeatherTests(unittest.TestCase):
         request = ChinaWeatherRequest(
             location="  苏州市  ",
             adm="  江苏省  ",
-            forecast="24h",
+            forecast="today",
         )
         self.assertEqual(request.location, "苏州市")
         self.assertEqual(request.adm, "江苏省")
         self.assertIsNone(ChinaWeatherRequest(location="上海", adm=" ").adm)
+        self.assertEqual(ChinaWeatherRequest(location="上海").forecast, "today")
         self.assertEqual(
             ChinaWeatherRequest.model_json_schema()["properties"]["location"][
                 "description"
@@ -61,7 +62,7 @@ class ChinaWeatherTests(unittest.TestCase):
             "目标城市或区县的最小关键词，不包括上级行政区，例如苏州市或天宁区。",
         )
         with self.assertRaises(ValidationError):
-            ChinaWeatherRequest(location="苏州市", forecast="14d")
+            ChinaWeatherRequest(location="苏州市", forecast="24h")
 
     def test_client_fetches_location_weather_and_alerts(self) -> None:
         """
@@ -96,7 +97,7 @@ class ChinaWeatherTests(unittest.TestCase):
             {
                 "code": "200",
                 "updateTime": "2026-08-15T00:33+08:00",
-                "hourly": [],
+                "daily": [],
             }
         )
         alert_response = self._response(
@@ -124,7 +125,7 @@ class ChinaWeatherTests(unittest.TestCase):
                 ChinaWeatherRequest(
                     location="苏州市",
                     adm="江苏",
-                    forecast="24h",
+                    forecast="7d",
                 )
             )
 
@@ -133,7 +134,7 @@ class ChinaWeatherTests(unittest.TestCase):
             request_get.call_args_list[0].args[0].endswith("/geo/v2/city/lookup")
         )
         self.assertTrue(
-            request_get.call_args_list[1].args[0].endswith("/v7/weather/24h")
+            request_get.call_args_list[1].args[0].endswith("/v7/weather/7d")
         )
         self.assertTrue(
             request_get.call_args_list[2].args[0].endswith(
@@ -149,6 +150,75 @@ class ChinaWeatherTests(unittest.TestCase):
             "江苏",
         )
         self.assertEqual(len(result["alerts"]), 1)
+
+    def test_client_fetches_daily_and_hourly_weather_for_tomorrow(self) -> None:
+        """
+        验证明日查询会请求三日总览和未来72小时预报。
+
+        Args:
+            None
+
+        Returns:
+            None
+
+        Raises:
+            None
+        """
+
+        geo_response = self._response(
+            {
+                "code": "200",
+                "location": [
+                    {
+                        "id": "101191105",
+                        "name": "天宁",
+                        "lat": "31.78",
+                        "lon": "119.96",
+                    }
+                ],
+            }
+        )
+        daily_response = self._response(
+            {"code": "200", "updateTime": "2026-08-15T08:00+08:00", "daily": []}
+        )
+        hourly_response = self._response(
+            {
+                "code": "200",
+                "updateTime": "2026-08-15T09:00+08:00",
+                "hourly": [],
+            }
+        )
+        alert_response = self._response(
+            {"metadata": {"zeroResult": True}, "alerts": []}
+        )
+        client = ChinaWeatherClient(api_host="weather.example.com", api_key="secret")
+
+        with mock.patch(
+            "src.china_weather.requests.get",
+            side_effect=[
+                geo_response,
+                daily_response,
+                hourly_response,
+                alert_response,
+            ],
+        ) as request_get:
+            result = client.fetch(
+                ChinaWeatherRequest(
+                    location="天宁",
+                    adm="常州",
+                    forecast="tomorrow",
+                )
+            )
+
+        self.assertEqual(request_get.call_count, 4)
+        self.assertTrue(
+            request_get.call_args_list[1].args[0].endswith("/v7/weather/3d")
+        )
+        self.assertTrue(
+            request_get.call_args_list[2].args[0].endswith("/v7/weather/72h")
+        )
+        self.assertEqual(result["weather"]["daily"], [])
+        self.assertEqual(result["hourly_weather"]["hourly"], [])
 
     def test_client_accepts_zero_alert_result(self) -> None:
         """
@@ -217,9 +287,9 @@ class ChinaWeatherTests(unittest.TestCase):
         self.assertEqual(result["minutely"]["summary"], "未来2小时无降水")
         self.assertEqual(result["alerts"], [])
 
-    def test_formatter_compacts_complete_hourly_result(self) -> None:
+    def test_formatter_combines_tomorrow_overview_and_hourly_weather(self) -> None:
         """
-        验证逐小时数据完整保留并使用字段表头压缩。
+        验证明日结果只保留明日总览和明日逐小时数据。
 
         Args:
             None
@@ -232,24 +302,41 @@ class ChinaWeatherTests(unittest.TestCase):
         """
 
         formatter = ChinaWeatherFormatter()
-        request = ChinaWeatherRequest(location="苏州市", forecast="24h")
+        request = ChinaWeatherRequest(location="苏州市", forecast="tomorrow")
         payload = {
             "location": {"name": "苏州", "adm2": "苏州", "adm1": "江苏省"},
             "weather": {
-                "updateTime": "2026-08-15T00:33+08:00",
+                "updateTime": "2026-08-15T08:00+08:00",
+                "daily": [
+                    {"fxDate": "2026-08-15"},
+                    {
+                        "fxDate": "2026-08-16",
+                        "textDay": "多云",
+                        "textNight": "小雨",
+                        "tempMin": "24",
+                        "tempMax": "31",
+                        "precip": "2.1",
+                        "humidity": "88",
+                        "vis": "18",
+                        "uvIndex": "6",
+                        "sunrise": "05:25",
+                        "sunset": "18:43",
+                        "windDirDay": "东风",
+                        "windScaleDay": "1-3",
+                        "windDirNight": "东风",
+                        "windScaleNight": "1-3",
+                    },
+                ],
+            },
+            "hourly_weather": {
+                "updateTime": "2026-08-15T09:00+08:00",
                 "hourly": [
                     {
-                        "fxTime": "2026-08-15T01:00+08:00",
+                        "fxTime": "2026-08-15T23:00+08:00",
                         "text": "阴",
-                        "temp": "25",
-                        "pop": "34",
-                        "precip": "0.0",
-                        "humidity": "96",
-                        "windDir": "东北风",
-                        "windScale": "1-3",
                     },
                     {
-                        "fxTime": "2026-08-15T02:00+08:00",
+                        "fxTime": "2026-08-16T00:00+08:00",
                         "text": "小雨",
                         "temp": "24",
                         "pop": "70",
@@ -257,6 +344,20 @@ class ChinaWeatherTests(unittest.TestCase):
                         "humidity": "97",
                         "windDir": "东风",
                         "windScale": "1-3",
+                    },
+                    {
+                        "fxTime": "2026-08-16T01:00+08:00",
+                        "text": "阴",
+                        "temp": "24",
+                        "pop": "30",
+                        "precip": "0.0",
+                        "humidity": "96",
+                        "windDir": "东北风",
+                        "windScale": "1-3",
+                    },
+                    {
+                        "fxTime": "2026-08-17T00:00+08:00",
+                        "text": "多云",
                     },
                 ],
             },
@@ -273,13 +374,14 @@ class ChinaWeatherTests(unittest.TestCase):
         result = json.loads(formatter.format(request, payload))
 
         self.assertEqual(result["location"], "江苏省苏州")
+        self.assertEqual(result["target_date"], "2026-08-16")
+        self.assertEqual(result["daily"][0][0], "2026-08-16")
+        self.assertEqual(result["hourly_updated_at"], "2026-08-15T09:00+08:00")
         self.assertEqual(len(result["hourly"]), 2)
-        self.assertNotIn("current", result)
-        self.assertNotIn("next_2h_rain", result)
         self.assertEqual(
-            result["hourly"][1],
+            result["hourly"][0],
             [
-                "2026-08-15T02:00+08:00",
+                "2026-08-16T00:00+08:00",
                 "小雨",
                 24,
                 70,
@@ -288,11 +390,58 @@ class ChinaWeatherTests(unittest.TestCase):
                 "东风1-3级",
             ],
         )
+        self.assertNotIn("current", result)
+        self.assertNotIn("next_2h_rain", result)
         self.assertEqual(
             result["alerts"],
             [["暴雨橙色预警", "severe", "2026-08-14T19:42+08:00"]],
         )
         self.assertNotIn("description", formatter.format(request, payload))
+
+    def test_formatter_selects_today_overview_and_hours(self) -> None:
+        """
+        验证今日结果只保留今日总览和今日逐小时数据。
+
+        Args:
+            None
+
+        Returns:
+            None
+
+        Raises:
+            None
+        """
+
+        payload = {
+            "location": {"name": "天宁", "adm2": "常州", "adm1": "江苏省"},
+            "weather": {
+                "updateTime": "2026-08-15T08:00+08:00",
+                "daily": [
+                    {"fxDate": "2026-08-15"},
+                    {"fxDate": "2026-08-16"},
+                ],
+            },
+            "hourly_weather": {
+                "updateTime": "2026-08-15T09:00+08:00",
+                "hourly": [
+                    {"fxTime": "2026-08-15T10:00+08:00", "text": "多云"},
+                    {"fxTime": "2026-08-16T00:00+08:00", "text": "小雨"},
+                ],
+            },
+            "alerts": [],
+        }
+
+        result = json.loads(
+            ChinaWeatherFormatter().format(
+                ChinaWeatherRequest(location="天宁", forecast="today"),
+                payload,
+            )
+        )
+
+        self.assertEqual(result["target_date"], "2026-08-15")
+        self.assertEqual(result["daily"][0][0], "2026-08-15")
+        self.assertEqual(len(result["hourly"]), 1)
+        self.assertEqual(result["hourly"][0][0], "2026-08-15T10:00+08:00")
 
     def test_formatter_supports_current_and_daily_forecasts(self) -> None:
         """
@@ -340,7 +489,7 @@ class ChinaWeatherTests(unittest.TestCase):
         )
         daily = json.loads(
             formatter.format(
-                ChinaWeatherRequest(location="湖州市", forecast="3d"),
+                ChinaWeatherRequest(location="湖州市", forecast="7d"),
                 {
                     "location": location,
                     "weather": {
@@ -378,6 +527,10 @@ class ChinaWeatherTests(unittest.TestCase):
         )
         self.assertNotIn("hourly", current)
         self.assertEqual(
+            set(current),
+            {"location", "updated_at", "current", "next_2h_rain", "alerts"},
+        )
+        self.assertEqual(
             daily["daily"][0],
             [
                 "2026-08-15",
@@ -395,6 +548,10 @@ class ChinaWeatherTests(unittest.TestCase):
             ],
         )
         self.assertNotIn("current", daily)
+        self.assertEqual(
+            set(daily),
+            {"location", "updated_at", "daily_fields", "daily", "alerts"},
+        )
 
     def test_service_returns_structured_client_error(self) -> None:
         """
@@ -413,7 +570,7 @@ class ChinaWeatherTests(unittest.TestCase):
         client = ChinaWeatherClient(api_host="weather.example.com", api_key="x")
         formatter = ChinaWeatherFormatter()
         service = ChinaWeatherService(client=client, formatter=formatter)
-        request = ChinaWeatherRequest(location="不存在的地点", forecast="24h")
+        request = ChinaWeatherRequest(location="不存在的地点", forecast="today")
 
         with mock.patch.object(
             client,
@@ -426,7 +583,7 @@ class ChinaWeatherTests(unittest.TestCase):
         self.assertEqual(result["error"]["code"], "CHINA_WEATHER_REQUEST_FAILED")
         self.assertEqual(
             result["query"],
-            {"location": "不存在的地点", "forecast": "24h"},
+            {"location": "不存在的地点", "forecast": "today"},
         )
 
     def test_service_returns_structured_formatter_error(self) -> None:
@@ -446,7 +603,7 @@ class ChinaWeatherTests(unittest.TestCase):
         client = ChinaWeatherClient(api_host="weather.example.com", api_key="x")
         formatter = ChinaWeatherFormatter()
         service = ChinaWeatherService(client=client, formatter=formatter)
-        request = ChinaWeatherRequest(location="苏州市", forecast="24h")
+        request = ChinaWeatherRequest(location="苏州市", forecast="today")
 
         with mock.patch.object(
             client,
@@ -475,7 +632,7 @@ class ChinaWeatherTests(unittest.TestCase):
         client = ChinaWeatherClient(api_host="weather.example.com", api_key="x")
         formatter = ChinaWeatherFormatter()
         service = ChinaWeatherService(client=client, formatter=formatter)
-        request = ChinaWeatherRequest(location="苏州市", forecast="24h")
+        request = ChinaWeatherRequest(location="苏州市", forecast="today")
 
         with mock.patch.object(
             client,

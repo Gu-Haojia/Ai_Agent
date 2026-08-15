@@ -207,8 +207,8 @@ brew services stop postgresql
 - **Setlist**：搜索 imas-db 演出候选，通过精确候选 ID 查询曲目，
   或生成一张适合 QQ 阅读的 1280px 歌单长图并加入现有生图队列。
 - **天气**：Visual Crossing 支持海外、历史和日期区间查询；和风天气的
-  `now` 支持国内实时天气与未来两小时分钟级降水，`24h`、`72h`
-  仅提供逐小时预报，所有范围均附带实时预警。
+  `now` 支持国内实时天气与未来两小时分钟级降水，`today`、`tomorrow`
+  提供自然日总览与逐小时预报，`7d` 提供逐日预报，所有范围均附带实时预警。
 - **票务**：Asobi Ticket 抓取 + `imas_ticket_tool` 便捷命令。
 - **图像**：Reverse Image 上传 + `image_storage.py` 文件存档。
 - **提醒**：`timer_reminder.py` 提供跨轮的定时提醒、清单管理。

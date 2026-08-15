@@ -17,7 +17,7 @@ from tenacity import (
 )
 
 
-ChinaWeatherForecast = Literal["now", "24h", "72h", "3d", "7d"]
+ChinaWeatherForecast = Literal["now", "today", "tomorrow", "7d"]
 
 
 class ChinaWeatherRequest(BaseModel):
@@ -47,10 +47,11 @@ class ChinaWeatherRequest(BaseModel):
         description="可选的上级行政区关键词，例如江苏或常州。",
     )
     forecast: ChinaWeatherForecast = Field(
-        "24h",
+        "today",
         description=(
-            "天气范围，可选 now、24h、72h、3d、7d。now 包含当前实况和"
-            "未来2小时分钟级降水摘要；24h、72h 仅包含逐小时预报，不包含当前实况。"
+            "天气范围，可选 now、today、tomorrow、7d。now 包含当前实况和"
+            "未来2小时分钟级降水摘要；today、tomorrow 包含目标自然日总览和"
+            "逐小时预报；7d 包含未来7天逐日预报。"
         ),
     )
 
@@ -110,11 +111,11 @@ class ChinaWeatherClient:
 
     _WEATHER_PATHS: dict[ChinaWeatherForecast, str] = {
         "now": "/v7/weather/now",
-        "24h": "/v7/weather/24h",
-        "72h": "/v7/weather/72h",
-        "3d": "/v7/weather/3d",
+        "today": "/v7/weather/3d",
+        "tomorrow": "/v7/weather/3d",
         "7d": "/v7/weather/7d",
     }
+    _HOURLY_PATH = "/v7/weather/72h"
 
     def __init__(self, api_host: str, api_key: str, timeout: float = 15.0) -> None:
         """
@@ -162,16 +163,20 @@ class ChinaWeatherClient:
         location = self._fetch_location(request.location, request.adm)
         weather = self._fetch_weather(str(location["id"]), request.forecast)
         minutely = None
+        hourly_weather = None
         if request.forecast == "now":
             minutely = self._fetch_minutely(
                 latitude=str(location["lat"]),
                 longitude=str(location["lon"]),
             )
+        elif request.forecast in ("today", "tomorrow"):
+            hourly_weather = self._fetch_hourly_weather(str(location["id"]))
         alerts = self._fetch_alerts(str(location["lat"]), str(location["lon"]))
         return {
             "location": location,
             "weather": weather,
             "minutely": minutely,
+            "hourly_weather": hourly_weather,
             "alerts": alerts,
         }
 
@@ -241,6 +246,27 @@ class ChinaWeatherClient:
             {"location": location_id, "lang": "zh", "unit": "m"},
         )
         self._validate_qweather_code(payload, "天气 API")
+        return payload
+
+    def _fetch_hourly_weather(self, location_id: str) -> dict[str, Any]:
+        """
+        查询用于自然日筛选的未来72小时逐小时预报。
+
+        Args:
+            location_id (str): 和风天气 LocationID。
+
+        Returns:
+            dict[str, Any]: 和风天气未来72小时原始响应。
+
+        Raises:
+            RuntimeError: 当逐小时天气接口响应异常时抛出。
+        """
+
+        payload = self._request_json(
+            self._HOURLY_PATH,
+            {"location": location_id, "lang": "zh", "unit": "m"},
+        )
+        self._validate_qweather_code(payload, "逐小时天气 API")
         return payload
 
     def _fetch_alerts(self, latitude: str, longitude: str) -> list[dict[str, Any]]:
@@ -381,6 +407,30 @@ class ChinaWeatherFormatter:
         None
     """
 
+    _HOURLY_FIELDS = [
+        "time",
+        "weather",
+        "temp_c",
+        "rain_probability",
+        "rain_mm",
+        "humidity",
+        "wind",
+    ]
+    _DAILY_FIELDS = [
+        "date",
+        "day_weather",
+        "night_weather",
+        "temp_min_c",
+        "temp_max_c",
+        "rain_mm",
+        "humidity",
+        "wind",
+        "visibility_km",
+        "uv_index",
+        "sunrise",
+        "sunset",
+    ]
+
     def format(self, request: ChinaWeatherRequest, payload: dict[str, Any]) -> str:
         """
         格式化天气与预警响应。
@@ -399,6 +449,7 @@ class ChinaWeatherFormatter:
         location = payload.get("location")
         weather = payload.get("weather")
         minutely = payload.get("minutely")
+        hourly_weather = payload.get("hourly_weather")
         alerts = payload.get("alerts")
         assert isinstance(location, dict), "location 必须为字典。"
         assert isinstance(weather, dict), "weather 必须为字典。"
@@ -412,35 +463,94 @@ class ChinaWeatherFormatter:
             assert isinstance(minutely, dict), "实时天气响应缺少分钟级降水。"
             result["current"] = self._format_current(weather)
             result["next_2h_rain"] = self._format_minutely(minutely)
-        elif request.forecast in ("24h", "72h"):
-            result["hourly_fields"] = [
-                "time",
-                "weather",
-                "temp_c",
-                "rain_probability",
-                "rain_mm",
-                "humidity",
-                "wind",
-            ]
-            result["hourly"] = self._format_hourly(weather)
+        elif request.forecast in ("today", "tomorrow"):
+            assert isinstance(hourly_weather, dict), (
+                "自然日天气响应缺少逐小时预报。"
+            )
+            day_index = 0 if request.forecast == "today" else 1
+            selected_daily, target_date = self._select_daily_weather(
+                weather,
+                day_index,
+            )
+            selected_hourly = self._select_hourly_weather(
+                hourly_weather,
+                target_date,
+            )
+            result["target_date"] = target_date
+            result["daily_fields"] = list(self._DAILY_FIELDS)
+            result["daily"] = self._format_daily(selected_daily)
+            result["hourly_updated_at"] = hourly_weather.get("updateTime")
+            result["hourly_fields"] = list(self._HOURLY_FIELDS)
+            result["hourly"] = self._format_hourly(selected_hourly)
         else:
-            result["daily_fields"] = [
-                "date",
-                "day_weather",
-                "night_weather",
-                "temp_min_c",
-                "temp_max_c",
-                "rain_mm",
-                "humidity",
-                "wind",
-                "visibility_km",
-                "uv_index",
-                "sunrise",
-                "sunset",
-            ]
+            result["daily_fields"] = list(self._DAILY_FIELDS)
             result["daily"] = self._format_daily(weather)
         result["alerts"] = self._format_alerts(alerts)
         return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
+
+    @staticmethod
+    def _select_daily_weather(
+        weather: dict[str, Any],
+        day_index: int,
+    ) -> tuple[dict[str, Any], str]:
+        """
+        选择今天或明天的逐日预报。
+
+        Args:
+            weather (dict[str, Any]): 三日天气原始响应。
+            day_index (int): 目标日期索引，0 表示今天，1 表示明天。
+
+        Returns:
+            tuple[dict[str, Any], str]: 仅含目标日期的响应及目标日期字符串。
+
+        Raises:
+            AssertionError: 当逐日预报缺少目标日期时抛出。
+        """
+
+        daily = weather.get("daily")
+        assert isinstance(daily, list), "逐日天气响应缺少 daily。"
+        assert 0 <= day_index < len(daily), "逐日天气响应缺少目标日期。"
+        selected_day = daily[day_index]
+        assert isinstance(selected_day, dict), "daily 元素必须为字典。"
+        target_date = selected_day.get("fxDate")
+        assert isinstance(target_date, str) and target_date.strip(), (
+            "目标日期缺少 fxDate。"
+        )
+        selected_weather = dict(weather)
+        selected_weather["daily"] = [selected_day]
+        return selected_weather, target_date.strip()
+
+    @staticmethod
+    def _select_hourly_weather(
+        weather: dict[str, Any],
+        target_date: str,
+    ) -> dict[str, Any]:
+        """
+        按目标自然日筛选逐小时预报。
+
+        Args:
+            weather (dict[str, Any]): 未来72小时原始响应。
+            target_date (str): 需要保留的 ISO8601 日期。
+
+        Returns:
+            dict[str, Any]: 仅包含目标自然日小时数据的响应。
+
+        Raises:
+            AssertionError: 当逐小时预报结构异常时抛出。
+        """
+
+        hourly = weather.get("hourly")
+        assert isinstance(hourly, list), "逐小时天气响应缺少 hourly。"
+        selected: list[dict[str, Any]] = []
+        for item in hourly:
+            assert isinstance(item, dict), "hourly 元素必须为字典。"
+            forecast_time = item.get("fxTime")
+            assert isinstance(forecast_time, str), "hourly 元素缺少 fxTime。"
+            if forecast_time.startswith(f"{target_date}T"):
+                selected.append(item)
+        selected_weather = dict(weather)
+        selected_weather["hourly"] = selected
+        return selected_weather
 
     @staticmethod
     def _format_minutely(minutely: dict[str, Any]) -> dict[str, str]:
