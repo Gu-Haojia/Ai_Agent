@@ -2290,6 +2290,7 @@ class SQLCheckpointAgentStreamingPlus:
                         当前实况和未来2小时分钟级降水摘要；today 包含今天总览和
                         今天剩余逐小时预报；tomorrow 包含明天总览和完整逐小时预报；
                         7d 包含未来7天逐日预报。
+                        用户询问“现在”“当前”“多久停雨”时必须使用 now。
 
                         Args:
                             location (str): 目标城市或区县的最小关键词，不包括
