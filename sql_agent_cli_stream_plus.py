@@ -2286,10 +2286,10 @@ class SQLCheckpointAgentStreamingPlus:
 
                         国内天气优先使用本工具；海外天气、历史天气和指定日期区间
                         使用 visual_crossing_weather。输出范围支持 now、today、
-                        tomorrow 和 7d，并固定附带当前生效的气象预警。now 包含
-                        当前实况和未来2小时分钟级降水摘要；today 包含今天总览和
-                        今天剩余逐小时预报；tomorrow 包含明天总览和完整逐小时预报；
-                        7d 包含未来7天逐日预报。
+                        tomorrow 和 7d。now 包含当前实况和未来2小时分钟级降水
+                        摘要；today 包含今天总览、今天剩余逐小时预报和当前生效的
+                        气象预警；tomorrow 包含明天总览和完整逐小时预报；7d 包含
+                        未来7天逐日预报。now 同样附带当前生效的气象预警。
                         用户询问“现在”“当前”“多久停雨”时必须使用 now。
 
                         Args:

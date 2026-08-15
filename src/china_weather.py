@@ -51,7 +51,7 @@ class ChinaWeatherRequest(BaseModel):
         description=(
             "天气范围，可选 now、today、tomorrow、7d。now 包含当前实况和"
             "未来2小时分钟级降水摘要；today、tomorrow 包含目标自然日总览和"
-            "逐小时预报；7d 包含未来7天逐日预报。"
+            "逐小时预报；7d 包含未来7天逐日预报；now 和 today 附带当前预警。"
         ),
     )
 
@@ -147,13 +147,13 @@ class ChinaWeatherClient:
 
     def fetch(self, request: ChinaWeatherRequest) -> dict[str, Any]:
         """
-        解析地点并查询天气、分钟级降水与实时预警。
+        解析地点并按范围查询天气、分钟级降水与实时预警。
 
         Args:
             request (ChinaWeatherRequest): 已校验的国内天气请求。
 
         Returns:
-            dict[str, Any]: 地点、天气、分钟级降水和预警组成的内部响应。
+            dict[str, Any]: 地点及请求范围所需天气数据组成的内部响应。
 
         Raises:
             RuntimeError: 当地点不存在、请求失败或响应结构异常时抛出。
@@ -171,14 +171,18 @@ class ChinaWeatherClient:
             )
         elif request.forecast in ("today", "tomorrow"):
             hourly_weather = self._fetch_hourly_weather(str(location["id"]))
-        alerts = self._fetch_alerts(str(location["lat"]), str(location["lon"]))
-        return {
+        result: dict[str, Any] = {
             "location": location,
             "weather": weather,
             "minutely": minutely,
             "hourly_weather": hourly_weather,
-            "alerts": alerts,
         }
+        if request.forecast in ("now", "today"):
+            result["alerts"] = self._fetch_alerts(
+                str(location["lat"]),
+                str(location["lon"]),
+            )
+        return result
 
     def _fetch_location(
         self,
@@ -433,7 +437,7 @@ class ChinaWeatherFormatter:
 
     def format(self, request: ChinaWeatherRequest, payload: dict[str, Any]) -> str:
         """
-        格式化天气与预警响应。
+        按请求范围格式化天气与预警响应。
 
         Args:
             request (ChinaWeatherRequest): 用户的天气请求。
@@ -450,10 +454,8 @@ class ChinaWeatherFormatter:
         weather = payload.get("weather")
         minutely = payload.get("minutely")
         hourly_weather = payload.get("hourly_weather")
-        alerts = payload.get("alerts")
         assert isinstance(location, dict), "location 必须为字典。"
         assert isinstance(weather, dict), "weather 必须为字典。"
-        assert isinstance(alerts, list), "alerts 必须为列表。"
 
         result: dict[str, Any] = {
             "location": self._format_location(location),
@@ -485,7 +487,10 @@ class ChinaWeatherFormatter:
         else:
             result["daily_fields"] = list(self._DAILY_FIELDS)
             result["daily"] = self._format_daily(weather)
-        result["alerts"] = self._format_alerts(alerts)
+        if request.forecast in ("now", "today"):
+            alerts = payload.get("alerts")
+            assert isinstance(alerts, list), "alerts 必须为列表。"
+            result["alerts"] = self._format_alerts(alerts)
         return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
 
     @staticmethod

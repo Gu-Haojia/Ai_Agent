@@ -64,9 +64,9 @@ class ChinaWeatherTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             ChinaWeatherRequest(location="苏州市", forecast="24h")
 
-    def test_client_fetches_location_weather_and_alerts(self) -> None:
+    def test_client_fetches_today_weather_hourly_and_alerts(self) -> None:
         """
-        验证客户端依次请求地点、天气和新版预警接口。
+        验证今日查询依次请求地点、天气、逐小时天气和新版预警接口。
 
         Args:
             None
@@ -100,6 +100,9 @@ class ChinaWeatherTests(unittest.TestCase):
                 "daily": [],
             }
         )
+        hourly_response = self._response(
+            {"code": "200", "updateTime": "2026-08-15T01:00+08:00", "hourly": []}
+        )
         alert_response = self._response(
             {
                 "metadata": {"zeroResult": False},
@@ -119,25 +122,33 @@ class ChinaWeatherTests(unittest.TestCase):
 
         with mock.patch(
             "src.china_weather.requests.get",
-            side_effect=[geo_response, weather_response, alert_response],
+            side_effect=[
+                geo_response,
+                weather_response,
+                hourly_response,
+                alert_response,
+            ],
         ) as request_get:
             result = client.fetch(
                 ChinaWeatherRequest(
                     location="苏州市",
                     adm="江苏",
-                    forecast="7d",
+                    forecast="today",
                 )
             )
 
-        self.assertEqual(request_get.call_count, 3)
+        self.assertEqual(request_get.call_count, 4)
         self.assertTrue(
             request_get.call_args_list[0].args[0].endswith("/geo/v2/city/lookup")
         )
         self.assertTrue(
-            request_get.call_args_list[1].args[0].endswith("/v7/weather/7d")
+            request_get.call_args_list[1].args[0].endswith("/v7/weather/3d")
         )
         self.assertTrue(
-            request_get.call_args_list[2].args[0].endswith(
+            request_get.call_args_list[2].args[0].endswith("/v7/weather/72h")
+        )
+        self.assertTrue(
+            request_get.call_args_list[3].args[0].endswith(
                 "/weatheralert/v1/current/31.30/120.58"
             )
         )
@@ -188,9 +199,6 @@ class ChinaWeatherTests(unittest.TestCase):
                 "hourly": [],
             }
         )
-        alert_response = self._response(
-            {"metadata": {"zeroResult": True}, "alerts": []}
-        )
         client = ChinaWeatherClient(api_host="weather.example.com", api_key="secret")
 
         with mock.patch(
@@ -199,7 +207,6 @@ class ChinaWeatherTests(unittest.TestCase):
                 geo_response,
                 daily_response,
                 hourly_response,
-                alert_response,
             ],
         ) as request_get:
             result = client.fetch(
@@ -210,7 +217,7 @@ class ChinaWeatherTests(unittest.TestCase):
                 )
             )
 
-        self.assertEqual(request_get.call_count, 4)
+        self.assertEqual(request_get.call_count, 3)
         self.assertTrue(
             request_get.call_args_list[1].args[0].endswith("/v7/weather/3d")
         )
@@ -219,6 +226,7 @@ class ChinaWeatherTests(unittest.TestCase):
         )
         self.assertEqual(result["weather"]["daily"], [])
         self.assertEqual(result["hourly_weather"]["hourly"], [])
+        self.assertNotIn("alerts", result)
 
     def test_client_accepts_zero_alert_result(self) -> None:
         """
@@ -361,14 +369,6 @@ class ChinaWeatherTests(unittest.TestCase):
                     },
                 ],
             },
-            "alerts": [
-                {
-                    "headline": "暴雨橙色预警",
-                    "severity": "severe",
-                    "issuedTime": "2026-08-14T19:42+08:00",
-                    "description": "不会进入精简结果的长文本",
-                }
-            ],
         }
 
         result = json.loads(formatter.format(request, payload))
@@ -392,11 +392,7 @@ class ChinaWeatherTests(unittest.TestCase):
         )
         self.assertNotIn("current", result)
         self.assertNotIn("next_2h_rain", result)
-        self.assertEqual(
-            result["alerts"],
-            [["暴雨橙色预警", "severe", "2026-08-14T19:42+08:00"]],
-        )
-        self.assertNotIn("description", formatter.format(request, payload))
+        self.assertNotIn("alerts", result)
 
     def test_formatter_selects_today_overview_and_hours(self) -> None:
         """
@@ -514,7 +510,6 @@ class ChinaWeatherTests(unittest.TestCase):
                             }
                         ],
                     },
-                    "alerts": [],
                 },
             )
         )
@@ -550,7 +545,7 @@ class ChinaWeatherTests(unittest.TestCase):
         self.assertNotIn("current", daily)
         self.assertEqual(
             set(daily),
-            {"location", "updated_at", "daily_fields", "daily", "alerts"},
+            {"location", "updated_at", "daily_fields", "daily"},
         )
 
     def test_service_returns_structured_client_error(self) -> None:
