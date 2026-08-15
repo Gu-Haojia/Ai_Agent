@@ -323,6 +323,7 @@ class ChinaWeatherTests(unittest.TestCase):
                             "feelsLike": "27",
                             "humidity": "94",
                             "precip": "0.0",
+                            "vis": "12",
                             "windDir": "西南风",
                             "windScale": "1-3",
                         },
@@ -353,6 +354,10 @@ class ChinaWeatherTests(unittest.TestCase):
                                 "tempMax": "31",
                                 "precip": "2.1",
                                 "humidity": "88",
+                                "vis": "18",
+                                "uvIndex": "6",
+                                "sunrise": "05:24",
+                                "sunset": "18:44",
                                 "windDirDay": "东风",
                                 "windScaleDay": "1-3",
                                 "windDirNight": "东风",
@@ -366,6 +371,7 @@ class ChinaWeatherTests(unittest.TestCase):
         )
 
         self.assertEqual(current["current"]["feels_like_c"], 27)
+        self.assertEqual(current["current"]["visibility_km"], 12)
         self.assertEqual(
             current["next_2h_rain"],
             {"summary": "35分钟后雨就停了"},
@@ -373,7 +379,20 @@ class ChinaWeatherTests(unittest.TestCase):
         self.assertNotIn("hourly", current)
         self.assertEqual(
             daily["daily"][0],
-            ["2026-08-15", "多云", "小雨", 24, 31, 2.1, 88, "东风1-3级"],
+            [
+                "2026-08-15",
+                "多云",
+                "小雨",
+                24,
+                31,
+                2.1,
+                88,
+                "东风1-3级",
+                18,
+                6,
+                "05:24",
+                "18:44",
+            ],
         )
         self.assertNotIn("current", daily)
 

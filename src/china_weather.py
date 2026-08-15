@@ -433,6 +433,10 @@ class ChinaWeatherFormatter:
                 "rain_mm",
                 "humidity",
                 "wind",
+                "visibility_km",
+                "uv_index",
+                "sunrise",
+                "sunset",
             ]
             result["daily"] = self._format_daily(weather)
         result["alerts"] = self._format_alerts(alerts)
@@ -561,6 +565,7 @@ class ChinaWeatherFormatter:
             "feels_like_c": self._to_number(current.get("feelsLike")),
             "humidity": self._to_number(current.get("humidity")),
             "rain_mm": self._to_number(current.get("precip")),
+            "visibility_km": self._to_number(current.get("vis")),
             "wind": self._format_wind(current.get("windDir"), current.get("windScale")),
         }
 
@@ -632,6 +637,10 @@ class ChinaWeatherFormatter:
                     self._to_number(item.get("precip")),
                     self._to_number(item.get("humidity")),
                     wind,
+                    self._to_number(item.get("vis")),
+                    self._to_number(item.get("uvIndex")),
+                    item.get("sunrise"),
+                    item.get("sunset"),
                 ]
             )
         return rows

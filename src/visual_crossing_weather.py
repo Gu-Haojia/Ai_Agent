@@ -343,7 +343,16 @@ class VisualCrossingWeatherFormatter:
         if isinstance(current_conditions, dict) and not request.use_hours:
             result["current"] = self._pick_fields(
                 current_conditions,
-                ["datetime", "temp", "feelslike", "humidity", "windspeed", "conditions"],
+                [
+                    "datetime",
+                    "temp",
+                    "feelslike",
+                    "humidity",
+                    "windspeed",
+                    "visibility",
+                    "uvindex",
+                    "conditions",
+                ],
             )
 
         days_info = self._extract_days(request, payload.get("days"))
@@ -476,6 +485,10 @@ class VisualCrossingWeatherFormatter:
                     "precip",
                     "precipprob",
                     "windspeed",
+                    "visibility",
+                    "uvindex",
+                    "sunrise",
+                    "sunset",
                     "conditions",
                     "description",
                 ],
@@ -524,6 +537,8 @@ class VisualCrossingWeatherFormatter:
                     "precip",
                     "precipprob",
                     "windspeed",
+                    "visibility",
+                    "uvindex",
                     "conditions",
                 ],
             )

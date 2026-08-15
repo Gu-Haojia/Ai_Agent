@@ -104,6 +104,10 @@ class VisualCrossingWeatherTests(unittest.TestCase):
                     "datetime": "2024-05-01",
                     "tempmax": 20.0,
                     "tempmin": 12.0,
+                    "visibility": 16.0,
+                    "uvindex": 5.0,
+                    "sunrise": "05:52:00",
+                    "sunset": "19:53:00",
                     "conditions": "Partially cloudy",
                     "hours": [
                         {
@@ -114,6 +118,8 @@ class VisualCrossingWeatherTests(unittest.TestCase):
                         {
                             "datetime": "09:00:00",
                             "temp": 16.5,
+                            "visibility": 14.5,
+                            "uvindex": 2.0,
                             "conditions": "Partially cloudy",
                         },
                     ],
@@ -125,7 +131,50 @@ class VisualCrossingWeatherTests(unittest.TestCase):
         data = json.loads(formatted)
         self.assertEqual(data["days"][0]["hours"][0]["datetime"], "09:00:00")
         self.assertAlmostEqual(data["days"][0]["hours"][0]["temp"], 16.5, places=1)
+        self.assertEqual(data["days"][0]["hours"][0]["visibility"], 14.5)
+        self.assertEqual(data["days"][0]["hours"][0]["uvindex"], 2.0)
+        self.assertEqual(data["days"][0]["visibility"], 16.0)
+        self.assertEqual(data["days"][0]["uvindex"], 5.0)
+        self.assertEqual(data["days"][0]["sunrise"], "05:52:00")
+        self.assertEqual(data["days"][0]["sunset"], "19:53:00")
         self.assertEqual(data["query"]["granularity"], "hour")
+
+    def test_formatter_keeps_current_visibility_and_uv_index(self) -> None:
+        """
+        验证当前实况会保留能见度和紫外线指数。
+
+        Args:
+            None
+
+        Returns:
+            None
+
+        Raises:
+            None
+        """
+
+        request = VisualCrossingWeatherRequest(
+            location="Tokyo",
+            start_time="2024-05-01",
+            hour=False,
+        )
+        payload = {
+            "resolvedAddress": "Tokyo, Japan",
+            "timezone": "Asia/Tokyo",
+            "currentConditions": {
+                "datetime": "12:00:00",
+                "temp": 24.0,
+                "visibility": 15.2,
+                "uvindex": 7.0,
+                "conditions": "Clear",
+            },
+            "days": [],
+        }
+
+        data = json.loads(VisualCrossingWeatherFormatter().format(request, payload))
+
+        self.assertEqual(data["current"]["visibility"], 15.2)
+        self.assertEqual(data["current"]["uvindex"], 7.0)
 
     def test_compose_url_with_range(self) -> None:
         """
