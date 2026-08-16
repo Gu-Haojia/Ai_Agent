@@ -2178,6 +2178,7 @@ class SQLCheckpointAgentStreamingPlus:
                 callbacks=[TOKEN_USAGE_LOGGER],
                 request_timeout=60 if _is_truthy_env(os.environ.get("GOOGLE_GENAI_USE_VERTEXAI")) else None,
                 **({"use_responses_api": True} if model_name.lower() == "openai:gpt-5.6-luna" else {}),
+                **({"thinking_level": "medium"} if model_name.lower() == "google_genai:gemini-3.1-pro-preview" else {}),
             )
             tools = []
             if self._enable_tools:
