@@ -333,6 +333,54 @@ def test_context_compressor_force_compresses_oversized_summary() -> None:
     assert compressor.count_text_tokens(summary) <= 20
 
 
+def test_context_compressor_retries_response_without_text() -> None:
+    """
+    验证摘要响应没有文本时最多重试两次并返回成功结果。
+
+    Returns:
+        None: 无返回值。
+
+    Raises:
+        None: 预期行为由断言验证。
+    """
+    summary_model = mock.Mock()
+    summary_model.invoke.side_effect = [
+        AIMessage(content=[{"type": "reasoning", "reasoning": "思考中"}]),
+        AIMessage(content=[{"type": "reasoning", "reasoning": "继续思考"}]),
+        AIMessage(content="重试后的摘要"),
+    ]
+    compressor = ContextCompressor(ContextCompressionConfig(), summary_model)
+
+    summary = compressor.summarize("无", [HumanMessage(content="旧消息")])
+
+    assert summary == "重试后的摘要"
+    assert summary_model.invoke.call_count == 3
+
+
+def test_context_compressor_raises_after_two_retries_without_text() -> None:
+    """
+    验证摘要模型连续三次没有文本时保留原始断言错误。
+
+    Returns:
+        None: 无返回值。
+
+    Raises:
+        None: 预期行为由断言验证。
+    """
+    summary_model = mock.Mock()
+    summary_model.invoke.return_value = AIMessage(
+        content=[{"type": "reasoning", "reasoning": "思考中"}]
+    )
+    compressor = ContextCompressor(ContextCompressionConfig(), summary_model)
+
+    with pytest.raises(
+        AssertionError, match="无法从上下文摘要模型响应中提取文本"
+    ):
+        compressor.summarize("无", [HumanMessage(content="旧消息")])
+
+    assert summary_model.invoke.call_count == 3
+
+
 def test_context_compressor_hard_truncates_when_force_compression_stays_oversized(
     capsys: pytest.CaptureFixture[str],
 ) -> None:

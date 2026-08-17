@@ -1126,9 +1126,7 @@ class ContextCompressor:
         assert isinstance(previous_summary, str), "previous_summary 必须是字符串"
         assert isinstance(messages, Sequence) and messages, "messages 不能为空"
         prompt = self.build_summary_prompt(previous_summary, messages)
-        response = self._summary_model.invoke([HumanMessage(content=prompt)])
-        summary = self.extract_response_text(response)
-        assert summary.strip(), "上下文摘要模型返回为空"
+        summary = self.invoke_summary_model(prompt)
         token_count = self.count_text_tokens(summary)
         if token_count <= self._config.max_summary_text_tokens:
             return summary.strip()
@@ -1152,9 +1150,7 @@ class ContextCompressor:
         hard_limit = self._config.max_summary_text_tokens
         for attempt in range(2):
             prompt = self.build_forced_summary_prompt(compressed_summary)
-            response = self._summary_model.invoke([HumanMessage(content=prompt)])
-            candidate = self.extract_response_text(response).strip()
-            assert candidate, "强制压缩模型返回为空"
+            candidate = self.invoke_summary_model(prompt).strip()
             compressed_summary = candidate
             token_count = self.count_text_tokens(compressed_summary)
             if token_count <= hard_limit:
@@ -1177,6 +1173,30 @@ class ContextCompressor:
             flush=True,
         )
         return truncated_summary
+
+    def invoke_summary_model(self, prompt: str) -> str:
+        """
+        调用摘要模型，并在响应没有文本时最多重试两次。
+
+        Args:
+            prompt (str): 摘要模型输入提示。
+
+        Returns:
+            str: 摘要模型返回的非空文本。
+
+        Raises:
+            AssertionError: 当模型连续三次没有返回文本时抛出。
+        """
+        assert isinstance(prompt, str) and prompt.strip(), "摘要 prompt 不能为空"
+        for attempt in range(3):
+            response = self._summary_model.invoke([HumanMessage(content=prompt)])
+            try:
+                summary = self.extract_response_text(response)
+                assert summary.strip(), "上下文摘要模型返回为空"
+                return summary
+            except AssertionError:
+                if attempt == 2:
+                    raise
 
     def build_forced_summary_prompt(self, summary: str) -> str:
         """
