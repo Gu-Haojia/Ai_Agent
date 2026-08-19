@@ -14,7 +14,7 @@ from langchain_core.tools import BaseTool, tool
 
 EVENTERNOTE_BASE_URL = "https://www.eventernote.com"
 EVENTERNOTE_SEARCH_URL = f"{EVENTERNOTE_BASE_URL}/events/search"
-TOOL_PAGE_SIZE = 10
+TOOL_PAGE_SIZE = 20
 UPSTREAM_PAGE_SIZE = 30
 REQUEST_TIMEOUT_SECONDS = 10
 
@@ -132,6 +132,15 @@ class EventernoteClient:
                 f"page 超出范围，当前总页数为 {total_pages}。",
             )
         items = source_items[offset : offset + TOOL_PAGE_SIZE]
+        expected_count = min(
+            TOOL_PAGE_SIZE,
+            max(total_items - (page - 1) * TOOL_PAGE_SIZE, 0),
+        )
+        if len(items) < expected_count:
+            next_params = {**params, "page": source_page + 1}
+            next_html = self._get(EVENTERNOTE_SEARCH_URL, next_params)
+            _, next_items = self._parse_search_page(next_html)
+            items.extend(next_items[: expected_count - len(items)])
         return {
             "ok": True,
             "page": {
@@ -469,7 +478,7 @@ def build_eventernote_tools(
         date: str | None = None,
         page: int = 1,
     ) -> str:
-        """搜索 Eventernote 活动，每页固定返回十条活动 ID 和完整名称。
+        """搜索 Eventernote 活动，每页固定返回二十条活动 ID 和完整名称。
 
         query 可使用活动名、出演者名或会场名；仅按日期查询时传
         空字符串。

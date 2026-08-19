@@ -29,12 +29,13 @@ def _response(html: str, status_code: int = 200) -> Mock:
     return response
 
 
-def _search_page(total: int, count: int) -> str:
+def _search_page(total: int, count: int, start_id: int = 1001) -> str:
     """创建最小活动搜索页 HTML。
 
     Args:
         total (int): 搜索结果总数。
         count (int): 当前官网页活动数。
+        start_id (int): 当前官网页首个活动 ID。
 
     Returns:
         str: 活动搜索页 HTML。
@@ -43,11 +44,12 @@ def _search_page(total: int, count: int) -> str:
         AssertionError: 当数量为负数时抛出。
     """
     assert total >= 0 and count >= 0, "数量不能为负数"
+    assert start_id > 0, "start_id 必须为正整数"
     items = "".join(
         '<li class="clearfix"><div class="event"><h4>'
-        f'<a href="/events/{1000 + index}">活动 {index}</a>'
+        f'<a href="/events/{start_id + index}">活动 {start_id + index}</a>'
         "</h4></div></li>"
-        for index in range(1, count + 1)
+        for index in range(count)
     )
     return (
         f'<p class="t2">{total}件のイベントが見つかりました。</p>'
@@ -95,10 +97,10 @@ class TestEventernoteSearchTool:
 
         result = client.search(query="活动")
 
-        assert result["page"] == {"current": 1, "total": 1, "size": 10}
+        assert result["page"] == {"current": 1, "total": 1, "size": 20}
 
-    def test_returns_ten_items_with_page_metadata(self) -> None:
-        """搜索应按每页十条返回当前页和总页数。"""
+    def test_returns_twenty_items_with_page_metadata(self) -> None:
+        """搜索应按每页二十条返回当前页和总页数。"""
         session = requests.Session()
         session.get = Mock(  # type: ignore[method-assign]
             return_value=_response(_search_page(40, 30))
@@ -106,32 +108,40 @@ class TestEventernoteSearchTool:
         search_tool, _ = build_eventernote_tools(EventernoteClient(session))
 
         result = json.loads(
-            search_tool.invoke({"query": "活动", "date": None, "page": 2})
+            search_tool.invoke({"query": "活动", "date": None, "page": 1})
         )
 
         assert result["ok"] is True
-        assert result["page"] == {"current": 2, "total": 4, "size": 10}
-        assert len(result["items"]) == 10
-        assert result["items"][0] == {"id": 1011, "name": "活动 11"}
+        assert result["page"] == {"current": 1, "total": 2, "size": 20}
+        assert len(result["items"]) == 20
+        assert result["items"][0] == {"id": 1001, "name": "活动 1001"}
         params = session.get.call_args.kwargs["params"]  # type: ignore[attr-defined]
         assert params["page"] == 1
 
-    def test_maps_fourth_tool_page_to_second_upstream_page(self) -> None:
-        """第四个 Tool 页应请求官网第二页。"""
+    def test_combines_upstream_pages_when_tool_page_crosses_boundary(self) -> None:
+        """第二个 Tool 页应拼接官网第一页和第二页。"""
         session = requests.Session()
         session.get = Mock(  # type: ignore[method-assign]
-            return_value=_response(_search_page(40, 10))
+            side_effect=[
+                _response(_search_page(40, 30)),
+                _response(_search_page(40, 10, start_id=1031)),
+            ]
         )
         search_tool, _ = build_eventernote_tools(EventernoteClient(session))
 
         result = json.loads(
-            search_tool.invoke({"query": "活动", "date": None, "page": 4})
+            search_tool.invoke({"query": "活动", "date": None, "page": 2})
         )
 
-        assert result["page"] == {"current": 4, "total": 4, "size": 10}
-        assert len(result["items"]) == 10
-        params = session.get.call_args.kwargs["params"]  # type: ignore[attr-defined]
-        assert params["page"] == 2
+        assert result["page"] == {"current": 2, "total": 2, "size": 20}
+        assert len(result["items"]) == 20
+        assert result["items"][0] == {"id": 1021, "name": "活动 1021"}
+        assert result["items"][-1] == {"id": 1040, "name": "活动 1040"}
+        requested_pages = [
+            call.kwargs["params"]["page"]
+            for call in session.get.call_args_list
+        ]
+        assert requested_pages == [1, 2]
 
     def test_accepts_empty_query_with_date(self) -> None:
         """精确日期搜索应允许空关键词。"""
@@ -151,7 +161,7 @@ class TestEventernoteSearchTool:
 
         assert result == {
             "ok": True,
-            "page": {"current": 1, "total": 0, "size": 10},
+            "page": {"current": 1, "total": 0, "size": 20},
             "items": [],
         }
 
