@@ -6,7 +6,7 @@ import json
 import math
 import re
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 import requests
 from bs4 import BeautifulSoup
@@ -14,9 +14,12 @@ from langchain_core.tools import BaseTool, tool
 
 EVENTERNOTE_BASE_URL = "https://www.eventernote.com"
 EVENTERNOTE_SEARCH_URL = f"{EVENTERNOTE_BASE_URL}/events/search"
+EVENTERNOTE_ACTOR_SEARCH_URL = f"{EVENTERNOTE_BASE_URL}/actors/search"
+EVENTERNOTE_PLACE_SEARCH_URL = f"{EVENTERNOTE_BASE_URL}/places/search"
 TOOL_PAGE_SIZE = 20
 UPSTREAM_PAGE_SIZE = 30
 REQUEST_TIMEOUT_SECONDS = 10
+SEARCH_TYPES = {"event", "actor", "place"}
 
 
 class EventernoteError(Exception):
@@ -79,13 +82,15 @@ class EventernoteClient:
     def search(
         self,
         query: str,
+        type: Literal["event", "actor", "place"] = "event",
         date: str | None = None,
         page: int = 1,
     ) -> dict[str, Any]:
-        """搜索 Eventernote 活动并转换为每页十条的结果。
+        """按活动关键词、出演者或会场搜索 Eventernote 活动。
 
         Args:
-            query (str): 活动、出演者或会场关键词；按日期查询时可为空。
+            query (str): 搜索关键词；仅按活动日期查询时可为空。
+            type (Literal["event", "actor", "place"]): 关键词类型。
             date (str | None): 可选的 ``YYYY-MM-DD`` 日期。
             page (int): 从 1 开始的 Tool 页码。
 
@@ -97,29 +102,66 @@ class EventernoteClient:
         """
         normalized_query = query.strip()
         query_date = self._parse_date(date)
-        if not normalized_query and query_date is None:
+        if type not in SEARCH_TYPES:
             raise EventernoteError(
                 "invalid_argument",
-                "query 和 date 不能同时为空。",
+                "type 必须是 event、actor 或 place。",
+            )
+        if not normalized_query and (type != "event" or query_date is None):
+            raise EventernoteError(
+                "invalid_argument",
+                "query 不能为空；仅 event 类型可在传入 date 时使用空关键词。",
             )
         if page <= 0:
             raise EventernoteError(
                 "invalid_argument",
                 "page 必须为正整数。",
             )
+        if type == "event":
+            return self._search_event_keyword(
+                normalized_query,
+                query_date,
+                page,
+            )
+        return self._search_entity_events(
+            normalized_query,
+            type,
+            query_date,
+            page,
+        )
+
+    def _search_event_keyword(
+        self,
+        query: str,
+        date: datetime | None,
+        page: int,
+    ) -> dict[str, Any]:
+        """使用官网活动关键词入口搜索活动。
+
+        Args:
+            query (str): 活动关键词。
+            date (datetime | None): 可选活动日期。
+            page (int): 从 1 开始的 Tool 页码。
+
+        Returns:
+            dict[str, Any]: 每页二十条的活动搜索结果。
+
+        Raises:
+            EventernoteError: 当请求、分页或页面解析失败时抛出。
+        """
 
         source_page = ((page - 1) * TOOL_PAGE_SIZE) // UPSTREAM_PAGE_SIZE + 1
         offset = ((page - 1) * TOOL_PAGE_SIZE) % UPSTREAM_PAGE_SIZE
         params: dict[str, str | int] = {
-            "keyword": normalized_query,
+            "keyword": query,
             "page": source_page,
         }
-        if query_date is not None:
+        if date is not None:
             params.update(
                 {
-                    "year": query_date.year,
-                    "month": query_date.month,
-                    "day": query_date.day,
+                    "year": date.year,
+                    "month": date.month,
+                    "day": date.day,
                 }
             )
 
@@ -141,6 +183,156 @@ class EventernoteClient:
             next_html = self._get(EVENTERNOTE_SEARCH_URL, next_params)
             _, next_items = self._parse_search_page(next_html)
             items.extend(next_items[: expected_count - len(items)])
+        return self._search_result(page, total_pages, items)
+
+    def _search_entity_events(
+        self,
+        query: str,
+        type: Literal["actor", "place"],
+        date: datetime | None,
+        page: int,
+    ) -> dict[str, Any]:
+        """按出演者或会场的精准关系搜索活动。
+
+        Args:
+            query (str): 出演者或会场关键词。
+            type (Literal["actor", "place"]): 关键词类型。
+            date (datetime | None): 可选活动日期。
+            page (int): 从 1 开始的 Tool 页码。
+
+        Returns:
+            dict[str, Any]: 每页二十条的精准关系活动结果。
+
+        Raises:
+            EventernoteError: 当实体不存在、请求或页面解析失败时抛出。
+        """
+        events_url = self._resolve_entity_events_url(query, type)
+        if date is not None:
+            return self._search_entity_events_by_date(events_url, date, page)
+
+        html = self._get(
+            events_url,
+            {"limit": TOOL_PAGE_SIZE, "page": page},
+        )
+        total_items, items = self._parse_search_page(html)
+        total_pages = math.ceil(total_items / TOOL_PAGE_SIZE)
+        if total_pages > 0 and page > total_pages:
+            raise EventernoteError(
+                "page_out_of_range",
+                f"page 超出范围，当前总页数为 {total_pages}。",
+            )
+        return self._search_result(page, total_pages, items)
+
+    def _resolve_entity_events_url(
+        self,
+        query: str,
+        type: Literal["actor", "place"],
+    ) -> str:
+        """解析官网排序第一的出演者或会场活动列表地址。
+
+        Args:
+            query (str): 出演者或会场关键词。
+            type (Literal["actor", "place"]): 关键词类型。
+
+        Returns:
+            str: 精准关系活动列表地址。
+
+        Raises:
+            EventernoteError: 当没有匹配实体或搜索页无法解析时抛出。
+        """
+        search_url = (
+            EVENTERNOTE_ACTOR_SEARCH_URL
+            if type == "actor"
+            else EVENTERNOTE_PLACE_SEARCH_URL
+        )
+        html = self._get(search_url, {"keyword": query})
+        soup = BeautifulSoup(html, "html.parser")
+        path_pattern = (
+            re.compile(r"/actors/[^/]+/\d+")
+            if type == "actor"
+            else re.compile(r"/places/\d+")
+        )
+        for link in soup.select("ul.gb_actors_list > li > a[href]"):
+            href = str(link.get("href") or "")
+            if path_pattern.fullmatch(href):
+                return f"{EVENTERNOTE_BASE_URL}{href}/events"
+        entity_name = "Actor" if type == "actor" else "Place"
+        raise EventernoteError(
+            "not_found",
+            f"没有找到匹配的 {entity_name}。",
+        )
+
+    def _search_entity_events_by_date(
+        self,
+        events_url: str,
+        date: datetime,
+        page: int,
+    ) -> dict[str, Any]:
+        """按日期扫描精准关系活动列表并在越过目标日期后停止。
+
+        Args:
+            events_url (str): 出演者或会场活动列表地址。
+            date (datetime): 目标活动日期。
+            page (int): 从 1 开始的 Tool 页码。
+
+        Returns:
+            dict[str, Any]: 本地日期过滤后的活动结果。
+
+        Raises:
+            EventernoteError: 当请求、分页或页面解析失败时抛出。
+        """
+        target_date = date.strftime("%Y-%m-%d")
+        matched_items: list[dict[str, int | str | None]] = []
+        source_page = 1
+        source_total_pages = 1
+        reached_older_event = False
+        while source_page <= source_total_pages and not reached_older_event:
+            html = self._get(
+                events_url,
+                {"limit": TOOL_PAGE_SIZE, "page": source_page},
+            )
+            total_items, items = self._parse_search_page(html)
+            source_total_pages = math.ceil(total_items / TOOL_PAGE_SIZE)
+            for item in items:
+                item_date = item["date"]
+                if item_date == target_date:
+                    matched_items.append(item)
+                elif item_date is not None and item_date < target_date:
+                    reached_older_event = True
+                    break
+            source_page += 1
+
+        total_pages = math.ceil(len(matched_items) / TOOL_PAGE_SIZE)
+        if total_pages > 0 and page > total_pages:
+            raise EventernoteError(
+                "page_out_of_range",
+                f"page 超出范围，当前总页数为 {total_pages}。",
+            )
+        offset = (page - 1) * TOOL_PAGE_SIZE
+        items = matched_items[offset : offset + TOOL_PAGE_SIZE]
+        return self._search_result(page, total_pages, items)
+
+    def _search_result(
+        self,
+        page: int,
+        total_pages: int,
+        items: list[dict[str, int | str | None]],
+    ) -> dict[str, Any]:
+        """构造统一活动搜索结果。
+
+        Args:
+            page (int): 当前页码。
+            total_pages (int): 总页数。
+            items (list[dict[str, int | str | None]]): 当前页活动。
+
+        Returns:
+            dict[str, Any]: 统一分页结果。
+
+        Raises:
+            AssertionError: 当页码或总页数无效时抛出。
+        """
+        assert page > 0, "page 必须为正整数"
+        assert total_pages >= 0, "total_pages 不能为负数"
         return {
             "ok": True,
             "page": {
@@ -263,7 +455,10 @@ class EventernoteClient:
         )
         if no_results_text in page_text:
             return 0, []
-        count_match = re.search(r"([\d,]+)件のイベントが見つかりました", page_text)
+        count_match = re.search(
+            r"([\d,]+)件(?:のイベントが)?見つかりました",
+            page_text,
+        )
         if count_match is None:
             raise EventernoteError(
                 "parse_error",
@@ -487,16 +682,19 @@ def build_eventernote_tools(
     @tool("eventernote_search")
     def eventernote_search(
         query: str,
+        type: Literal["event", "actor", "place"] = "event",
         date: str | None = None,
         page: int = 1,
     ) -> str:
         """搜索 Eventernote 活动，每页返回二十条活动 ID、名称和日期。
 
-        query 可使用活动名、出演者名或会场名；仅按日期查询时传
-        空字符串。
+        event 执行活动全文关键词搜索；actor 和 place 先取官网匹配度
+        最高的实体，再查询其精准关联活动。仅 event 按日期查询时允许
+        query 为空字符串。
 
         Args:
-            query (str): 搜索关键词；传入 date 时允许为空字符串。
+            query (str): 活动、出演者或会场关键词。
+            type (Literal["event", "actor", "place"]): 关键词类型。
             date (str | None): 可选的 ``YYYY-MM-DD`` 活动日期。
             page (int): 从 1 开始的页码。
 
@@ -508,7 +706,9 @@ def build_eventernote_tools(
             Exception: 未预期的程序错误原样抛出。
         """
         try:
-            return _json_result(eventernote_client.search(query, date, page))
+            return _json_result(
+                eventernote_client.search(query, type, date, page)
+            )
         except EventernoteError as exc:
             return _error_result(exc)
 

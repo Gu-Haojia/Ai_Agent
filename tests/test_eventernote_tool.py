@@ -29,13 +29,21 @@ def _response(html: str, status_code: int = 200) -> Mock:
     return response
 
 
-def _search_page(total: int, count: int, start_id: int = 1001) -> str:
+def _search_page(
+    total: int,
+    count: int,
+    start_id: int = 1001,
+    dates: list[str] | None = None,
+    place_count: bool = False,
+) -> str:
     """创建最小活动搜索页 HTML。
 
     Args:
         total (int): 搜索结果总数。
         count (int): 当前官网页活动数。
         start_id (int): 当前官网页首个活动 ID。
+        dates (list[str] | None): 可选的逐条活动日期。
+        place_count (bool): 是否使用会场活动页的总数文本。
 
     Returns:
         str: 活动搜索页 HTML。
@@ -45,16 +53,23 @@ def _search_page(total: int, count: int, start_id: int = 1001) -> str:
     """
     assert total >= 0 and count >= 0, "数量不能为负数"
     assert start_id > 0, "start_id 必须为正整数"
+    assert dates is None or len(dates) == count, "dates 数量必须等于 count"
     items = "".join(
         '<li class="clearfix"><div class="date"><p class="day0">'
-        '2026-08-19 (<span class="wday3">水</span>)</p></div>'
+        f'{dates[index] if dates else "2026-08-19"} '
+        '(<span class="wday3">水</span>)</p></div>'
         '<div class="event"><h4>'
         f'<a href="/events/{start_id + index}">活动 {start_id + index}</a>'
         "</h4></div></li>"
         for index in range(count)
     )
+    count_text = (
+        f"{total}件見つかりました。"
+        if place_count
+        else f"{total}件のイベントが見つかりました。"
+    )
     return (
-        f'<p class="t2">{total}件のイベントが見つかりました。</p>'
+        f'<p class="t2">{count_text}</p>'
         f'<div class="gb_event_list"><ul>{items}</ul></div>'
     )
 
@@ -191,6 +206,131 @@ class TestEventernoteSearchTool:
 
         assert result["ok"] is False
         assert result["error"]["code"] == "invalid_date"
+
+    def test_rejects_year_month_date(self) -> None:
+        """date 暂不接受只有年和月的格式。"""
+        search_tool, _ = build_eventernote_tools()
+
+        result = json.loads(
+            search_tool.invoke(
+                {"query": "", "date": "2026-08", "page": 1}
+            )
+        )
+
+        assert result["ok"] is False
+        assert result["error"]["code"] == "invalid_date"
+
+    def test_actor_uses_highest_ranked_precise_event_list(self) -> None:
+        """Actor 搜索应使用官网排序第一的精准关系活动列表。"""
+        session = requests.Session()
+        session.get = Mock(  # type: ignore[method-assign]
+            side_effect=[
+                _response(
+                    '<ul class="gb_actors_list">'
+                    '<li><a href="/actors/羊宮妃那/54104">羊宮妃那</a></li>'
+                    '<li><a href="/actors/候補/99999">候補</a></li>'
+                    "</ul>"
+                ),
+                _response(_search_page(196, 20)),
+            ]
+        )
+        search_tool, _ = build_eventernote_tools(EventernoteClient(session))
+
+        result = json.loads(
+            search_tool.invoke(
+                {"query": "羊宮妃那", "type": "actor", "page": 1}
+            )
+        )
+
+        assert result["page"] == {"current": 1, "total": 10, "size": 20}
+        assert len(result["items"]) == 20
+        assert session.get.call_args_list[1].args[0].endswith(
+            "/actors/羊宮妃那/54104/events"
+        )
+
+    def test_place_uses_highest_ranked_precise_event_list(self) -> None:
+        """Place 搜索应使用官网排序第一的精准关系活动列表。"""
+        session = requests.Session()
+        session.get = Mock(  # type: ignore[method-assign]
+            side_effect=[
+                _response(
+                    '<ul class="gb_actors_list">'
+                    '<li><a href="/places/11340">ぴあアリーナMM</a></li>'
+                    "</ul>"
+                ),
+                _response(_search_page(457, 20, place_count=True)),
+            ]
+        )
+        search_tool, _ = build_eventernote_tools(EventernoteClient(session))
+
+        result = json.loads(
+            search_tool.invoke(
+                {"query": "ぴあアリーナMM", "type": "place", "page": 1}
+            )
+        )
+
+        assert result["page"] == {"current": 1, "total": 23, "size": 20}
+        assert len(result["items"]) == 20
+        assert session.get.call_args_list[1].args[0].endswith(
+            "/places/11340/events"
+        )
+
+    def test_actor_date_filter_stops_after_older_event(self) -> None:
+        """Actor 日期过滤遇到更早活动后应停止请求后续页面。"""
+        dates = (
+            ["2026-08-20"] * 5
+            + ["2026-08-19"] * 2
+            + ["2026-08-18"] * 13
+        )
+        session = requests.Session()
+        session.get = Mock(  # type: ignore[method-assign]
+            side_effect=[
+                _response(
+                    '<ul class="gb_actors_list">'
+                    '<li><a href="/actors/羊宮妃那/54104">羊宮妃那</a></li>'
+                    "</ul>"
+                ),
+                _response(_search_page(60, 20, dates=dates)),
+            ]
+        )
+        search_tool, _ = build_eventernote_tools(EventernoteClient(session))
+
+        result = json.loads(
+            search_tool.invoke(
+                {
+                    "query": "羊宮妃那",
+                    "type": "actor",
+                    "date": "2026-08-19",
+                    "page": 1,
+                }
+            )
+        )
+
+        assert result["page"] == {"current": 1, "total": 1, "size": 20}
+        assert len(result["items"]) == 2
+        assert session.get.call_count == 2
+
+    def test_actor_not_found_returns_structured_error(self) -> None:
+        """Actor 没有搜索结果时应返回结构化错误。"""
+        session = requests.Session()
+        session.get = Mock(  # type: ignore[method-assign]
+            return_value=_response('<ul class="gb_actors_list"></ul>')
+        )
+        search_tool, _ = build_eventernote_tools(EventernoteClient(session))
+
+        result = json.loads(
+            search_tool.invoke(
+                {"query": "不存在的出演者", "type": "actor", "page": 1}
+            )
+        )
+
+        assert result == {
+            "ok": False,
+            "error": {
+                "code": "not_found",
+                "message": "没有找到匹配的 Actor。",
+            },
+        }
 
     def test_returns_structured_validation_error(self) -> None:
         """LangChain 参数校验失败也应返回结构化错误。"""
