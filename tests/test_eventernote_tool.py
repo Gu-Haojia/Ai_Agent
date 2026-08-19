@@ -46,7 +46,9 @@ def _search_page(total: int, count: int, start_id: int = 1001) -> str:
     assert total >= 0 and count >= 0, "数量不能为负数"
     assert start_id > 0, "start_id 必须为正整数"
     items = "".join(
-        '<li class="clearfix"><div class="event"><h4>'
+        '<li class="clearfix"><div class="date"><p class="day0">'
+        '2026-08-19 (<span class="wday3">水</span>)</p></div>'
+        '<div class="event"><h4>'
         f'<a href="/events/{start_id + index}">活动 {start_id + index}</a>'
         "</h4></div></li>"
         for index in range(count)
@@ -114,7 +116,11 @@ class TestEventernoteSearchTool:
         assert result["ok"] is True
         assert result["page"] == {"current": 1, "total": 2, "size": 20}
         assert len(result["items"]) == 20
-        assert result["items"][0] == {"id": 1001, "name": "活动 1001"}
+        assert result["items"][0] == {
+            "id": 1001,
+            "name": "活动 1001",
+            "date": "2026-08-19",
+        }
         params = session.get.call_args.kwargs["params"]  # type: ignore[attr-defined]
         assert params["page"] == 1
 
@@ -135,8 +141,16 @@ class TestEventernoteSearchTool:
 
         assert result["page"] == {"current": 2, "total": 2, "size": 20}
         assert len(result["items"]) == 20
-        assert result["items"][0] == {"id": 1021, "name": "活动 1021"}
-        assert result["items"][-1] == {"id": 1040, "name": "活动 1040"}
+        assert result["items"][0] == {
+            "id": 1021,
+            "name": "活动 1021",
+            "date": "2026-08-19",
+        }
+        assert result["items"][-1] == {
+            "id": 1040,
+            "name": "活动 1040",
+            "date": "2026-08-19",
+        }
         requested_pages = [
             call.kwargs["params"]["page"]
             for call in session.get.call_args_list

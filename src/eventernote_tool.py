@@ -243,14 +243,15 @@ class EventernoteClient:
     def _parse_search_page(
         self,
         html: str,
-    ) -> tuple[int, list[dict[str, int | str]]]:
+    ) -> tuple[int, list[dict[str, int | str | None]]]:
         """解析活动搜索页。
 
         Args:
             html (str): 活动搜索页 HTML。
 
         Returns:
-            tuple[int, list[dict[str, int | str]]]: 总结果数和当前官网页活动。
+            tuple[int, list[dict[str, int | str | None]]]: 总结果数和当前
+            官网页活动。
 
         Raises:
             EventernoteError: 当搜索页结构无法解析时抛出。
@@ -269,7 +270,7 @@ class EventernoteClient:
                 "Eventernote 搜索结果总数无法解析。",
             )
         total_items = int(count_match.group(1).replace(",", ""))
-        items: list[dict[str, int | str]] = []
+        items: list[dict[str, int | str | None]] = []
         for link in soup.select(
             '.gb_event_list .event h4 a[href^="/events/"]'
         ):
@@ -280,10 +281,21 @@ class EventernoteClient:
                     "parse_error",
                     "Eventernote 活动 ID 无法解析。",
                 )
+            event_row = link.find_parent("li", class_="clearfix")
+            date_element = (
+                event_row.select_one(".date p") if event_row else None
+            )
+            date_match = re.search(
+                r"\d{4}-\d{2}-\d{2}",
+                date_element.get_text(" ", strip=True)
+                if date_element
+                else "",
+            )
             items.append(
                 {
                     "id": int(id_match.group(1)),
                     "name": link.get_text(" ", strip=True),
+                    "date": date_match.group(0) if date_match else None,
                 }
             )
         if total_items > 0 and not items:
@@ -478,7 +490,7 @@ def build_eventernote_tools(
         date: str | None = None,
         page: int = 1,
     ) -> str:
-        """搜索 Eventernote 活动，每页固定返回二十条活动 ID 和完整名称。
+        """搜索 Eventernote 活动，每页返回二十条活动 ID、名称和日期。
 
         query 可使用活动名、出演者名或会场名；仅按日期查询时传
         空字符串。
@@ -489,7 +501,8 @@ def build_eventernote_tools(
             page (int): 从 1 开始的页码。
 
         Returns:
-            str: 包含当前页、总页数和活动列表的 JSON；失败时返回错误 JSON。
+            str: 包含当前页、总页数和活动列表的 JSON；每条活动包含
+            ID、完整名称和日期，失败时返回错误 JSON。
 
         Raises:
             Exception: 未预期的程序错误原样抛出。
