@@ -94,6 +94,7 @@ from src.checkpoint_retention import (
     RetainingPostgresSaver,
 )
 from src.context_token_counter import ContextTokenCounter, ContextTokenEstimate
+from src.eventernote_tool import eventernote_get, eventernote_search
 from src.x_monitor import XMonitorToolError
 from src.x_monitor_tool import (
     build_x_monitor_permission_failure,
@@ -3178,6 +3179,8 @@ class SQLCheckpointAgentStreamingPlus:
                     )
                 )
                 tools.append(meru_search)
+                tools.append(eventernote_search)
+                tools.append(eventernote_get)
 
         @tool  # raw api 1.39.1
         def generate_local_image(
