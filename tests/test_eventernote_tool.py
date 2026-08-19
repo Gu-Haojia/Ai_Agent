@@ -116,6 +116,14 @@ class TestEventernoteSearchTool:
 
         assert result["page"] == {"current": 1, "total": 1, "size": 20}
 
+    def test_description_requires_source_language_query(self) -> None:
+        """Tool 描述应要求 Agent 使用 Eventernote 源语言名称。"""
+        search_tool, _ = build_eventernote_tools()
+
+        assert "源语言" in search_tool.description
+        assert "不要" in search_tool.description
+        assert "翻译" in search_tool.description
+
     def test_returns_twenty_items_with_page_metadata(self) -> None:
         """搜索应按每页二十条返回当前页和总页数。"""
         session = requests.Session()
@@ -285,6 +293,7 @@ class TestEventernoteSearchTool:
         )
 
         assert result["page"] == {"current": 1, "total": 10, "size": 20}
+        assert result["actor"] == "羊宮妃那"
         assert len(result["items"]) == 20
         assert session.get.call_args_list[1].args[0].endswith(
             "/actors/羊宮妃那/54104/events"
@@ -312,6 +321,7 @@ class TestEventernoteSearchTool:
         )
 
         assert result["page"] == {"current": 1, "total": 23, "size": 20}
+        assert result["place"] == "ぴあアリーナMM"
         assert len(result["items"]) == 20
         assert session.get.call_args_list[1].args[0].endswith(
             "/places/11340/events"
@@ -349,6 +359,7 @@ class TestEventernoteSearchTool:
         )
 
         assert result["page"] == {"current": 1, "total": 1, "size": 20}
+        assert result["actor"] == "羊宮妃那"
         assert len(result["items"]) == 2
         assert session.get.call_count == 2
 

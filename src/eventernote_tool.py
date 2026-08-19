@@ -208,9 +208,11 @@ class EventernoteClient:
         Raises:
             EventernoteError: 当实体不存在、请求或页面解析失败时抛出。
         """
-        events_url = self._resolve_entity_events_url(query, type)
+        events_url, matched_name = self._resolve_entity_events_url(query, type)
         if date is not None:
-            return self._search_entity_events_by_date(events_url, date, page)
+            result = self._search_entity_events_by_date(events_url, date, page)
+            result[type] = matched_name
+            return result
 
         html = self._get(
             events_url,
@@ -223,13 +225,15 @@ class EventernoteClient:
                 "page_out_of_range",
                 f"page 超出范围，当前总页数为 {total_pages}。",
             )
-        return self._search_result(page, total_pages, items)
+        result = self._search_result(page, total_pages, items)
+        result[type] = matched_name
+        return result
 
     def _resolve_entity_events_url(
         self,
         query: str,
         type: Literal["actor", "place"],
-    ) -> str:
+    ) -> tuple[str, str]:
         """解析官网排序第一的出演者或会场活动列表地址。
 
         Args:
@@ -237,7 +241,7 @@ class EventernoteClient:
             type (Literal["actor", "place"]): 关键词类型。
 
         Returns:
-            str: 精准关系活动列表地址。
+            tuple[str, str]: 精准关系活动列表地址和匹配实体名称。
 
         Raises:
             EventernoteError: 当没有匹配实体或搜索页无法解析时抛出。
@@ -257,7 +261,9 @@ class EventernoteClient:
         for link in soup.select("ul.gb_actors_list > li > a[href]"):
             href = str(link.get("href") or "")
             if path_pattern.fullmatch(href):
-                return f"{EVENTERNOTE_BASE_URL}{href}/events"
+                name_node = link.find(string=True, recursive=False)
+                matched_name = str(name_node).strip()
+                return f"{EVENTERNOTE_BASE_URL}{href}/events", matched_name
         entity_name = "Actor" if type == "actor" else "Place"
         raise EventernoteError(
             "not_found",
@@ -710,20 +716,22 @@ def build_eventernote_tools(
     ) -> str:
         """搜索 Eventernote 活动，每页返回二十条活动 ID、名称和日期。
 
-        event 执行活动全文关键词搜索；actor 和 place 先取官网匹配度
-        最高的实体，再查询其精准关联活动。仅 event 按日期查询时允许
-        query 为空字符串。
+        query 只支持 Eventernote 收录的源语言名称。不要先把活动名、
+        出演者名或会场名翻译成其他语言。event 执行活动全文关键词搜索；
+        actor 和 place 先取官网匹配度最高的实体，再查询其精准关联活动。
+        仅 event 按日期查询时允许 query 为空字符串。
 
         Args:
-            query (str): 活动、出演者或会场关键词。
+            query (str): 使用 Eventernote 源语言名称的活动、出演者或
+                会场关键词，不要传入翻译后的专名。
             type (Literal["event", "actor", "place"]): 关键词类型。
             date (str | None): 可选的 ``YYYY``、``YYYY-MM`` 或
                 ``YYYY-MM-DD`` 活动日期。
             page (int): 从 1 开始的页码。
 
         Returns:
-            str: 包含当前页、总页数和活动列表的 JSON；每条活动包含
-            ID、完整名称和日期，失败时返回错误 JSON。
+            str: 包含当前页、总页数和活动列表的 JSON；actor/place
+            搜索还包含实际匹配的同名顶层键，失败时返回错误 JSON。
 
         Raises:
             Exception: 未预期的程序错误原样抛出。
