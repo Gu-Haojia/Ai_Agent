@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import re
+from calendar import monthrange
 from datetime import datetime
 from typing import Any, Literal
 
@@ -20,6 +21,7 @@ TOOL_PAGE_SIZE = 20
 UPSTREAM_PAGE_SIZE = 30
 REQUEST_TIMEOUT_SECONDS = 10
 SEARCH_TYPES = {"event", "actor", "place"}
+DateFilter = tuple[int, int | None, int | None]
 
 
 class EventernoteError(Exception):
@@ -91,7 +93,8 @@ class EventernoteClient:
         Args:
             query (str): 搜索关键词；仅按活动日期查询时可为空。
             type (Literal["event", "actor", "place"]): 关键词类型。
-            date (str | None): 可选的 ``YYYY-MM-DD`` 日期。
+            date (str | None): 可选的 ``YYYY``、``YYYY-MM`` 或
+                ``YYYY-MM-DD`` 日期。
             page (int): 从 1 开始的 Tool 页码。
 
         Returns:
@@ -133,14 +136,14 @@ class EventernoteClient:
     def _search_event_keyword(
         self,
         query: str,
-        date: datetime | None,
+        date: DateFilter | None,
         page: int,
     ) -> dict[str, Any]:
         """使用官网活动关键词入口搜索活动。
 
         Args:
             query (str): 活动关键词。
-            date (datetime | None): 可选活动日期。
+            date (DateFilter | None): 可选活动日期条件。
             page (int): 从 1 开始的 Tool 页码。
 
         Returns:
@@ -157,13 +160,12 @@ class EventernoteClient:
             "page": source_page,
         }
         if date is not None:
-            params.update(
-                {
-                    "year": date.year,
-                    "month": date.month,
-                    "day": date.day,
-                }
-            )
+            year, month, day = date
+            params["year"] = year
+            if month is not None:
+                params["month"] = month
+            if day is not None:
+                params["day"] = day
 
         html = self._get(EVENTERNOTE_SEARCH_URL, params)
         total_items, source_items = self._parse_search_page(html)
@@ -189,7 +191,7 @@ class EventernoteClient:
         self,
         query: str,
         type: Literal["actor", "place"],
-        date: datetime | None,
+        date: DateFilter | None,
         page: int,
     ) -> dict[str, Any]:
         """按出演者或会场的精准关系搜索活动。
@@ -197,7 +199,7 @@ class EventernoteClient:
         Args:
             query (str): 出演者或会场关键词。
             type (Literal["actor", "place"]): 关键词类型。
-            date (datetime | None): 可选活动日期。
+            date (DateFilter | None): 可选活动日期条件。
             page (int): 从 1 开始的 Tool 页码。
 
         Returns:
@@ -265,14 +267,14 @@ class EventernoteClient:
     def _search_entity_events_by_date(
         self,
         events_url: str,
-        date: datetime,
+        date: DateFilter,
         page: int,
     ) -> dict[str, Any]:
         """按日期扫描精准关系活动列表并在越过目标日期后停止。
 
         Args:
             events_url (str): 出演者或会场活动列表地址。
-            date (datetime): 目标活动日期。
+            date (DateFilter): 目标活动日期条件。
             page (int): 从 1 开始的 Tool 页码。
 
         Returns:
@@ -281,7 +283,17 @@ class EventernoteClient:
         Raises:
             EventernoteError: 当请求、分页或页面解析失败时抛出。
         """
-        target_date = date.strftime("%Y-%m-%d")
+        year, month, day = date
+        if day is not None:
+            start_date = end_date = f"{year:04d}-{month:02d}-{day:02d}"
+        elif month is not None:
+            start_date = f"{year:04d}-{month:02d}-01"
+            end_date = (
+                f"{year:04d}-{month:02d}-{monthrange(year, month)[1]:02d}"
+            )
+        else:
+            start_date = f"{year:04d}-01-01"
+            end_date = f"{year:04d}-12-31"
         matched_items: list[dict[str, int | str | None]] = []
         source_page = 1
         source_total_pages = 1
@@ -295,9 +307,12 @@ class EventernoteClient:
             source_total_pages = math.ceil(total_items / TOOL_PAGE_SIZE)
             for item in items:
                 item_date = item["date"]
-                if item_date == target_date:
+                if (
+                    item_date is not None
+                    and start_date <= item_date <= end_date
+                ):
                     matched_items.append(item)
-                elif item_date is not None and item_date < target_date:
+                elif item_date is not None and item_date < start_date:
                     reached_older_event = True
                     break
             source_page += 1
@@ -367,33 +382,40 @@ class EventernoteClient:
             "data": self._parse_event_page(html, event_id, url),
         }
 
-    def _parse_date(self, value: str | None) -> datetime | None:
-        """解析严格格式的可选日期。
+    def _parse_date(self, value: str | None) -> DateFilter | None:
+        """解析必须从年份开始的可选日期条件。
 
         Args:
             value (str | None): 可选日期文本。
 
         Returns:
-            datetime | None: 已校验日期；未传入时返回 None。
+            DateFilter | None: 年、可选月、可选日；未传入时返回 None。
 
         Raises:
             EventernoteError: 当日期格式或日期值非法时抛出。
         """
         if value is None:
             return None
+        match = re.fullmatch(
+            r"(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?",
+            value,
+        )
+        if match is None:
+            raise EventernoteError(
+                "invalid_date",
+                "date 必须是 YYYY、YYYY-MM 或 YYYY-MM-DD 格式的有效日期。",
+            )
+        year = int(match.group(1))
+        month = int(match.group(2)) if match.group(2) else None
+        day = int(match.group(3)) if match.group(3) else None
         try:
-            parsed = datetime.strptime(value, "%Y-%m-%d")
+            datetime(year, month or 1, day or 1)
         except ValueError as exc:
             raise EventernoteError(
                 "invalid_date",
-                "date 必须是 YYYY-MM-DD 格式的有效日期。",
+                "date 必须是 YYYY、YYYY-MM 或 YYYY-MM-DD 格式的有效日期。",
             ) from exc
-        if parsed.strftime("%Y-%m-%d") != value:
-            raise EventernoteError(
-                "invalid_date",
-                "date 必须是 YYYY-MM-DD 格式的有效日期。",
-            )
-        return parsed
+        return year, month, day
 
     def _get(
         self,
@@ -695,7 +717,8 @@ def build_eventernote_tools(
         Args:
             query (str): 活动、出演者或会场关键词。
             type (Literal["event", "actor", "place"]): 关键词类型。
-            date (str | None): 可选的 ``YYYY-MM-DD`` 活动日期。
+            date (str | None): 可选的 ``YYYY``、``YYYY-MM`` 或
+                ``YYYY-MM-DD`` 活动日期。
             page (int): 从 1 开始的页码。
 
         Returns:

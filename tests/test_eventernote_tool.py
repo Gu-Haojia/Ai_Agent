@@ -207,9 +207,15 @@ class TestEventernoteSearchTool:
         assert result["ok"] is False
         assert result["error"]["code"] == "invalid_date"
 
-    def test_rejects_year_month_date(self) -> None:
-        """date 暂不接受只有年和月的格式。"""
-        search_tool, _ = build_eventernote_tools()
+    def test_accepts_year_month_date(self) -> None:
+        """date 应接受从年份开始的年月格式。"""
+        session = requests.Session()
+        session.get = Mock(  # type: ignore[method-assign]
+            return_value=_response(
+                "<p>指定された条件での検索結果が見つかりませんでした。</p>"
+            )
+        )
+        search_tool, _ = build_eventernote_tools(EventernoteClient(session))
 
         result = json.loads(
             search_tool.invoke(
@@ -217,8 +223,44 @@ class TestEventernoteSearchTool:
             )
         )
 
-        assert result["ok"] is False
-        assert result["error"]["code"] == "invalid_date"
+        assert result["ok"] is True
+        params = session.get.call_args.kwargs["params"]  # type: ignore[attr-defined]
+        assert params == {
+            "keyword": "",
+            "page": 1,
+            "year": 2026,
+            "month": 8,
+        }
+
+    def test_accepts_year_only_date(self) -> None:
+        """date 应接受只有年份的格式。"""
+        session = requests.Session()
+        session.get = Mock(  # type: ignore[method-assign]
+            return_value=_response(
+                "<p>指定された条件での検索結果が見つかりませんでした。</p>"
+            )
+        )
+        search_tool, _ = build_eventernote_tools(EventernoteClient(session))
+
+        result = json.loads(
+            search_tool.invoke({"query": "", "date": "2026", "page": 1})
+        )
+
+        assert result["ok"] is True
+        params = session.get.call_args.kwargs["params"]  # type: ignore[attr-defined]
+        assert params == {"keyword": "", "page": 1, "year": 2026}
+
+    def test_rejects_month_without_year(self) -> None:
+        """date 不应接受缺少年份的月份或月日格式。"""
+        search_tool, _ = build_eventernote_tools()
+
+        for date in ("08", "08-19"):
+            result = json.loads(
+                search_tool.invoke({"query": "", "date": date, "page": 1})
+            )
+
+            assert result["ok"] is False
+            assert result["error"]["code"] == "invalid_date"
 
     def test_actor_uses_highest_ranked_precise_event_list(self) -> None:
         """Actor 搜索应使用官网排序第一的精准关系活动列表。"""
@@ -275,12 +317,12 @@ class TestEventernoteSearchTool:
             "/places/11340/events"
         )
 
-    def test_actor_date_filter_stops_after_older_event(self) -> None:
-        """Actor 日期过滤遇到更早活动后应停止请求后续页面。"""
+    def test_actor_month_filter_stops_after_older_event(self) -> None:
+        """Actor 月份过滤遇到更早活动后应停止请求后续页面。"""
         dates = (
-            ["2026-08-20"] * 5
+            ["2026-09-01"] * 5
             + ["2026-08-19"] * 2
-            + ["2026-08-18"] * 13
+            + ["2026-07-31"] * 13
         )
         session = requests.Session()
         session.get = Mock(  # type: ignore[method-assign]
@@ -300,7 +342,7 @@ class TestEventernoteSearchTool:
                 {
                     "query": "羊宮妃那",
                     "type": "actor",
-                    "date": "2026-08-19",
+                    "date": "2026-08",
                     "page": 1,
                 }
             )
