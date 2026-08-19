@@ -7,7 +7,9 @@ import math
 import re
 from calendar import monthrange
 from datetime import datetime
+from difflib import SequenceMatcher
 from typing import Any, Literal
+from unicodedata import normalize
 
 import requests
 from bs4 import BeautifulSoup
@@ -234,7 +236,7 @@ class EventernoteClient:
         query: str,
         type: Literal["actor", "place"],
     ) -> tuple[str, str]:
-        """解析官网排序第一的出演者或会场活动列表地址。
+        """解析本地名称相似度最高的出演者或会场活动列表地址。
 
         Args:
             query (str): 出演者或会场关键词。
@@ -258,17 +260,75 @@ class EventernoteClient:
             if type == "actor"
             else re.compile(r"/places/\d+")
         )
+        candidates: list[tuple[str, str]] = []
         for link in soup.select("ul.gb_actors_list > li > a[href]"):
             href = str(link.get("href") or "")
             if path_pattern.fullmatch(href):
                 name_node = link.find(string=True, recursive=False)
                 matched_name = str(name_node).strip()
-                return f"{EVENTERNOTE_BASE_URL}{href}/events", matched_name
+                candidates.append((href, matched_name))
+        if candidates:
+            matched_href, matched_name = max(
+                candidates,
+                key=lambda candidate: self._entity_similarity(
+                    query,
+                    candidate[1],
+                ),
+            )
+            return (
+                f"{EVENTERNOTE_BASE_URL}{matched_href}/events",
+                matched_name,
+            )
         entity_name = "Actor" if type == "actor" else "Place"
         raise EventernoteError(
             "not_found",
             f"没有找到匹配的 {entity_name}。",
         )
+
+    def _entity_similarity(
+        self,
+        query: str,
+        candidate: str,
+    ) -> tuple[int, int, float, int]:
+        """计算查询词与 Actor 或 Place 候选名称的本地相似度。
+
+        Args:
+            query (str): 用户输入的源语言关键词。
+            candidate (str): Eventernote 返回的候选名称。
+
+        Returns:
+            tuple[int, int, float, int]: 完全匹配、包含关系、字符相似度
+            和长度接近度组成的排序分数。
+
+        Raises:
+            AssertionError: 当查询词或候选名称为空时抛出。
+        """
+        normalized_query = re.sub(
+            r"\s+",
+            "",
+            normalize("NFKC", query).casefold(),
+        )
+        normalized_candidate = re.sub(
+            r"\s+",
+            "",
+            normalize("NFKC", candidate).casefold(),
+        )
+        assert normalized_query, "query 不能为空"
+        assert normalized_candidate, "candidate 不能为空"
+        exact_match = int(normalized_query == normalized_candidate)
+        contains_match = int(
+            normalized_query in normalized_candidate
+            or normalized_candidate in normalized_query
+        )
+        sequence_ratio = SequenceMatcher(
+            None,
+            normalized_query,
+            normalized_candidate,
+        ).ratio()
+        length_closeness = -abs(
+            len(normalized_query) - len(normalized_candidate)
+        )
+        return exact_match, contains_match, sequence_ratio, length_closeness
 
     def _search_entity_events_by_date(
         self,
@@ -718,8 +778,8 @@ def build_eventernote_tools(
 
         query 只支持 Eventernote 收录的源语言名称。不要先把活动名、
         出演者名或会场名翻译成其他语言。event 执行活动全文关键词搜索；
-        actor 和 place 先取官网匹配度最高的实体，再查询其精准关联活动。
-        仅 event 按日期查询时允许 query 为空字符串。
+        actor 和 place 从官网候选中取本地名称相似度最高的实体，再查询
+        其精准关联活动。仅 event 按日期查询时允许 query 为空字符串。
 
         Args:
             query (str): 使用 Eventernote 源语言名称的活动、出演者或

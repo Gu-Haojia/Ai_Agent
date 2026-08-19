@@ -123,6 +123,7 @@ class TestEventernoteSearchTool:
         assert "源语言" in search_tool.description
         assert "不要" in search_tool.description
         assert "翻译" in search_tool.description
+        assert "本地名称相似度" in search_tool.description
 
     def test_returns_twenty_items_with_page_metadata(self) -> None:
         """搜索应按每页二十条返回当前页和总页数。"""
@@ -270,14 +271,15 @@ class TestEventernoteSearchTool:
             assert result["ok"] is False
             assert result["error"]["code"] == "invalid_date"
 
-    def test_actor_uses_highest_ranked_precise_event_list(self) -> None:
-        """Actor 搜索应使用官网排序第一的精准关系活动列表。"""
+    def test_actor_uses_best_local_similarity_match(self) -> None:
+        """Actor 搜索应以本地相似度选择完全匹配候选。"""
         session = requests.Session()
         session.get = Mock(  # type: ignore[method-assign]
             side_effect=[
                 _response(
                     '<ul class="gb_actors_list">'
-                    '<li><a href="/actors/羊宮妃那/54104">羊宮妃那</a></li>'
+                    '<li><a href="/actors/らびりんず/24895">らびりんず</a></li>'
+                    '<li><a href="/actors/佳村はるか/2776">佳村はるか</a></li>'
                     '<li><a href="/actors/候補/99999">候補</a></li>'
                     "</ul>"
                 ),
@@ -288,24 +290,25 @@ class TestEventernoteSearchTool:
 
         result = json.loads(
             search_tool.invoke(
-                {"query": "羊宮妃那", "type": "actor", "page": 1}
+                {"query": "佳村はるか", "type": "actor", "page": 1}
             )
         )
 
         assert result["page"] == {"current": 1, "total": 10, "size": 20}
-        assert result["actor"] == "羊宮妃那"
+        assert result["actor"] == "佳村はるか"
         assert len(result["items"]) == 20
         assert session.get.call_args_list[1].args[0].endswith(
-            "/actors/羊宮妃那/54104/events"
+            "/actors/佳村はるか/2776/events"
         )
 
-    def test_place_uses_highest_ranked_precise_event_list(self) -> None:
-        """Place 搜索应使用官网排序第一的精准关系活动列表。"""
+    def test_place_uses_best_local_similarity_match(self) -> None:
+        """Place 搜索应选择字符相似度更高的非完全匹配候选。"""
         session = requests.Session()
         session.get = Mock(  # type: ignore[method-assign]
             side_effect=[
                 _response(
                     '<ul class="gb_actors_list">'
+                    '<li><a href="/places/12000">ぴあアリーナ立川立飛</a></li>'
                     '<li><a href="/places/11340">ぴあアリーナMM</a></li>'
                     "</ul>"
                 ),
@@ -316,7 +319,7 @@ class TestEventernoteSearchTool:
 
         result = json.loads(
             search_tool.invoke(
-                {"query": "ぴあアリーナMM", "type": "place", "page": 1}
+                {"query": "ぴあアリーナ", "type": "place", "page": 1}
             )
         )
 
