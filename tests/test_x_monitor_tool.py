@@ -177,12 +177,90 @@ class XMonitorToolCoreTests(unittest.TestCase):
         tool_module._X_MONITOR_MANAGER = None
         with tempfile.TemporaryDirectory() as tmpdir:
             store_path = str(Path(tmpdir) / "x_monitor.json")
-            with mock.patch.dict("os.environ", {"X_MONITOR_STORE": store_path}):
+            with mock.patch.dict(
+                "os.environ",
+                {"X_MONITOR_STORE": store_path, "X_MONITOR_ALERT": ""},
+            ):
                 first = tool_module.get_x_monitor_manager()
                 second = tool_module.get_x_monitor_manager()
 
         self.assertIs(first, second)
         self.assertEqual(first._store_path, Path(store_path))
+
+    def test_get_manager_wires_configured_usage_capped_alert(self) -> None:
+        """配置余额通知目标时应向固定群发送带 @ 的消息。
+
+        Returns:
+            None: 测试通过时无返回值。
+
+        Raises:
+            None: 断言失败时由 unittest 报告。
+        """
+        tool_module._X_MONITOR_MANAGER = None
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store_path = str(Path(tmpdir) / "x_monitor.json")
+            with mock.patch.dict(
+                "os.environ",
+                {
+                    "X_MONITOR_STORE": store_path,
+                    "X_MONITOR_ALERT": "123,456",
+                    "ONEBOT_API_BASE": "http://onebot/",
+                    "ONEBOT_ACCESS_TOKEN": "token",
+                },
+            ), mock.patch.object(tool_module, "_send_group_msg") as send:
+                manager = tool_module.get_x_monitor_manager()
+                manager._notify_usage_capped_once()
+
+        send.assert_called_once_with(
+            "http://onebot",
+            123,
+            (
+                "[CQ:at,qq=456] XMonitor 检测到 X API 余额或用量上限已耗尽，"
+                "监控暂时无法更新，请及时充值。"
+            ),
+            "token",
+        )
+
+    def test_get_manager_without_alert_does_not_send_notification(self) -> None:
+        """未配置余额通知目标时不应发送群消息。
+
+        Returns:
+            None: 测试通过时无返回值。
+
+        Raises:
+            None: 断言失败时由 unittest 报告。
+        """
+        tool_module._X_MONITOR_MANAGER = None
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store_path = str(Path(tmpdir) / "x_monitor.json")
+            with mock.patch.dict(
+                "os.environ",
+                {"X_MONITOR_STORE": store_path, "X_MONITOR_ALERT": ""},
+            ), mock.patch.object(tool_module, "_send_group_msg") as send:
+                manager = tool_module.get_x_monitor_manager()
+                manager._notify_usage_capped_once()
+
+        send.assert_not_called()
+
+    def test_get_manager_rejects_invalid_alert_target(self) -> None:
+        """余额通知目标格式非法时管理器初始化应明确失败。
+
+        Returns:
+            None: 测试通过时无返回值。
+
+        Raises:
+            None: 断言失败时由 unittest 报告。
+        """
+        tool_module._X_MONITOR_MANAGER = None
+        with mock.patch.dict(
+            "os.environ",
+            {"X_MONITOR_STORE": ".x_monitor.json", "X_MONITOR_ALERT": "123"},
+        ):
+            with self.assertRaisesRegex(
+                AssertionError,
+                "X_MONITOR_ALERT 必须为 群号,QQ号",
+            ):
+                tool_module.get_x_monitor_manager()
 
     def test_start_monitor_builds_onebot_callbacks(self) -> None:
         """

@@ -114,6 +114,7 @@ LangGraph/
 | `ONEBOT_SECRET` / `ONEBOT_ACCESS_TOKEN` | 回调签名与 API Token（可选） |
 | `X_MONITOR_TRANSLATION_MODE` | X 推文翻译模式：`none`、`translated` 或 `bilingual` |
 | `X_MONITOR_TRANSLATION_MODEL` | X 推文翻译使用的 Gemini 模型，默认 `gemini-3.5-flash-lite` |
+| `X_MONITOR_ALERT` | X API 余额或用量耗尽通知目标，格式为 `群号,QQ号`；留空时不通知 |
 | `ALLOWED_GROUPS` / `CMD_ALLOWED_USERS` | 群聊/命令白名单，逗号分隔 |
 | `THREAD_STORE_FILE` | 群 + Prompt → 线程 ID 映射文件，默认 `.qq_group_threads.json` |
 | `DAILY_TASK` / `NIGHTLY_TASK` | 需要播报的群号（逗号分隔） |

@@ -10,6 +10,7 @@ import re
 import tempfile
 import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from threading import Event
 from types import SimpleNamespace
 from typing import Sequence
@@ -368,6 +369,55 @@ class XMonitorParseTests(unittest.TestCase):
         self.assertIn("note_tweet", params["tweet.fields"])
         self.assertIn("referenced_tweets.id", params["expansions"])
         self.assertIn("profile_image_url", params["user.fields"])
+
+    def test_request_json_classifies_usage_capped_before_rate_limit(self) -> None:
+        """usage-capped 响应应与普通 HTTP 429 限流区分。
+
+        Returns:
+            None: 测试通过时无返回值。
+
+        Raises:
+            None: 断言失败时由 unittest 报告。
+        """
+        client = object.__new__(XAPIClient)
+        client._bearer_token = "token"
+        response = mock.Mock()
+        response.status_code = 429
+        response.json.return_value = {
+            "title": "Usage cap exceeded",
+            "detail": "Please add credits.",
+            "type": "https://api.x.com/2/problems/usage-capped",
+        }
+
+        with mock.patch("src.x_monitor.requests.get", return_value=response):
+            with self.assertRaises(XMonitorToolError) as caught:
+                client._request_json("https://api.x.com/2/users/10/tweets")
+
+        self.assertEqual(caught.exception.error_code, "usage_capped")
+
+    def test_request_json_keeps_plain_429_as_rate_limited(self) -> None:
+        """不含 usage-capped 类型的 HTTP 429 应保持普通限流错误。
+
+        Returns:
+            None: 测试通过时无返回值。
+
+        Raises:
+            None: 断言失败时由 unittest 报告。
+        """
+        client = object.__new__(XAPIClient)
+        client._bearer_token = "token"
+        response = mock.Mock()
+        response.status_code = 429
+        response.json.return_value = {
+            "title": "Too Many Requests",
+            "type": "https://api.x.com/2/problems/rate-limit-exceeded",
+        }
+
+        with mock.patch("src.x_monitor.requests.get", return_value=response):
+            with self.assertRaises(XMonitorToolError) as caught:
+                client._request_json("https://api.x.com/2/users/10/tweets")
+
+        self.assertEqual(caught.exception.error_code, "rate_limited")
 
     def test_get_user_profile_requests_most_recent_tweet_id(self) -> None:
         """
@@ -1771,6 +1821,103 @@ class XMonitorWatchTaskTests(unittest.TestCase):
     """
     验证 X 推文监控任务的新推文通知行为。
     """
+
+    def test_manager_sends_usage_capped_alert_once_across_threads(self) -> None:
+        """多个监控线程同时发现余额不足时应合并为一次通知。
+
+        Returns:
+            None: 测试通过时无返回值。
+
+        Raises:
+            None: 断言失败时由 unittest 报告。
+        """
+        notify = mock.Mock()
+        manager = XMonitorManager(usage_capped_notify=notify)
+
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            futures = [
+                executor.submit(manager._notify_usage_capped_once)
+                for _ in range(20)
+            ]
+            for future in futures:
+                future.result()
+
+        notify.assert_called_once_with()
+
+    def test_manager_reopens_usage_capped_alert_after_api_success(self) -> None:
+        """X API 请求恢复成功后应允许下一次余额不足再次通知。
+
+        Returns:
+            None: 测试通过时无返回值。
+
+        Raises:
+            None: 断言失败时由 unittest 报告。
+        """
+
+        class FakeClient:
+            """依次返回余额不足、成功和再次余额不足结果。"""
+
+            def __init__(self) -> None:
+                """初始化响应序列。
+
+                Returns:
+                    None: 构造函数无返回值。
+
+                Raises:
+                    None: 本方法不主动抛出异常。
+                """
+                self._responses: list[dict[str, object] | Exception] = [
+                    XMonitorToolError("usage_capped", "余额不足"),
+                    XMonitorToolError("usage_capped", "余额不足"),
+                    {"data": []},
+                    XMonitorToolError("usage_capped", "余额不足"),
+                ]
+
+            def get_user_posts(
+                self,
+                user_id: str,
+                max_results: int = DEFAULT_LIMIT,
+                since_id: str | None = None,
+            ) -> dict[str, object]:
+                """返回下一项测试响应。
+
+                Args:
+                    user_id (str): X 用户 ID。
+                    max_results (int): 单次拉取上限。
+                    since_id (str | None): 增量拉取起点。
+
+                Returns:
+                    dict[str, object]: 成功时的空时间线响应。
+
+                Raises:
+                    XMonitorToolError: 当前响应为余额不足错误时抛出。
+                """
+                assert user_id == "10"
+                assert max_results == DEFAULT_LIMIT
+                assert since_id == "100"
+                response = self._responses.pop(0)
+                if isinstance(response, Exception):
+                    raise response
+                return response
+
+        notify = mock.Mock()
+        manager = XMonitorManager(
+            client=FakeClient(),  # type: ignore[arg-type]
+            usage_capped_notify=notify,
+        )
+
+        for _ in range(2):
+            with self.assertRaises(XMonitorToolError):
+                manager._fetch_results("kana_hanaiwa", "10", since_id="100")
+        notify.assert_called_once_with()
+
+        self.assertEqual(
+            manager._fetch_results("kana_hanaiwa", "10", since_id="100"),
+            [],
+        )
+        with self.assertRaises(XMonitorToolError):
+            manager._fetch_results("kana_hanaiwa", "10", since_id="100")
+        self.assertEqual(notify.call_count, 2)
 
     def test_new_post_notice_is_delegated_to_media_sender(self) -> None:
         """

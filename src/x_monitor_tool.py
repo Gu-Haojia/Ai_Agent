@@ -20,6 +20,7 @@ from src.x_monitor import (
 from src.x_monitor_media import _send_group_msg, send_x_message_with_images
 
 DEFAULT_ONEBOT_API_BASE = "http://127.0.0.1:3000"
+X_MONITOR_ALERT_ENV = "X_MONITOR_ALERT"
 
 _X_MONITOR_MANAGER: XMonitorManager | None = None
 _X_MONITOR_MANAGER_LOCK = Lock()
@@ -33,15 +34,55 @@ def get_x_monitor_manager() -> XMonitorManager:
         XMonitorManager: 进程内唯一的监控管理器。
 
     Raises:
-        AssertionError: 当持久化文件路径为空时抛出。
+        AssertionError: 当持久化文件路径或余额通知配置非法时抛出。
     """
     global _X_MONITOR_MANAGER
     with _X_MONITOR_MANAGER_LOCK:
         if _X_MONITOR_MANAGER is None:
             store_path = os.environ.get("X_MONITOR_STORE", ".x_monitor.json").strip()
             assert store_path, "X_MONITOR_STORE 不能为空"
-            _X_MONITOR_MANAGER = XMonitorManager(store_path=store_path)
+            alert_target = _parse_x_monitor_alert(
+                os.environ.get(X_MONITOR_ALERT_ENV, "")
+            )
+            alert_notify = (
+                partial(_send_x_monitor_alert, *alert_target)
+                if alert_target is not None
+                else None
+            )
+            _X_MONITOR_MANAGER = XMonitorManager(
+                store_path=store_path,
+                usage_capped_notify=alert_notify,
+            )
         return _X_MONITOR_MANAGER
+
+
+def _parse_x_monitor_alert(raw: str) -> tuple[int, int] | None:
+    """解析 XMonitor 余额不足通知目标。
+
+    Args:
+        raw (str): ``群号,QQ号`` 格式的环境变量值。
+
+    Returns:
+        tuple[int, int] | None: 群号与 QQ 号；未配置时返回 ``None``。
+
+    Raises:
+        AssertionError: 当配置不符合 ``群号,QQ号`` 格式时抛出。
+    """
+    normalized = raw.strip()
+    if not normalized:
+        return None
+    parts = [part.strip() for part in normalized.split(",")]
+    assert len(parts) == 2 and all(parts), (
+        f"{X_MONITOR_ALERT_ENV} 必须为 群号,QQ号"
+    )
+    assert all(part.isdigit() for part in parts), (
+        f"{X_MONITOR_ALERT_ENV} 只能包含正整数群号和 QQ 号"
+    )
+    group_id, user_id = (int(part) for part in parts)
+    assert group_id > 0 and user_id > 0, (
+        f"{X_MONITOR_ALERT_ENV} 只能包含正整数群号和 QQ 号"
+    )
+    return group_id, user_id
 
 
 def _get_cmd_allowed_user_ids() -> tuple[int, ...]:
@@ -311,6 +352,30 @@ def _send_x_monitor_text(group_id: int, text: str) -> None:
     assert text.strip(), "text 不能为空"
     api_base, access_token = _onebot_config()
     _send_group_msg(api_base, group_id, text, access_token)
+
+
+def _send_x_monitor_alert(group_id: int, user_id: int) -> None:
+    """向固定群发送一次 X API 余额不足提醒并 @ 指定用户。
+
+    Args:
+        group_id (int): 接收提醒的目标群号。
+        user_id (int): 需要被 @ 的 QQ 号。
+
+    Returns:
+        None: 本函数仅发送群消息。
+
+    Raises:
+        AssertionError: 当群号或 QQ 号不是正整数时抛出。
+        RuntimeError: 当 OneBot 发送失败时抛出。
+    """
+    assert group_id > 0, "group_id 必须为正整数"
+    assert user_id > 0, "user_id 必须为正整数"
+    api_base, access_token = _onebot_config()
+    message = (
+        f"[CQ:at,qq={user_id}] XMonitor 检测到 X API 余额或用量上限已耗尽，"
+        "监控暂时无法更新，请及时充值。"
+    )
+    _send_group_msg(api_base, group_id, message, access_token)
 
 
 def _send_x_monitor_media(

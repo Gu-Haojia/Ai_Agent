@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from threading import Event, Lock, Thread
-from typing import Callable, Optional, Sequence
+from typing import Callable, Optional, Sequence, TypeVar
 from urllib.parse import urlparse
 
 import requests
@@ -35,6 +35,7 @@ RESTORE_MODE_ENV = "X_MONITOR_RESTORE_MODE"
 RESTORE_MODE_LATEST = "latest"
 RESTORE_MODE_TIMELINE = "timeline"
 RESTORE_MODES = {RESTORE_MODE_LATEST, RESTORE_MODE_TIMELINE}
+XAPIResult = TypeVar("XAPIResult")
 
 
 def _env_flag(name: str) -> bool:
@@ -190,6 +191,33 @@ def _is_resource_not_found_error(payload: object) -> bool:
         error_type = str(error.get("type") or "").strip()
         title = str(error.get("title") or "").strip()
         if error_type.endswith("/resource-not-found") or title == "Not Found Error":
+            return True
+    return False
+
+
+def _is_usage_capped_error(payload: object) -> bool:
+    """判断 X API 响应是否表示余额或用量上限已耗尽。
+
+    Args:
+        payload (object): X API 返回的 JSON 对象。
+
+    Returns:
+        bool: 响应包含 ``usage-capped`` 错误类型时返回 ``True``。
+
+    Raises:
+        None: 本函数不主动抛出异常。
+    """
+    if not isinstance(payload, dict):
+        return False
+    candidates: list[object] = [payload]
+    errors = payload.get("errors")
+    if isinstance(errors, list):
+        candidates.extend(errors)
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        error_type = str(candidate.get("type") or "").strip()
+        if error_type.endswith("/usage-capped"):
             return True
     return False
 
@@ -590,6 +618,11 @@ class XAPIClient:
                 "invalid_response",
                 "X API 返回格式异常，应为 JSON 对象。",
             )
+        if _is_usage_capped_error(payload):
+            raise XMonitorToolError(
+                "usage_capped",
+                "X API 余额或用量上限已耗尽。",
+            )
         if response.status_code == 401:
             raise XMonitorToolError(
                 "authentication_failed",
@@ -872,6 +905,7 @@ class XMonitorManager:
         self,
         client: Optional[XAPIClient] = None,
         store_path: str = DEFAULT_STORE_PATH,
+        usage_capped_notify: Optional[Callable[[], None]] = None,
     ) -> None:
         """
         初始化管理器。
@@ -879,6 +913,8 @@ class XMonitorManager:
         Args:
             client (Optional[XAPIClient]): 可选的自定义 X API 客户端。
             store_path (str): 监控任务持久化 JSON 路径。
+            usage_capped_notify (Optional[Callable[[], None]]): X API 余额或
+                用量上限耗尽时的进程级通知回调。
 
         Raises:
             None: 客户端按需初始化，因此构造函数不读取密钥。
@@ -887,6 +923,9 @@ class XMonitorManager:
         self._client_lock = Lock()
         self._lock = Lock()
         self._persist_lock = Lock()
+        self._usage_capped_lock = Lock()
+        self._usage_capped_notify = usage_capped_notify
+        self._usage_capped_notified = False
         self._watch_tasks: list[_XWatchTask] = []
         self._store_path = Path(store_path)
 
@@ -906,7 +945,9 @@ class XMonitorManager:
             RuntimeError: 当 X API 调用失败时抛出。
         """
         assert limit > 0, "limit 必须大于 0"
-        profile = self._get_client().get_user_profile(username)
+        profile = self._call_x_api(
+            lambda: self._get_client().get_user_profile(username)
+        )
         page_size = max(DEFAULT_LIMIT, min(100, limit))
         return self._fetch_results(
             profile.username, profile.user_id, limit=page_size
@@ -928,7 +969,9 @@ class XMonitorManager:
             ValueError: 当 API 返回字段格式非法时抛出。
         """
         link = _parse_tweet_link(url)
-        payload = self._get_client().get_tweet_by_id(link.tweet_id)
+        payload = self._call_x_api(
+            lambda: self._get_client().get_tweet_by_id(link.tweet_id)
+        )
         results = self._parse_posts(link.username or "unknown", payload)
         for item in results:
             if item.post_id == link.tweet_id:
@@ -987,7 +1030,9 @@ class XMonitorManager:
         assert interval > 0, "interval 必须大于 0"
         assert limit_per_cycle > 0, "limit_per_cycle 必须大于 0"
         assert notify is not None, "notify 回调不能为空"
-        profile = self._get_client().get_user_profile(normalized)
+        profile = self._call_x_api(
+            lambda: self._get_client().get_user_profile(normalized)
+        )
         resolved_username = profile.username.strip()
         resolved_x_user_id = profile.user_id.strip()
         initial_since_id = profile.most_recent_tweet_id.strip()
@@ -1203,7 +1248,11 @@ class XMonitorManager:
         assert normalized_x_user_id, "持久化记录缺少 X 用户 ID"
         mode = self._restore_mode_from_env()
         if mode == RESTORE_MODE_LATEST:
-            profile = self._get_client().get_user_profile_by_id(normalized_x_user_id)
+            profile = self._call_x_api(
+                lambda: self._get_client().get_user_profile_by_id(
+                    normalized_x_user_id
+                )
+            )
             restored_username = profile.username.strip()
             restored_x_user_id = profile.user_id.strip()
             restored_since_id = profile.most_recent_tweet_id.strip()
@@ -1308,10 +1357,68 @@ class XMonitorManager:
             AssertionError: 当 API 返回结构异常时抛出。
             RuntimeError: 当 X API 调用失败时抛出。
         """
-        payload = self._get_client().get_user_posts(
-            x_user_id, max_results=limit, since_id=since_id
+        payload = self._call_x_api(
+            lambda: self._get_client().get_user_posts(
+                x_user_id, max_results=limit, since_id=since_id
+            )
         )
         return self._parse_posts(username, payload)
+
+    def _call_x_api(
+        self,
+        operation: Callable[[], XAPIResult],
+    ) -> XAPIResult:
+        """执行 X API 操作并维护进程级余额不足通知状态。
+
+        Args:
+            operation (Callable[[], XAPIResult]): 无参数的 X API 调用。
+
+        Returns:
+            XAPIResult: X API 调用的原始返回值。
+
+        Raises:
+            XMonitorToolError: X API 调用失败时原样抛出。
+        """
+        try:
+            result = operation()
+        except XMonitorToolError as error:
+            if error.error_code == "usage_capped":
+                self._notify_usage_capped_once()
+            raise
+        self._reset_usage_capped_notification()
+        return result
+
+    def _notify_usage_capped_once(self) -> None:
+        """在所有监控线程之间合并发送一次余额不足通知。
+
+        Returns:
+            None: 无需通知、通知成功或通知失败时均无返回值。
+
+        Raises:
+            None: 通知失败会记录日志并重新开放通知机会。
+        """
+        with self._usage_capped_lock:
+            if self._usage_capped_notify is None or self._usage_capped_notified:
+                return
+            self._usage_capped_notified = True
+        try:
+            self._usage_capped_notify()
+        except Exception as error:
+            with self._usage_capped_lock:
+                self._usage_capped_notified = False
+            print(f"[XMonitor] 余额不足通知发送失败: {error}", flush=True)
+
+    def _reset_usage_capped_notification(self) -> None:
+        """在 X API 恢复成功后重新开放余额不足通知。
+
+        Returns:
+            None: 本方法仅更新进程内通知状态。
+
+        Raises:
+            None: 本方法不主动抛出异常。
+        """
+        with self._usage_capped_lock:
+            self._usage_capped_notified = False
 
     def _parse_posts(
         self, username: str, payload: dict[str, object]
