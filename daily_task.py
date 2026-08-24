@@ -15,6 +15,8 @@ from threading import Event, Thread
 from typing import Callable, Optional, Sequence, TypeAlias
 
 import schedule
+from google.genai.errors import ClientError
+from langchain_google_genai.chat_models import ChatGoogleGenerativeAIError
 
 from sql_agent_cli_stream_plus import SQLCheckpointAgentStreamingPlus
 from src.asobi_ticket_agent import AsobiTicketQuery
@@ -27,6 +29,29 @@ SendGroupText: TypeAlias = Callable[[int, str], None]
 AgentProvider: TypeAlias = Callable[[], SQLCheckpointAgentStreamingPlus]
 QuestionBuilder: TypeAlias = Callable[[], str]
 DEFAULT_DAILY_CITY: str = "京都市中京区"
+DAILY_WEATHER_RATE_LIMIT_RETRY_DELAY_SECONDS: float = 300.0
+
+
+def _is_google_rate_limit_error(error: Exception) -> bool:
+    """判断异常是否为明确的 Gemini HTTP 429。
+
+    Args:
+        error (Exception): Agent 调用抛出的异常。
+
+    Returns:
+        bool: 属于 Gemini HTTP 429 时返回 ``True``，否则返回 ``False``。
+
+    Raises:
+        None: 本函数不主动抛出异常。
+    """
+    if isinstance(error, ClientError):
+        return error.code == 429
+    cause = error.__cause__
+    return (
+        isinstance(error, ChatGoogleGenerativeAIError)
+        and isinstance(cause, ClientError)
+        and cause.code == 429
+    )
 
 
 def _current_daily_city() -> str:
@@ -260,7 +285,7 @@ class DailyWeatherTask:
         try:
             agent = self._agent_provider()
             assert isinstance(agent, SQLCheckpointAgentStreamingPlus), "Agent 未初始化或类型非法"
-            answer = agent.chat_once_stream(question)
+            answer = self._call_agent_with_rate_limit_retry(agent, question)
             assert isinstance(answer, str) and answer.strip(), "Agent 未返回文本内容"
             reply = answer.strip()
         except Exception as err:
@@ -279,6 +304,39 @@ class DailyWeatherTask:
                 )
             except Exception as err:
                 sys.stderr.write(f"[DailyTask] 群 {gid} 发送失败: {err}\n")
+
+    def _call_agent_with_rate_limit_retry(
+        self,
+        agent: SQLCheckpointAgentStreamingPlus,
+        question: str,
+    ) -> str:
+        """调用 Agent，并在明确的 HTTP 429 后等待 5 分钟重试一次。
+
+        Args:
+            agent (SQLCheckpointAgentStreamingPlus): 当前共享 Agent。
+            question (str): 每日天气任务问题。
+
+        Returns:
+            str: Agent 返回的文本。
+
+        Raises:
+            InterruptedError: 当等待期间任务被停止时抛出。
+            Exception: 非 HTTP 429 错误，或第二次调用仍失败时原样抛出。
+        """
+        try:
+            return agent.chat_once_stream(question)
+        except Exception as error:
+            if not _is_google_rate_limit_error(error):
+                raise
+            print(
+                "[DailyTask] Agent 请求遇到 HTTP 429，5 分钟后重试一次。",
+                flush=True,
+            )
+            if self._stop_event.wait(
+                DAILY_WEATHER_RATE_LIMIT_RETRY_DELAY_SECONDS
+            ):
+                raise InterruptedError("DailyWeatherTask 重试已取消") from error
+            return agent.chat_once_stream(question)
 
     def stop(self) -> None:
         """停止调度线程（若未启动则忽略）。"""

@@ -6,6 +6,8 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
+from google.genai.errors import ClientError
+from langchain_google_genai.chat_models import ChatGoogleGenerativeAIError
 
 import qq_group_bot
 from daily_task import DailyTicketTask, DailyWeatherTask
@@ -118,6 +120,81 @@ def test_daily_weather_task_calls_agent_without_thread_id() -> None:
 
     chat_once_stream.assert_called_once_with("今日简报")
     send_func.assert_called_once_with(10001, "📅 简报内容")
+
+
+def test_daily_weather_task_retries_429_once_after_five_minutes() -> None:
+    """验证每日天气任务等待 5 分钟后重新发送原任务问题。
+
+    Returns:
+        None: 测试通过时无返回值。
+
+    Raises:
+        None: 断言失败时由 pytest 报告。
+    """
+    rate_limit_error = ChatGoogleGenerativeAIError("Gemini HTTP 429")
+    rate_limit_error.__cause__ = ClientError(
+        429,
+        {
+            "message": "quota exceeded",
+            "status": "RESOURCE_EXHAUSTED",
+        },
+    )
+    agent = object.__new__(SQLCheckpointAgentStreamingPlus)
+    send_func = mock.Mock()
+    task = DailyWeatherTask(
+        send_func,
+        [10001],
+        question_builder=lambda: "今日简报",
+        agent_provider=mock.Mock(return_value=agent),
+    )
+
+    with mock.patch.object(
+        SQLCheckpointAgentStreamingPlus,
+        "chat_once_stream",
+        side_effect=(rate_limit_error, "重试后的简报内容"),
+    ) as chat_once_stream, mock.patch.object(
+        task._stop_event,
+        "wait",
+        return_value=False,
+    ) as wait:
+        task._execute_once()
+
+    assert chat_once_stream.call_args_list == [
+        mock.call("今日简报"),
+        mock.call("今日简报"),
+    ]
+    wait.assert_called_once_with(300.0)
+    send_func.assert_called_once_with(10001, "📅 重试后的简报内容")
+
+
+def test_daily_weather_task_does_not_retry_non_429_error() -> None:
+    """验证每日天气任务不会重试非 429 错误。
+
+    Returns:
+        None: 测试通过时无返回值。
+
+    Raises:
+        None: 断言失败时由 pytest 报告。
+    """
+    agent = object.__new__(SQLCheckpointAgentStreamingPlus)
+    send_func = mock.Mock()
+    task = DailyWeatherTask(
+        send_func,
+        [10001],
+        question_builder=lambda: "今日简报",
+        agent_provider=mock.Mock(return_value=agent),
+    )
+
+    with mock.patch.object(
+        SQLCheckpointAgentStreamingPlus,
+        "chat_once_stream",
+        side_effect=RuntimeError("模型调用失败"),
+    ) as chat_once_stream, mock.patch.object(task._stop_event, "wait") as wait:
+        task._execute_once()
+
+    chat_once_stream.assert_called_once_with("今日简报")
+    wait.assert_not_called()
+    send_func.assert_not_called()
 
 
 def test_daily_weather_task_reads_latest_location(
