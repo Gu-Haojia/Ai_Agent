@@ -92,6 +92,92 @@ class MultimodalUnitTest(unittest.TestCase):
         self.assertEqual(parsed.images[0].url, "https://example.com/test.png")
 
     @unittest.skipUnless(_QQ_MODULE_AVAILABLE, "缺少 langgraph 依赖，跳过 QQ 解析逻辑测试")
+    def test_parse_message_and_at_preserves_native_face_position(self) -> None:
+        """
+        QQ 原生表情应按消息段顺序插入模型可读文本。
+
+        Returns:
+            None: 测试无返回值。
+
+        Raises:
+            None: 断言失败时由 unittest 报告。
+        """
+        event = {
+            "self_id": 20000,
+            "message": [
+                {"type": "at", "data": {"qq": "20000"}},
+                {"type": "text", "data": {"text": "前"}},
+                {
+                    "type": "face",
+                    "data": {
+                        "id": "14",
+                        "raw": {"faceText": "[微笑]"},
+                    },
+                },
+                {"type": "text", "data": {"text": "后"}},
+            ],
+        }
+
+        parsed = _parse_message_and_at(event)
+
+        self.assertTrue(parsed.at_me)
+        self.assertEqual(parsed.text, "前[微笑]后")
+
+    @unittest.skipUnless(_QQ_MODULE_AVAILABLE, "缺少 langgraph 依赖，跳过 QQ 解析逻辑测试")
+    def test_parse_message_and_at_keeps_face_only_message(self) -> None:
+        """
+        仅包含 @ 与 QQ 原生表情的消息也应产生有效文本。
+
+        Returns:
+            None: 测试无返回值。
+
+        Raises:
+            None: 断言失败时由 unittest 报告。
+        """
+        event = {
+            "self_id": 20000,
+            "message": [
+                {"type": "at", "data": {"qq": "20000"}},
+                {
+                    "type": "face",
+                    "data": {
+                        "id": "14",
+                        "raw": {"faceText": "[微笑]"},
+                    },
+                },
+            ],
+        }
+
+        parsed = _parse_message_and_at(event)
+
+        self.assertTrue(parsed.at_me)
+        self.assertEqual(parsed.text, "[微笑]")
+
+    @unittest.skipUnless(_QQ_MODULE_AVAILABLE, "缺少 langgraph 依赖，跳过 QQ 解析逻辑测试")
+    def test_parse_message_and_at_keeps_face_without_raw_description(self) -> None:
+        """
+        未携带可选 raw 字段的标准 face 段应保留表情 ID。
+
+        Returns:
+            None: 测试无返回值。
+
+        Raises:
+            None: 断言失败时由 unittest 报告。
+        """
+        event = {
+            "self_id": 20000,
+            "message": [
+                {"type": "at", "data": {"qq": "20000"}},
+                {"type": "face", "data": {"id": "14"}},
+            ],
+        }
+
+        parsed = _parse_message_and_at(event)
+
+        self.assertTrue(parsed.at_me)
+        self.assertEqual(parsed.text, "[QQ表情:14]")
+
+    @unittest.skipUnless(_QQ_MODULE_AVAILABLE, "缺少 langgraph 依赖，跳过 QQ 解析逻辑测试")
     def test_parse_message_and_at_treats_video_file_segment_as_video(self) -> None:
         """
         视频扩展名的 file 段应复用原生视频消息处理流程。
