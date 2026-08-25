@@ -1271,7 +1271,7 @@ def _format_qq_face_segment(data: dict[str, object]) -> str:
         data (dict[str, object]): OneBot ``face`` 消息段的数据对象。
 
     Returns:
-        str: NapCat 提供的表情说明；协议未携带说明时返回含 ID 的明确标记。
+        str: 始终带有 ``表情:`` 标签的表情说明或表情 ID。
 
     Raises:
         AssertionError: 当表情 ID 缺失或 ``raw`` 字段类型非法时抛出。
@@ -1280,11 +1280,15 @@ def _format_qq_face_segment(data: dict[str, object]) -> str:
     assert face_id, "OneBot face 消息段 id 不能为空"
     raw = data.get("raw")
     assert raw is None or isinstance(raw, dict), "OneBot face.raw 必须为对象"
+    description = face_id
     if isinstance(raw, dict):
         face_text = str(raw.get("faceText") or "").strip()
         if face_text:
-            return face_text
-    return f"[QQ表情:{face_id}]"
+            if face_text.startswith("[") and face_text.endswith("]"):
+                face_text = face_text[1:-1].strip()
+            if face_text:
+                description = face_text
+    return f"[表情:{description}]"
 
 
 def _normalize_message_segments(
