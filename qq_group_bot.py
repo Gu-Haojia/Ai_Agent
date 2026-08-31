@@ -1158,6 +1158,34 @@ class ParsedMessage:
 _VIDEO_FILE_SUFFIXES: frozenset[str] = frozenset(
     {".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv"}
 )
+_IMAGE_FILE_SUFFIXES: frozenset[str] = frozenset(
+    {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".heic"}
+)
+
+
+def _is_image_file_segment(data: dict[str, object]) -> bool:
+    """
+    判断 file 消息段是否明确表示图片文件。
+
+    Args:
+        data (dict[str, object]): OneBot file 消息段的 data 字段。
+
+    Returns:
+        bool: MIME 类型或文件名、URL 后缀表示图片时返回 True。
+
+    Raises:
+        AssertionError: 当 data 不是字典时抛出。
+    """
+    assert isinstance(data, dict), "file 消息段 data 必须为字典"
+    mime_type = str(data.get("mime_type") or data.get("content_type") or "")
+    if mime_type.strip().lower().startswith("image/"):
+        return True
+    for value in (data.get("name"), data.get("file"), data.get("url")):
+        normalized = str(value or "").strip().lower()
+        normalized = normalized.split("?", 1)[0].split("#", 1)[0]
+        if any(normalized.endswith(suffix) for suffix in _IMAGE_FILE_SUFFIXES):
+            return True
+    return False
 
 
 def _is_video_file_segment(data: dict[str, object]) -> bool:
@@ -1327,7 +1355,9 @@ def _normalize_message_segments(
             qq = str(data.get("qq", ""))
             if qq == self_id:
                 at_me = True
-        elif typ == "image":
+        elif typ == "image" or (
+            typ == "file" and _is_image_file_segment(data)
+        ):
             url = data.get("url")
             file_id = data.get("file") or data.get("file_id")
             filename = data.get("name") or data.get("file")

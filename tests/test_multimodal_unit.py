@@ -256,6 +256,52 @@ class MultimodalUnitTest(unittest.TestCase):
         self.assertEqual(parsed.videos[0].filename, "group-video.mp4")
 
     @unittest.skipUnless(_QQ_MODULE_AVAILABLE, "缺少 langgraph 依赖，跳过 QQ 解析逻辑测试")
+    def test_parse_message_and_at_treats_image_file_segment_as_image(self) -> None:
+        """
+        图片扩展名的 file 段应复用原生图片消息处理流程。
+
+        Returns:
+            None: 测试无返回值。
+
+        Raises:
+            None: 断言失败时由 unittest 报告。
+        """
+        event = {
+            "self_id": 20000,
+            "message": [
+                {"type": "at", "data": {"qq": "20000"}},
+                {
+                    "type": "file",
+                    "data": {
+                        "url": "https://example.com/group-image.jpg?token=test",
+                        "file": "group-image-id",
+                        "name": "GROUP-IMAGE.JPG",
+                    },
+                },
+            ],
+        }
+
+        parsed = _parse_message_and_at(event)
+        native_image_event = {
+            **event,
+            "message": [
+                {"type": "at", "data": {"qq": "20000"}},
+                {"type": "image", "data": event["message"][1]["data"]},
+            ],
+        }
+        native_parsed = _parse_message_and_at(native_image_event)
+
+        self.assertTrue(parsed.at_me)
+        self.assertEqual(len(parsed.images), 1)
+        self.assertEqual(parsed.images, native_parsed.images)
+        self.assertEqual(
+            parsed.images[0].url,
+            "https://example.com/group-image.jpg?token=test",
+        )
+        self.assertEqual(parsed.images[0].file_id, "group-image-id")
+        self.assertEqual(parsed.images[0].filename, "GROUP-IMAGE.JPG")
+
+    @unittest.skipUnless(_QQ_MODULE_AVAILABLE, "缺少 langgraph 依赖，跳过 QQ 解析逻辑测试")
     def test_parse_message_and_at_ignores_non_video_file_segment(self) -> None:
         """
         普通 file 段不应被错误归类为视频。
