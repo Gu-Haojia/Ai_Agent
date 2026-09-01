@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 import image_storage
-from image_storage import ImageStorageManager, StoredImage, StoredVideo
+from image_storage import ImageStorageManager, StoredAudio, StoredImage, StoredVideo
 from PIL import Image
 
 try:
@@ -18,6 +18,7 @@ try:
         PreparedMessageGroup,
         QQBotHandler,
         _extract_cq_images,
+        _extract_cq_records,
         _parse_message_and_at,
     )
 
@@ -26,6 +27,7 @@ except ModuleNotFoundError:
     PreparedMessageGroup = None
     QQBotHandler = None
     _extract_cq_images = None
+    _extract_cq_records = None
     _parse_message_and_at = None
     _QQ_MODULE_AVAILABLE = False
 
@@ -90,6 +92,60 @@ class MultimodalUnitTest(unittest.TestCase):
         self.assertEqual(parsed.text, "请看看")
         self.assertEqual(len(parsed.images), 1)
         self.assertEqual(parsed.images[0].url, "https://example.com/test.png")
+
+    @unittest.skipUnless(_QQ_MODULE_AVAILABLE, "缺少 langgraph 依赖，跳过 QQ 解析逻辑测试")
+    def test_parse_message_and_at_handles_napcat_record(self) -> None:
+        """
+        NapCat record 消息段应保留语音下载信息。
+
+        Returns:
+            None: 测试无返回值。
+
+        Raises:
+            None: 断言失败时由 unittest 报告。
+        """
+        event = {
+            "self_id": 20000,
+            "message": [
+                {"type": "at", "data": {"qq": "20000"}},
+                {
+                    "type": "record",
+                    "data": {
+                        "file": "voice-file-id",
+                        "path": "/tmp/voice.amr",
+                        "url": "https://example.com/voice.amr",
+                        "file_size": 1024,
+                    },
+                },
+            ],
+        }
+
+        parsed = _parse_message_and_at(event)
+
+        self.assertTrue(parsed.at_me)
+        self.assertEqual(len(parsed.audios), 1)
+        self.assertEqual(parsed.audios[0].url, "https://example.com/voice.amr")
+        self.assertEqual(parsed.audios[0].file_id, "voice-file-id")
+        self.assertEqual(parsed.audios[0].filename, "/tmp/voice.amr")
+
+    @unittest.skipUnless(_QQ_MODULE_AVAILABLE, "缺少 langgraph 依赖，跳过 QQ 解析逻辑测试")
+    def test_extract_cq_records_parses_audio(self) -> None:
+        """
+        CQ record 应解析为语音消息段。
+
+        Returns:
+            None: 测试无返回值。
+
+        Raises:
+            None: 断言失败时由 unittest 报告。
+        """
+        records = _extract_cq_records(
+            "[CQ:record,file=voice.amr,url=https://example.com/voice.amr]"
+        )
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].url, "https://example.com/voice.amr")
+        self.assertEqual(records[0].filename, "voice.amr")
 
     @unittest.skipUnless(_QQ_MODULE_AVAILABLE, "缺少 langgraph 依赖，跳过 QQ 解析逻辑测试")
     def test_parse_message_and_at_preserves_native_face_position(self) -> None:
@@ -472,6 +528,72 @@ class MultimodalUnitTest(unittest.TestCase):
         self.assertEqual(part["duration_seconds"], 12.4)
 
     @unittest.skipUnless(_QQ_MODULE_AVAILABLE, "缺少 langgraph 依赖，跳过 QQ 解析逻辑测试")
+    def test_format_audio_part_builds_media_without_model_check(self) -> None:
+        """
+        语音应直接构造通用 media 消息块。
+
+        Returns:
+            None: 测试无返回值。
+
+        Raises:
+            None: 断言失败时由 unittest 报告。
+        """
+        stored = StoredAudio(
+            path=Path("voice.mp3"),
+            mime_type="audio/mpeg",
+            base64_data=base64.b64encode(b"audio").decode("ascii"),
+            duration_seconds=4.2,
+        )
+
+        part = QQBotHandler._format_audio_part(stored)
+
+        self.assertEqual(
+            part,
+            {
+                "type": "media",
+                "mime_type": "audio/mpeg",
+                "data": b"audio",
+                "duration_seconds": 4.2,
+            },
+        )
+
+    @unittest.skipUnless(_QQ_MODULE_AVAILABLE, "缺少 langgraph 依赖，跳过 QQ 解析逻辑测试")
+    def test_multimodal_content_builder_includes_audio(self) -> None:
+        """
+        多模态内容应包含语音附件标签和 media 块。
+
+        Returns:
+            None: 测试无返回值。
+
+        Raises:
+            None: 断言失败时由 unittest 报告。
+        """
+        stored = StoredAudio(
+            path=Path("voice.mp3"),
+            mime_type="audio/mpeg",
+            base64_data=base64.b64encode(b"audio").decode("ascii"),
+            duration_seconds=4.2,
+        )
+        group = PreparedMessageGroup(
+            context_text="test",
+            images=(),
+            videos=(),
+            audios=(stored,),
+        )
+
+        content = QQBotHandler._build_multimodal_content([group])
+
+        self.assertEqual(
+            content[1],
+            {
+                "type": "text",
+                "text": "[Audio Attachment: index 1, name voice.mp3]",
+            },
+        )
+        self.assertEqual(content[2]["type"], "media")
+        self.assertEqual(content[2]["mime_type"], "audio/mpeg")
+
+    @unittest.skipUnless(_QQ_MODULE_AVAILABLE, "缺少 langgraph 依赖，跳过 QQ 解析逻辑测试")
     def test_compose_group_message_appends_cq_codes(self) -> None:
         message = QQBotHandler._compose_group_message(
             "hello", [("ZGF0YQ==", "image/png")]
@@ -831,7 +953,7 @@ class MultimodalUnitTest(unittest.TestCase):
                     manager, "_guess_video_mime", return_value="video/mp4"
                 ),
                 mock.patch.object(
-                    manager, "_probe_video_duration_seconds", return_value=9.6
+                    manager, "_probe_media_duration_seconds", return_value=9.6
                 ) as probe_duration,
             ):
                 stored = manager.save_remote_video(
@@ -859,7 +981,7 @@ class MultimodalUnitTest(unittest.TestCase):
             with mock.patch.object(
                 image_storage.subprocess, "run", return_value=completed
             ) as run_mock:
-                duration = ImageStorageManager._probe_video_duration_seconds(
+                duration = ImageStorageManager._probe_media_duration_seconds(
                     video_path
                 )
 
@@ -867,6 +989,47 @@ class MultimodalUnitTest(unittest.TestCase):
         command = run_mock.call_args.args[0]
         self.assertEqual(command[0], "ffprobe")
         self.assertEqual(command[-1], str(video_path))
+
+    def test_save_remote_audio_converts_and_records_duration(self) -> None:
+        """
+        远程语音应转换为 MP3 并记录时长。
+
+        Returns:
+            None: 测试无返回值。
+
+        Raises:
+            None: 断言失败时由 unittest 报告。
+        """
+        response = mock.Mock()
+        response.status_code = 200
+        response.iter_content.return_value = [b"source-audio"]
+        completed = SimpleNamespace(
+            returncode=0,
+            stdout=b"converted-mp3",
+            stderr=b"",
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            manager = ImageStorageManager(tmp_dir)
+            with (
+                mock.patch.object(
+                    image_storage.requests, "get", return_value=response
+                ),
+                mock.patch.object(
+                    image_storage.subprocess, "run", return_value=completed
+                ) as run_mock,
+                mock.patch.object(
+                    manager, "_probe_media_duration_seconds", return_value=3.5
+                ),
+            ):
+                stored = manager.save_remote_audio("https://example.com/voice.amr")
+
+        self.assertEqual(stored.mime_type, "audio/mpeg")
+        self.assertEqual(stored.duration_seconds, 3.5)
+        self.assertEqual(base64.b64decode(stored.base64_data), b"converted-mp3")
+        self.assertEqual(stored.path.suffix, ".mp3")
+        self.assertEqual(run_mock.call_args.kwargs["input"], b"source-audio")
+        response.close.assert_called_once_with()
 
     def test_is_generated_path_handles_generated_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

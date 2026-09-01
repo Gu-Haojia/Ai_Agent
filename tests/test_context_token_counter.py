@@ -75,7 +75,7 @@ def _omit_test_base64(text: str) -> str:
     )
 
 
-def test_context_token_counter_counts_images_videos_and_safe_tool_calls() -> None:
+def test_context_token_counter_counts_media_and_safe_tool_calls() -> None:
     """
     验证共享统计器计入媒体额定 token，并忽略 Gemini 内部元数据。
 
@@ -88,7 +88,7 @@ def test_context_token_counter_counts_images_videos_and_safe_tool_calls() -> Non
     counter = ContextTokenCounter(text_sanitizer=_identity_text)
     human = HumanMessage(
         content=[
-            {"type": "text", "text": "请分析图片和视频。"},
+            {"type": "text", "text": "请分析图片、视频和语音。"},
             {
                 "type": "image_url",
                 "image_url": {"url": "data:image/jpeg;base64," + "A" * 8000},
@@ -98,6 +98,12 @@ def test_context_token_counter_counts_images_videos_and_safe_tool_calls() -> Non
                 "mime_type": "video/mp4",
                 "data": b"video-bytes",
                 "duration_seconds": 12.4,
+            },
+            {
+                "type": "media",
+                "mime_type": "audio/mpeg",
+                "data": b"audio-bytes",
+                "duration_seconds": 3.2,
             },
         ]
     )
@@ -122,9 +128,15 @@ def test_context_token_counter_counts_images_videos_and_safe_tool_calls() -> Non
     assert estimate.video_count == 1
     assert estimate.video_seconds == 13
     assert estimate.video_tokens == 13 * 102
+    assert estimate.audio_count == 1
+    assert estimate.audio_seconds == 4
+    assert estimate.audio_tokens == 4 * 32
     assert estimate.message_text_tokens == comparison.message_text_tokens
     assert estimate.total_tokens == (
-        estimate.text_tokens + estimate.image_tokens + estimate.video_tokens
+        estimate.text_tokens
+        + estimate.image_tokens
+        + estimate.video_tokens
+        + estimate.audio_tokens
     )
 
 
@@ -150,6 +162,31 @@ def test_context_token_counter_rejects_video_without_duration() -> None:
     )
 
     with pytest.raises(AssertionError, match="视频消息缺少 duration_seconds"):
+        counter.count_messages([message])
+
+
+def test_context_token_counter_rejects_audio_without_duration() -> None:
+    """
+    验证语音消息缺少时长时会显式报错。
+
+    Returns:
+        None: 测试用例无返回值。
+
+    Raises:
+        None: 预期断言由 pytest 捕获。
+    """
+    counter = ContextTokenCounter(text_sanitizer=_identity_text)
+    message = HumanMessage(
+        content=[
+            {
+                "type": "media",
+                "mime_type": "audio/mpeg",
+                "data": b"audio-bytes",
+            }
+        ]
+    )
+
+    with pytest.raises(AssertionError, match="语音消息缺少 duration_seconds"):
         counter.count_messages([message])
 
 

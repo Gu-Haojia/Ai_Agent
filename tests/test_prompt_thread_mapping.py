@@ -454,6 +454,7 @@ def test_whoami_and_token_use_current_prompt_thread() -> None:
             text_tokens=123,
             image_tokens=1120,
             video_tokens=1220,
+            audio_tokens=320,
         )
     )
     QQBotHandler.agent = agent
@@ -477,7 +478,7 @@ def test_whoami_and_token_use_current_prompt_thread() -> None:
     )
     token_message = send_group_msg.call_args_list[-1].args[2]
     assert "估算 tokens=2463" in token_message
-    assert "文本=123，图片=1120，视频=1220" in token_message
+    assert "文本=123，图片=1120，视频=1220，语音=320" in token_message
     assert "统计口径" not in token_message
     assert "费用" not in token_message
 

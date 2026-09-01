@@ -1,7 +1,7 @@
 """
-图像/视频存储与生成管理模块。
+图像、视频与语音存储及生成管理模块。
 
-提供统一的入站图像、短视频下载存储、模型生成图像落盘、
+提供统一的入站图像、短视频和语音下载存储、模型生成图像落盘、
 以及向多模态模型投喂数据所需的 Base64 数据等能力。
 """
 
@@ -37,6 +37,7 @@ if TYPE_CHECKING:
 __all__ = [
     "StoredImage",
     "StoredVideo",
+    "StoredAudio",
     "GeneratedImage",
     "ImageStorageManager",
 ]
@@ -136,12 +137,53 @@ class StoredVideo:
         }
 
 
+@dataclass(frozen=True)
+class StoredAudio:
+    """
+    本地化保存后的入站语音信息。
+
+    Args:
+        path (Path): 语音本地路径。
+        mime_type (str): 语音 MIME 类型。
+        base64_data (str): 语音 Base64 内容。
+        duration_seconds (float): 语音时长，单位秒。
+
+    Returns:
+        None: dataclass 初始化不返回额外值。
+
+    Raises:
+        AssertionError: 当语音元数据缺失或时长非法时抛出。
+    """
+
+    path: Path
+    mime_type: str
+    base64_data: str
+    duration_seconds: float
+
+    def __post_init__(self) -> None:
+        """
+        校验语音存储信息。
+
+        Returns:
+            None: 无返回值。
+
+        Raises:
+            AssertionError: 当语音元数据缺失或时长非法时抛出。
+        """
+        assert isinstance(self.path, Path), "语音路径类型非法"
+        assert self.mime_type.startswith("audio/"), "语音 MIME 类型非法"
+        assert self.base64_data, "语音 Base64 内容不能为空"
+        assert (
+            math.isfinite(self.duration_seconds) and self.duration_seconds > 0
+        ), "语音时长必须为正数"
+
+
 class ImageStorageManager:
     """
-    负责管理 QQ Bot 入站/出站图像与视频的本地存储。
+    负责管理 QQ Bot 入站/出站图像、视频与语音的本地存储。
 
     - 所有图像将保存在 base_dir 下的 incoming/generated 子目录；
-    - 入站图像与短视频保存后提供 Base64 编码，便于向多模态模型提供数据；
+    - 入站图像、短视频与语音保存后提供 Base64 编码；
     - OpenAI Images API 返回官方响应对象；必要时可通过保存方法落盘。
     """
 
@@ -150,13 +192,16 @@ class ImageStorageManager:
         self._base_dir = Path(base_dir).expanduser().resolve()
         self._incoming_dir = self._base_dir / "incoming"
         self._incoming_video_dir = self._incoming_dir / "video"
+        self._incoming_audio_dir = self._incoming_dir / "audio"
         self._generated_dir = self._base_dir / "generated"
         self._incoming_dir.mkdir(parents=True, exist_ok=True)
         self._incoming_video_dir.mkdir(parents=True, exist_ok=True)
+        self._incoming_audio_dir.mkdir(parents=True, exist_ok=True)
         self._generated_dir.mkdir(parents=True, exist_ok=True)
         self._image_model = image_model or os.environ.get("IMAGE_MODEL_NAME", "gpt-image-2")
         self._lock = threading.Lock()
         self._max_video_bytes = 32 * 1024 * 1024  # 32MB 上限，避免超大视频内联
+        self._max_audio_bytes = 14 * 1024 * 1024  # 为 Gemini 20MB 请求保留编码空间
         self._http_headers = {
             "User-Agent": "Mozilla/5.0",
             "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
@@ -164,6 +209,8 @@ class ImageStorageManager:
         }
         self._video_http_headers = dict(self._http_headers)
         self._video_http_headers["Accept"] = "video/mp4,video/*;q=0.9,*/*;q=0.1"
+        self._audio_http_headers = dict(self._http_headers)
+        self._audio_http_headers["Accept"] = "audio/*;q=0.9,*/*;q=0.1"
 
     @property
     def generated_dir(self) -> Path:
@@ -569,20 +616,20 @@ class ImageStorageManager:
         return self._store_image_bytes(data, mime, filename_hint)
 
     @staticmethod
-    def _probe_video_duration_seconds(path: Path) -> float:
+    def _probe_media_duration_seconds(path: Path) -> float:
         """
-        使用 ffprobe 读取视频时长。
+        使用 ffprobe 读取媒体时长。
 
         Args:
-            path (Path): 已保存的视频文件路径。
+            path (Path): 已保存的媒体文件路径。
 
         Returns:
-            float: 视频时长，单位秒。
+            float: 媒体时长，单位秒。
 
         Raises:
             AssertionError: 当文件不存在、ffprobe 执行失败或时长非法时抛出。
         """
-        assert isinstance(path, Path) and path.is_file(), "视频文件不存在"
+        assert isinstance(path, Path) and path.is_file(), "媒体文件不存在"
         result = subprocess.run(
             [
                 "ffprobe",
@@ -599,14 +646,14 @@ class ImageStorageManager:
             check=False,
         )
         assert result.returncode == 0, (
-            "ffprobe 读取视频时长失败: " + result.stderr.strip()
+            "ffprobe 读取媒体时长失败: " + result.stderr.strip()
         )
         raw_duration = result.stdout.strip()
-        assert raw_duration, "ffprobe 未返回视频时长"
+        assert raw_duration, "ffprobe 未返回媒体时长"
         duration_seconds = float(raw_duration)
         assert (
             math.isfinite(duration_seconds) and duration_seconds > 0
-        ), "视频时长必须为正数"
+        ), "媒体时长必须为正数"
         return duration_seconds
 
     def save_remote_video(
@@ -667,11 +714,91 @@ class ImageStorageManager:
         assert suffix, "无法确定视频文件扩展名"
         path = self._write_bytes(self._incoming_video_dir, data, suffix)
         b64 = base64.b64encode(data).decode("ascii")
-        duration_seconds = self._probe_video_duration_seconds(path)
+        duration_seconds = self._probe_media_duration_seconds(path)
         return StoredVideo(
             path=path,
             mime_type=mime,
             base64_data=b64,
+            duration_seconds=duration_seconds,
+        )
+
+    def save_remote_audio(self, url: str) -> StoredAudio:
+        """
+        下载远程语音并转换为 MP3 保存。
+
+        Args:
+            url (str): 语音下载地址，仅支持 HTTP(S)。
+
+        Returns:
+            StoredAudio: 本地化后的语音信息。
+
+        Raises:
+            AssertionError: 当 URL 无效、音频转换失败或体积超限时抛出。
+            RuntimeError: 当网络请求失败或响应为空时抛出。
+        """
+        assert url and url.startswith("http"), "仅支持通过 HTTP(S) 下载语音"
+        response = requests.get(
+            url,
+            stream=True,
+            timeout=30,
+            headers=self._audio_http_headers,
+        )
+        if response.status_code != 200:
+            raise RuntimeError(f"下载语音失败：HTTP {response.status_code}")
+        buffer = BytesIO()
+        total = 0
+        try:
+            for chunk in response.iter_content(chunk_size=256 * 1024):
+                if not chunk:
+                    continue
+                total += len(chunk)
+                assert total <= self._max_audio_bytes, (
+                    f"语音体积超过 {self._max_audio_bytes // (1024 * 1024)}MB，"
+                    "无法内联分析。"
+                )
+                buffer.write(chunk)
+        finally:
+            response.close()
+        source_data = buffer.getvalue()
+        if not source_data:
+            raise RuntimeError("语音内容为空")
+
+        result = subprocess.run(
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                "pipe:0",
+                "-vn",
+                "-codec:a",
+                "libmp3lame",
+                "-b:a",
+                "64k",
+                "-f",
+                "mp3",
+                "pipe:1",
+            ],
+            input=source_data,
+            capture_output=True,
+            check=False,
+        )
+        error_text = result.stderr.decode("utf-8", errors="replace").strip()
+        assert result.returncode == 0, f"ffmpeg 转换语音失败: {error_text}"
+        mp3_data = result.stdout
+        assert mp3_data, "ffmpeg 未输出 MP3 数据"
+        assert len(mp3_data) <= self._max_audio_bytes, (
+            f"转换后语音体积超过 {self._max_audio_bytes // (1024 * 1024)}MB，"
+            "无法内联分析。"
+        )
+
+        path = self._write_bytes(self._incoming_audio_dir, mp3_data, ".mp3")
+        duration_seconds = self._probe_media_duration_seconds(path)
+        return StoredAudio(
+            path=path,
+            mime_type="audio/mpeg",
+            base64_data=base64.b64encode(mp3_data).decode("ascii"),
             duration_seconds=duration_seconds,
         )
 
@@ -831,7 +958,7 @@ class ImageStorageManager:
             else self._guess_video_mime(guessed or "", str(target), normalized, data_bytes[:512])
         )
         encoded = base64.b64encode(data_bytes).decode("ascii")
-        duration_seconds = self._probe_video_duration_seconds(target)
+        duration_seconds = self._probe_media_duration_seconds(target)
         return StoredVideo(
             path=target,
             mime_type=mime,

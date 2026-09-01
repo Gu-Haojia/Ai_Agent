@@ -117,6 +117,52 @@ class QQBotReplyContextTests(unittest.TestCase):
         self.assertEqual(content.images[0].file_id, "quoted-file-id")
         self.assertEqual(content.images[0].filename, "quoted.png")
 
+    def test_fetch_message_content_keeps_quoted_audio(self) -> None:
+        """
+        get_msg 返回的 record 消息段应保留为引用语音。
+
+        Returns:
+            None: 测试无返回值。
+
+        Raises:
+            None: 断言失败时由 unittest 报告。
+        """
+        payload = {
+            "status": "ok",
+            "retcode": 0,
+            "data": {
+                "time": 1704067200,
+                "message": [
+                    {
+                        "type": "record",
+                        "data": {
+                            "file": "voice-file-id",
+                            "path": "/tmp/voice.amr",
+                            "url": "https://example.com/voice.amr",
+                        },
+                    }
+                ],
+                "raw_message": "",
+                "sender": {
+                    "user_id": 123456,
+                    "card": "群名片",
+                    "nickname": "昵称",
+                },
+            },
+        }
+        response = mock.MagicMock(status=200)
+        response.read.return_value = json.dumps(payload).encode("utf-8")
+        response.__enter__.return_value = response
+
+        with mock.patch("qq_group_bot.urlopen", return_value=response):
+            content = _fetch_message_content("http://127.0.0.1:3000", "789")
+
+        self.assertEqual(content.text, "")
+        self.assertEqual(len(content.audios), 1)
+        self.assertEqual(content.audios[0].url, "https://example.com/voice.amr")
+        self.assertEqual(content.audios[0].file_id, "voice-file-id")
+        self.assertEqual(content.audios[0].filename, "/tmp/voice.amr")
+
     def test_format_reply_context_includes_sender(self) -> None:
         """
         引用上下文应使用与当前消息一致的发送者字段名。

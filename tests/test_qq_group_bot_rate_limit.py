@@ -84,6 +84,7 @@ def test_gemini_model_error_uses_fixed_group_message(
         text="你好",
         images=[],
         videos=[],
+        audios=[],
         reply_message_ids=[],
         at_me=True,
     )

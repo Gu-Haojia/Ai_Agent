@@ -94,7 +94,7 @@ def _extract_message_content(
     message: object, raw_fallback: Optional[str] = None
 ) -> MessageContent:
     """
-    从消息对象提取文本、图像与视频信息。
+    从消息对象提取文本、图像、视频与语音信息。
 
     Args:
         message (object): OneBot 返回的 message 字段。
@@ -105,15 +105,23 @@ def _extract_message_content(
     """
 
     if isinstance(message, list):
-        text, _at_me, images, _reply_ids, videos = _normalize_message_segments(message)
-        return MessageContent(text=text, images=images, videos=videos)
+        text, _at_me, images, _reply_ids, videos, audios = (
+            _normalize_message_segments(message)
+        )
+        return MessageContent(
+            text=text,
+            images=images,
+            videos=videos,
+            audios=audios,
+        )
 
     raw = str(message or raw_fallback or "")
     raw, _ = _extract_reply_ids_from_raw(raw)
     images = _extract_cq_images(raw) if raw else ()
     videos = _extract_cq_videos(raw) if raw else ()
+    audios = _extract_cq_records(raw) if raw else ()
     print(f"[Debug] Alternative way enabled", flush=True)
-    return MessageContent(text=raw, images=images, videos=videos)
+    return MessageContent(text=raw, images=images, videos=videos, audios=audios)
 
 
 def _fetch_message_content(
@@ -171,6 +179,7 @@ def _fetch_message_content(
         text=content.text,
         images=content.images,
         videos=content.videos,
+        audios=content.audios,
         user_id=user_id,
         user_name=user_name,
         sent_at=sent_at,
@@ -230,7 +239,13 @@ from src.x_monitor import (
 from src.x_monitor_media import send_x_message_with_images
 from src.x_monitor_tool import get_x_monitor_manager
 from src.x_monitor_translate import TRANSLATION_MODE_ENV, XTweetTranslationMode
-from image_storage import GeneratedImage, ImageStorageManager, StoredImage, StoredVideo
+from image_storage import (
+    GeneratedImage,
+    ImageStorageManager,
+    StoredAudio,
+    StoredImage,
+    StoredVideo,
+)
 from src.yt_dlp_downloader import YtDlpVideoDownloader
 from daily_task import (
     DEFAULT_DAILY_CITY,
@@ -1021,6 +1036,28 @@ class VideoSegmentInfo:
 
 
 @dataclass(frozen=True)
+class AudioSegmentInfo:
+    """
+    消息段中的语音信息。
+
+    Args:
+        url (Optional[str]): 语音下载地址。
+        file_id (Optional[str]): NapCat 语音文件标识。
+        filename (Optional[str]): 语音文件名或路径提示。
+
+    Returns:
+        None: dataclass 初始化不返回额外值。
+
+    Raises:
+        None: 数据类不在初始化阶段主动抛出异常。
+    """
+
+    url: Optional[str]
+    file_id: Optional[str]
+    filename: Optional[str]
+
+
+@dataclass(frozen=True)
 class MessageContent:
     """
     标准化的消息内容。
@@ -1029,6 +1066,7 @@ class MessageContent:
         text (str): 消息文本。
         images (tuple[ImageSegmentInfo, ...]): 图片消息段。
         videos (tuple[VideoSegmentInfo, ...]): 视频消息段。
+        audios (tuple[AudioSegmentInfo, ...]): 语音消息段。
         user_id (str): 消息发送者 QQ 号。
         user_name (str): 消息发送者群名片或昵称。
         sent_at (Optional[int]): 消息发送时的 Unix 时间戳。
@@ -1037,6 +1075,7 @@ class MessageContent:
     text: str
     images: tuple[ImageSegmentInfo, ...]
     videos: tuple[VideoSegmentInfo, ...]
+    audios: tuple[AudioSegmentInfo, ...] = ()
     user_id: str = ""
     user_name: str = ""
     sent_at: Optional[int] = None
@@ -1051,6 +1090,7 @@ class PreparedMessageGroup:
         context_text (str): 当前消息或引用消息的格式化文本。
         images (tuple[StoredImage, ...]): 归属于该消息的已保存图片。
         videos (tuple[StoredVideo, ...]): 归属于该消息的已保存视频。
+        audios (tuple[StoredAudio, ...]): 归属于该消息的已保存语音。
         quoted_index (Optional[int]): 引用消息序号；当前消息为 ``None``。
 
     Returns:
@@ -1063,6 +1103,7 @@ class PreparedMessageGroup:
     context_text: str
     images: tuple[StoredImage, ...]
     videos: tuple[StoredVideo, ...]
+    audios: tuple[StoredAudio, ...] = ()
     quoted_index: Optional[int] = None
 
 
@@ -1153,6 +1194,7 @@ class ParsedMessage:
     images: tuple[ImageSegmentInfo, ...]
     reply_message_ids: tuple[str, ...]
     videos: tuple[VideoSegmentInfo, ...]
+    audios: tuple[AudioSegmentInfo, ...]
 
 
 _VIDEO_FILE_SUFFIXES: frozenset[str] = frozenset(
@@ -1291,6 +1333,47 @@ def _extract_cq_videos(raw: str) -> tuple[VideoSegmentInfo, ...]:
     return tuple(videos)
 
 
+def _extract_cq_records(raw: str) -> tuple[AudioSegmentInfo, ...]:
+    """
+    从原始 CQ 文本中解析语音段。
+
+    Args:
+        raw (str): 原始消息字符串。
+
+    Returns:
+        tuple[AudioSegmentInfo, ...]: 解析出的语音段列表。
+
+    Raises:
+        None: 无匹配语音段时返回空元组。
+    """
+    audios: list[AudioSegmentInfo] = []
+    idx = 0
+    while idx < len(raw):
+        start = raw.find("[CQ:record", idx)
+        if start == -1:
+            break
+        end = raw.find("]", start)
+        if end == -1:
+            break
+        body = raw[start + 1 : end]
+        data: dict[str, str] = {}
+        for segment in body.split(",")[1:]:
+            if "=" not in segment:
+                continue
+            key, value = segment.split("=", 1)
+            data[key.strip()] = value.strip()
+        path = data.get("path")
+        audios.append(
+            AudioSegmentInfo(
+                url=data.get("url"),
+                file_id=data.get("file") or data.get("file_id"),
+                filename=data.get("name") or path or data.get("file"),
+            )
+        )
+        idx = end + 1
+    return tuple(audios)
+
+
 def _format_qq_face_segment(data: dict[str, object]) -> str:
     """
     将 NapCat 的 QQ 原生表情段转换为模型可读文本。
@@ -1322,7 +1405,12 @@ def _format_qq_face_segment(data: dict[str, object]) -> str:
 def _normalize_message_segments(
     segments: Sequence[dict], self_id: str = ""
 ) -> tuple[
-    str, bool, tuple[ImageSegmentInfo, ...], tuple[str, ...], tuple[VideoSegmentInfo, ...]
+    str,
+    bool,
+    tuple[ImageSegmentInfo, ...],
+    tuple[str, ...],
+    tuple[VideoSegmentInfo, ...],
+    tuple[AudioSegmentInfo, ...],
 ]:
     """
     将消息段标准化为文本、@ 标记、图像、视频与引用消息 ID。
@@ -1332,13 +1420,18 @@ def _normalize_message_segments(
         self_id (str): 机器人自身 QQ 号，用于识别 @。
 
     Returns:
-        tuple[str, bool, tuple[ImageSegmentInfo, ...], tuple[str, ...], tuple[VideoSegmentInfo, ...]]:
-            包含文本、是否@、图片段、引用 ID 与视频段。
+        tuple[str, bool, tuple[ImageSegmentInfo, ...], tuple[str, ...],
+        tuple[VideoSegmentInfo, ...], tuple[AudioSegmentInfo, ...]]:
+            包含文本、是否@、图片段、引用 ID、视频段与语音段。
+
+    Raises:
+        AssertionError: 当消息段 data 不是对象时抛出。
     """
     texts: list[str] = []
     at_me = False
     images: list[ImageSegmentInfo] = []
     videos: list[VideoSegmentInfo] = []
+    audios: list[AudioSegmentInfo] = []
     reply_ids: list[str] = []
     for seg in segments:
         if not isinstance(seg, dict):
@@ -1401,12 +1494,24 @@ def _normalize_message_segments(
                     filename=str(filename) if filename else None,
                 )
             )
+        elif typ == "record":
+            url = data.get("url")
+            file_id = data.get("file") or data.get("file_id")
+            filename = data.get("name") or data.get("path") or data.get("file")
+            audios.append(
+                AudioSegmentInfo(
+                    url=str(url) if url else None,
+                    file_id=str(file_id) if file_id else None,
+                    filename=str(filename) if filename else None,
+                )
+            )
     return (
         "".join(texts).strip(),
         at_me,
         tuple(images),
         tuple(reply_ids),
         tuple(videos),
+        tuple(audios),
     )
 
 
@@ -1424,10 +1529,10 @@ def _parse_message_and_at(event: dict) -> ParsedMessage:
 
     msg = event.get("message")
     if isinstance(msg, list):
-        text, at_me, images, reply_ids, videos = _normalize_message_segments(
-            msg, self_id
+        text, at_me, images, reply_ids, videos, audios = (
+            _normalize_message_segments(msg, self_id)
         )
-        return ParsedMessage(text, at_me, images, reply_ids, videos)
+        return ParsedMessage(text, at_me, images, reply_ids, videos, audios)
 
     raw = str(event.get("raw_message") or msg or "").strip()
     raw, reply_ids = _extract_reply_ids_from_raw(raw)
@@ -1436,8 +1541,9 @@ def _parse_message_and_at(event: dict) -> ParsedMessage:
         at_me = f"[CQ:at,qq={self_id}]" in raw
     images = _extract_cq_images(raw) if raw else ()
     videos = _extract_cq_videos(raw) if raw else ()
+    audios = _extract_cq_records(raw) if raw else ()
     print(f"[Debug] Alternative way enabled")
-    return ParsedMessage(raw, at_me, images, reply_ids, videos)
+    return ParsedMessage(raw, at_me, images, reply_ids, videos, audios)
 
 
 def _extract_sender_name(event: dict) -> str:
@@ -1631,6 +1737,19 @@ class QQBotHandler(BaseHTTPRequestHandler):
                     }
                 )
                 content.append(cls._format_video_part(video, model_name))
+            for idx, audio in enumerate(group.audios, 1):
+                file_path = Path(audio.path)
+                assert file_path.name, "语音文件名不能为空"
+                content.append(
+                    {
+                        "type": "text",
+                        "text": (
+                            f"[Audio Attachment{owner}: index {idx}, "
+                            f"name {file_path.name}]"
+                        ),
+                    }
+                )
+                content.append(cls._format_audio_part(audio))
 
         if include_datetime_system_reminder:
             now = datetime.now(ZoneInfo("Asia/Tokyo"))
@@ -1651,34 +1770,45 @@ class QQBotHandler(BaseHTTPRequestHandler):
     def _store_message_media(
         image_segments: Sequence[ImageSegmentInfo],
         video_segments: Sequence[VideoSegmentInfo],
+        audio_segments: Sequence[AudioSegmentInfo],
         storage: Optional[ImageStorageManager],
         image_cache: dict[str, Optional[StoredImage]],
         video_cache: dict[str, StoredVideo],
-    ) -> tuple[tuple[StoredImage, ...], tuple[StoredVideo, ...]]:
+        audio_cache: dict[str, StoredAudio],
+    ) -> tuple[
+        tuple[StoredImage, ...],
+        tuple[StoredVideo, ...],
+        tuple[StoredAudio, ...],
+    ]:
         """
         下载并保存单条消息中的媒体，同时复用跨消息下载缓存。
 
         Args:
             image_segments (Sequence[ImageSegmentInfo]): 当前分组的图片段。
             video_segments (Sequence[VideoSegmentInfo]): 当前分组的视频段。
+            audio_segments (Sequence[AudioSegmentInfo]): 当前分组的语音段。
             storage (Optional[ImageStorageManager]): 已初始化的媒体存储管理器。
             image_cache (dict[str, Optional[StoredImage]]): 图片 URL 下载缓存。
             video_cache (dict[str, StoredVideo]): 视频 URL 下载缓存。
+            audio_cache (dict[str, StoredAudio]): 语音 URL 下载缓存。
 
         Returns:
-            tuple[tuple[StoredImage, ...], tuple[StoredVideo, ...]]:
-                当前消息分组对应的已保存图片与视频。
+            tuple[tuple[StoredImage, ...], tuple[StoredVideo, ...],
+            tuple[StoredAudio, ...]]:
+                当前消息分组对应的已保存图片、视频与语音。
 
         Raises:
             AssertionError: 当媒体存在但存储管理器或 URL 缺失时抛出。
             RuntimeError: 当远程媒体下载失败时抛出。
         """
-        if image_segments or video_segments:
+        if image_segments or video_segments or audio_segments:
             assert isinstance(storage, ImageStorageManager), "图像存储管理器尚未配置"
         stored_images: list[StoredImage] = []
         stored_videos: list[StoredVideo] = []
+        stored_audios: list[StoredAudio] = []
         seen_image_tokens: set[str] = set()
         seen_video_tokens: set[str] = set()
+        seen_audio_tokens: set[str] = set()
 
         for segment in image_segments:
             assert segment.url, "当前仅支持通过 URL 获取的图片消息"
@@ -1708,7 +1838,18 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 )
             stored_videos.append(video_cache[token])
 
-        return tuple(stored_images), tuple(stored_videos)
+        for segment in audio_segments:
+            assert segment.url, "当前仅支持通过 URL 获取的语音消息"
+            token = segment.url
+            if token in seen_audio_tokens:
+                continue
+            seen_audio_tokens.add(token)
+            if token not in audio_cache:
+                assert storage is not None, "图像存储管理器尚未配置"
+                audio_cache[token] = storage.save_remote_audio(segment.url)
+            stored_audios.append(audio_cache[token])
+
+        return tuple(stored_images), tuple(stored_videos), tuple(stored_audios)
 
     @staticmethod
     def _format_video_part(video: StoredVideo, model_name: str) -> dict[str, object]:
@@ -1738,6 +1879,31 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 "duration_seconds": video.duration_seconds,
             }
         raise AssertionError("当前模型不支持视频输入，请切换到 Gemini 多模态模型。")
+
+    @staticmethod
+    def _format_audio_part(audio: StoredAudio) -> dict[str, object]:
+        """
+        将存储后的语音转换为模型消息片段。
+
+        Args:
+            audio (StoredAudio): 已保存的语音对象。
+
+        Returns:
+            dict[str, object]: 可直接传递给模型的语音片段。
+
+        Raises:
+            AssertionError: 当语音缺少必要信息时抛出。
+        """
+        assert isinstance(audio, StoredAudio), "audio 类型非法"
+        assert (
+            audio.base64_data and audio.mime_type and audio.duration_seconds > 0
+        ), "语音缺少必要信息"
+        return {
+            "type": "media",
+            "mime_type": audio.mime_type,
+            "data": base64.b64decode(audio.base64_data),
+            "duration_seconds": audio.duration_seconds,
+        }
 
     @staticmethod
     def _compose_group_message(
@@ -2187,6 +2353,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
             not parsed.text
             and not parsed.images
             and not parsed.videos
+            and not parsed.audios
             and not parsed.reply_message_ids
         ):
             author = _extract_sender_name(event)
@@ -2217,6 +2384,8 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 msg += "[With images]"
             if parsed.videos:
                 msg += "[With videos]"
+            if parsed.audios:
+                msg += "[With audios]"
             if parsed.reply_message_ids:
                 msg += "[With reply]"
             if not msg:
@@ -2259,12 +2428,15 @@ class QQBotHandler(BaseHTTPRequestHandler):
             if parsed.reply_message_ids:
                 msg += "[With reply]"
             if not msg:
-                if parsed.images and parsed.videos:
-                    msg += "[No text, with images and videos]"
-                elif parsed.images:
-                    msg += "[No text, with images]"
-                elif parsed.videos:
-                    msg += "[No text, with videos]"
+                media_labels: list[str] = []
+                if parsed.images:
+                    media_labels.append("images")
+                if parsed.videos:
+                    media_labels.append("videos")
+                if parsed.audios:
+                    media_labels.append("audios")
+                if media_labels:
+                    msg += "[No text, with " + " and ".join(media_labels) + "]"
                 else:
                     msg = "[No text]"
                 # 时间戳信息打印
@@ -2290,12 +2462,17 @@ class QQBotHandler(BaseHTTPRequestHandler):
             )
             user_text = parsed.text
             if not user_text:
-                if parsed.images and parsed.videos:
-                    user_text = "（用户未提供文本，仅包含图片和视频）"
-                elif parsed.images:
-                    user_text = "（用户未提供文本，仅包含图片）"
-                elif parsed.videos:
-                    user_text = "（用户未提供文本，仅包含视频）"
+                media_names: list[str] = []
+                if parsed.images:
+                    media_names.append("图片")
+                if parsed.videos:
+                    media_names.append("视频")
+                if parsed.audios:
+                    media_names.append("语音")
+                if media_names:
+                    user_text = (
+                        "（用户未提供文本，仅包含" + "、".join(media_names) + "）"
+                    )
                 elif reply_contents:
                     user_text = "（当前消息正文为空，仅引用其他消息）"
                 else:
@@ -2309,34 +2486,48 @@ class QQBotHandler(BaseHTTPRequestHandler):
             has_media = bool(
                 parsed.images
                 or parsed.videos
-                or any(content.images or content.videos for content in reply_contents)
+                or parsed.audios
+                or any(
+                    content.images or content.videos or content.audios
+                    for content in reply_contents
+                )
             )
             storage: Optional[ImageStorageManager] = None
             if has_media:
                 storage = self._require_image_storage()
             image_cache: dict[str, Optional[StoredImage]] = {}
             video_cache: dict[str, StoredVideo] = {}
-            current_images, current_videos = self._store_message_media(
-                parsed.images,
-                parsed.videos,
-                storage,
-                image_cache,
-                video_cache,
+            audio_cache: dict[str, StoredAudio] = {}
+            current_images, current_videos, current_audios = (
+                self._store_message_media(
+                    parsed.images,
+                    parsed.videos,
+                    parsed.audios,
+                    storage,
+                    image_cache,
+                    video_cache,
+                    audio_cache,
+                )
             )
             message_groups: list[PreparedMessageGroup] = [
                 PreparedMessageGroup(
                     context_text=current_context,
                     images=current_images,
                     videos=current_videos,
+                    audios=current_audios,
                 )
             ]
             for idx, reply_content in enumerate(reply_contents, 1):
-                reply_images, reply_videos = self._store_message_media(
-                    reply_content.images,
-                    reply_content.videos,
-                    storage,
-                    image_cache,
-                    video_cache,
+                reply_images, reply_videos, reply_audios = (
+                    self._store_message_media(
+                        reply_content.images,
+                        reply_content.videos,
+                        reply_content.audios,
+                        storage,
+                        image_cache,
+                        video_cache,
+                        audio_cache,
+                    )
                 )
                 message_groups.append(
                     PreparedMessageGroup(
@@ -2347,6 +2538,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
                         ),
                         images=reply_images,
                         videos=reply_videos,
+                        audios=reply_audios,
                         quoted_index=idx,
                     )
                 )
@@ -3744,7 +3936,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
                     f"当前线程消息条数={estimate.message_count}，"
                     f"估算 tokens={estimate.total_tokens}\n"
                     f"文本={estimate.text_tokens}，图片={estimate.image_tokens}，"
-                    f"视频={estimate.video_tokens}"
+                    f"视频={estimate.video_tokens}，语音={estimate.audio_tokens}"
                 )
             except AssertionError as e:
                 msg = f"统计失败：{e}"

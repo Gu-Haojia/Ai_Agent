@@ -1,7 +1,7 @@
 """
 群聊上下文 token 估算模块。
 
-统一统计消息文本、图片和视频的额定 token，供上下文压缩与 `/token`
+统一统计消息文本、图片、视频和语音的额定 token，供上下文压缩与 `/token`
 命令复用。显示格式化与摘要 Prompt 构造不属于本模块职责。
 """
 
@@ -32,9 +32,12 @@ class ContextTokenEstimate:
         message_text_tokens (int): 当前消息列表的文本 token 数。
         image_tokens (int): 当前消息列表的图片额定 token 数。
         video_tokens (int): 当前消息列表的视频额定 token 数。
+        audio_tokens (int): 当前消息列表的语音额定 token 数。
         image_count (int): 当前消息列表中的图片数量。
         video_count (int): 当前消息列表中的视频数量。
+        audio_count (int): 当前消息列表中的语音数量。
         video_seconds (int): 按每个视频向上取整后的累计计费秒数。
+        audio_seconds (int): 按每条语音向上取整后的累计计费秒数。
         message_count (int): 当前消息数量。
 
     Returns:
@@ -48,9 +51,12 @@ class ContextTokenEstimate:
     message_text_tokens: int = 0
     image_tokens: int = 0
     video_tokens: int = 0
+    audio_tokens: int = 0
     image_count: int = 0
     video_count: int = 0
+    audio_count: int = 0
     video_seconds: int = 0
+    audio_seconds: int = 0
     message_count: int = 0
 
     def __post_init__(self) -> None:
@@ -68,9 +74,12 @@ class ContextTokenEstimate:
             self.message_text_tokens,
             self.image_tokens,
             self.video_tokens,
+            self.audio_tokens,
             self.image_count,
             self.video_count,
+            self.audio_count,
             self.video_seconds,
+            self.audio_seconds,
             self.message_count,
         )
         assert all(value >= 0 for value in values), "token 估算值不能为负数"
@@ -91,7 +100,7 @@ class ContextTokenEstimate:
     @property
     def total_tokens(self) -> int:
         """
-        返回文本、图片和视频的 token 总数。
+        返回文本、图片、视频和语音的 token 总数。
 
         Returns:
             int: 上下文 token 总数。
@@ -99,7 +108,12 @@ class ContextTokenEstimate:
         Raises:
             None: 本属性不主动抛出异常。
         """
-        return self.text_tokens + self.image_tokens + self.video_tokens
+        return (
+            self.text_tokens
+            + self.image_tokens
+            + self.video_tokens
+            + self.audio_tokens
+        )
 
 
 class ContextTokenCounter:
@@ -120,6 +134,7 @@ class ContextTokenCounter:
 
     IMAGE_TOKENS_PER_ITEM: int = 1120
     VIDEO_TOKENS_PER_SECOND: int = 102
+    AUDIO_TOKENS_PER_SECOND: int = 32
 
     def __init__(
         self,
@@ -233,15 +248,18 @@ class ContextTokenCounter:
             message_text_tokens=message_estimate.message_text_tokens,
             image_tokens=message_estimate.image_tokens,
             video_tokens=message_estimate.video_tokens,
+            audio_tokens=message_estimate.audio_tokens,
             image_count=message_estimate.image_count,
             video_count=message_estimate.video_count,
+            audio_count=message_estimate.audio_count,
             video_seconds=message_estimate.video_seconds,
+            audio_seconds=message_estimate.audio_seconds,
             message_count=message_estimate.message_count,
         )
 
     def count_messages(self, messages: Sequence[Any]) -> ContextTokenEstimate:
         """
-        统计消息列表的文本、图片和视频 token。
+        统计消息列表的文本、图片、视频和语音 token。
 
         Args:
             messages (Sequence[Any]): 当前 LangChain 消息序列。
@@ -250,29 +268,40 @@ class ContextTokenCounter:
             ContextTokenEstimate: 消息列表 token 明细。
 
         Raises:
-            AssertionError: 当消息序列或视频时长非法时抛出。
+            AssertionError: 当消息序列或媒体时长非法时抛出。
         """
         assert isinstance(messages, Sequence), "messages 必须是序列"
         message_list = list(messages)
         text = "\n".join(self.message_to_text(message) for message in message_list)
         image_count = 0
         video_count = 0
+        audio_count = 0
         video_seconds = 0
+        audio_seconds = 0
         for message in message_list:
             content = getattr(message, "content", None)
-            current_images, current_videos, current_seconds = self.count_content_media(
-                content
-            )
+            (
+                current_images,
+                current_videos,
+                current_video_seconds,
+                current_audios,
+                current_audio_seconds,
+            ) = self.count_content_media(content)
             image_count += current_images
             video_count += current_videos
-            video_seconds += current_seconds
+            video_seconds += current_video_seconds
+            audio_count += current_audios
+            audio_seconds += current_audio_seconds
         return ContextTokenEstimate(
             message_text_tokens=self.count_text_tokens(text),
             image_tokens=image_count * self.IMAGE_TOKENS_PER_ITEM,
             video_tokens=video_seconds * self.VIDEO_TOKENS_PER_SECOND,
+            audio_tokens=audio_seconds * self.AUDIO_TOKENS_PER_SECOND,
             image_count=image_count,
             video_count=video_count,
+            audio_count=audio_count,
             video_seconds=video_seconds,
+            audio_seconds=audio_seconds,
             message_count=len(message_list),
         )
 
@@ -386,35 +415,48 @@ class ContextTokenCounter:
             return ""
         return self._sanitize_text(str(block))
 
-    def count_content_media(self, content: Any) -> tuple[int, int, int]:
+    def count_content_media(self, content: Any) -> tuple[int, int, int, int, int]:
         """
-        统计 content 中的图片数、视频数和视频计费秒数。
+        统计 content 中的图片、视频与语音用量。
 
         Args:
             content (Any): LangChain 消息 content 字段。
 
         Returns:
-            tuple[int, int, int]: 图片数、视频数、视频计费秒数。
+            tuple[int, int, int, int, int]: 图片数、视频数、视频计费秒数、
+                语音数与语音计费秒数。
 
         Raises:
-            AssertionError: 当视频缺少合法时长或媒体类型不受支持时抛出。
+            AssertionError: 当媒体缺少合法时长或类型不受支持时抛出。
         """
         if not isinstance(content, Sequence) or isinstance(
             content, (str, bytes, bytearray)
         ):
-            return (0, 0, 0)
+            return (0, 0, 0, 0, 0)
         image_count = 0
         video_count = 0
         video_seconds = 0
+        audio_count = 0
+        audio_seconds = 0
         for block in content:
-            images, videos, seconds = self.count_block_media(block)
+            images, videos, current_video_seconds, audios, current_audio_seconds = (
+                self.count_block_media(block)
+            )
             image_count += images
             video_count += videos
-            video_seconds += seconds
-        return (image_count, video_count, video_seconds)
+            video_seconds += current_video_seconds
+            audio_count += audios
+            audio_seconds += current_audio_seconds
+        return (
+            image_count,
+            video_count,
+            video_seconds,
+            audio_count,
+            audio_seconds,
+        )
 
     @staticmethod
-    def count_block_media(block: Any) -> tuple[int, int, int]:
+    def count_block_media(block: Any) -> tuple[int, int, int, int, int]:
         """
         统计单个内容块的媒体额定量。
 
@@ -422,24 +464,34 @@ class ContextTokenCounter:
             block (Any): 多模态内容块。
 
         Returns:
-            tuple[int, int, int]: 图片数、视频数、视频计费秒数。
+            tuple[int, int, int, int, int]: 图片数、视频数、视频计费秒数、
+                语音数与语音计费秒数。
 
         Raises:
-            AssertionError: 当视频缺少合法时长或媒体类型不受支持时抛出。
+            AssertionError: 当媒体缺少合法时长或类型不受支持时抛出。
         """
         if not isinstance(block, dict):
             block_type = str(getattr(block, "type", "") or "").lower()
             if block_type == "image_url":
-                return (1, 0, 0)
-            return (0, 0, 0)
+                return (1, 0, 0, 0, 0)
+            return (0, 0, 0, 0, 0)
         block_type = str(block.get("type") or "").lower()
         if block_type == "image_url":
-            return (1, 0, 0)
+            return (1, 0, 0, 0, 0)
         if block_type not in {"media", "video"}:
-            return (0, 0, 0)
+            return (0, 0, 0, 0, 0)
         mime_type = str(block.get("mime_type") or "").lower()
         if mime_type.startswith("image/"):
-            return (1, 0, 0)
+            return (1, 0, 0, 0, 0)
+        if mime_type.startswith("audio/"):
+            duration = block.get("duration_seconds")
+            assert isinstance(duration, (int, float)) and not isinstance(
+                duration, bool
+            ), "语音消息缺少 duration_seconds"
+            assert math.isfinite(float(duration)) and float(duration) > 0, (
+                "语音时长必须为正数"
+            )
+            return (0, 0, 0, 1, math.ceil(float(duration)))
         assert block_type == "video" or mime_type.startswith(
             "video/"
         ), f"不支持的媒体 token 统计类型: {mime_type or 'unknown'}"
@@ -450,4 +502,4 @@ class ContextTokenCounter:
         assert math.isfinite(float(duration)) and float(duration) > 0, (
             "视频时长必须为正数"
         )
-        return (0, 1, math.ceil(float(duration)))
+        return (0, 1, math.ceil(float(duration)), 0, 0)
