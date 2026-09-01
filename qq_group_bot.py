@@ -1766,8 +1766,8 @@ class QQBotHandler(BaseHTTPRequestHandler):
             )
         return content
 
-    @staticmethod
     def _store_message_media(
+        self,
         image_segments: Sequence[ImageSegmentInfo],
         video_segments: Sequence[VideoSegmentInfo],
         audio_segments: Sequence[AudioSegmentInfo],
@@ -1790,7 +1790,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
             storage (Optional[ImageStorageManager]): 已初始化的媒体存储管理器。
             image_cache (dict[str, Optional[StoredImage]]): 图片 URL 下载缓存。
             video_cache (dict[str, StoredVideo]): 视频 URL 下载缓存。
-            audio_cache (dict[str, StoredAudio]): 语音 URL 下载缓存。
+            audio_cache (dict[str, StoredAudio]): NapCat 语音文件缓存。
 
         Returns:
             tuple[tuple[StoredImage, ...], tuple[StoredVideo, ...],
@@ -1799,7 +1799,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
 
         Raises:
             AssertionError: 当媒体存在但存储管理器或 URL 缺失时抛出。
-            RuntimeError: 当远程媒体下载失败时抛出。
+            RuntimeError: 当远程媒体下载或 NapCat action 失败时抛出。
         """
         if image_segments or video_segments or audio_segments:
             assert isinstance(storage, ImageStorageManager), "图像存储管理器尚未配置"
@@ -1839,14 +1839,24 @@ class QQBotHandler(BaseHTTPRequestHandler):
             stored_videos.append(video_cache[token])
 
         for segment in audio_segments:
-            assert segment.url, "当前仅支持通过 URL 获取的语音消息"
-            token = segment.url
+            assert segment.file_id, "语音消息缺少 NapCat 文件标识"
+            token = segment.file_id
             if token in seen_audio_tokens:
                 continue
             seen_audio_tokens.add(token)
             if token not in audio_cache:
                 assert storage is not None, "图像存储管理器尚未配置"
-                audio_cache[token] = storage.save_remote_audio(segment.url)
+                response = _call_onebot_action(
+                    self.bot_cfg.api_base,
+                    "get_record",
+                    {"file": segment.file_id, "out_format": "mp3"},
+                    self.bot_cfg.access_token,
+                )
+                data = response["data"]
+                assert isinstance(data, dict), "get_record 返回数据必须为对象"
+                base64_data = data["base64"]
+                assert isinstance(base64_data, str), "get_record 未返回语音 Base64"
+                audio_cache[token] = storage.save_base64_audio(base64_data)
             stored_audios.append(audio_cache[token])
 
         return tuple(stored_images), tuple(stored_videos), tuple(stored_audios)

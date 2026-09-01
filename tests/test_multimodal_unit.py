@@ -14,7 +14,10 @@ from image_storage import ImageStorageManager, StoredAudio, StoredImage, StoredV
 from PIL import Image
 
 try:
+    import qq_group_bot
     from qq_group_bot import (
+        AudioSegmentInfo,
+        BotConfig,
         PreparedMessageGroup,
         QQBotHandler,
         _extract_cq_images,
@@ -24,8 +27,11 @@ try:
 
     _QQ_MODULE_AVAILABLE = True
 except ModuleNotFoundError:
+    qq_group_bot = None
     PreparedMessageGroup = None
     QQBotHandler = None
+    AudioSegmentInfo = None
+    BotConfig = None
     _extract_cq_images = None
     _extract_cq_records = None
     _parse_message_and_at = None
@@ -990,9 +996,9 @@ class MultimodalUnitTest(unittest.TestCase):
         self.assertEqual(command[0], "ffprobe")
         self.assertEqual(command[-1], str(video_path))
 
-    def test_save_remote_audio_converts_and_records_duration(self) -> None:
+    def test_save_base64_audio_records_duration(self) -> None:
         """
-        远程语音应转换为 MP3 并记录时长。
+        NapCat 返回的 MP3 Base64 语音应保存并记录时长。
 
         Returns:
             None: 测试无返回值。
@@ -1000,36 +1006,108 @@ class MultimodalUnitTest(unittest.TestCase):
         Raises:
             None: 断言失败时由 unittest 报告。
         """
-        response = mock.Mock()
-        response.status_code = 200
-        response.iter_content.return_value = [b"source-audio"]
-        completed = SimpleNamespace(
-            returncode=0,
-            stdout=b"converted-mp3",
-            stderr=b"",
+        mp3_data = b"converted-mp3"
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            manager = ImageStorageManager(tmp_dir)
+            with mock.patch.object(
+                manager, "_probe_media_duration_seconds", return_value=3.5
+            ):
+                stored = manager.save_base64_audio(
+                    base64.b64encode(mp3_data).decode("ascii")
+                )
+
+        self.assertEqual(stored.mime_type, "audio/mpeg")
+        self.assertEqual(stored.duration_seconds, 3.5)
+        self.assertEqual(base64.b64decode(stored.base64_data), mp3_data)
+        self.assertEqual(stored.path.suffix, ".mp3")
+
+    @unittest.skipUnless(
+        _QQ_MODULE_AVAILABLE,
+        "缺少 langgraph 依赖，跳过 QQ 语音存储测试",
+    )
+    def test_repeated_audio_gets_record_by_file_id(self) -> None:
+        """
+        相同语音先返回 HTTPS、再返回本地路径时均应通过 get_record 获取。
+
+        Returns:
+            None: 测试无返回值。
+
+        Raises:
+            None: 断言失败时由 unittest 报告。
+        """
+        mp3_data = b"normalized-mp3"
+        response = {
+            "status": "ok",
+            "retcode": 0,
+            "data": {"base64": base64.b64encode(mp3_data).decode("ascii")},
+        }
+        handler = object.__new__(QQBotHandler)
+        handler.bot_cfg = BotConfig(
+            api_base="http://napcat:3000",
+            access_token="secret",
+        )
+        urls = (
+            "https://example.com/voice.amr",
+            "/app/.config/QQ/NapCat/temp/voice.amr",
         )
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             manager = ImageStorageManager(tmp_dir)
             with (
                 mock.patch.object(
-                    image_storage.requests, "get", return_value=response
-                ),
+                    qq_group_bot,
+                    "_call_onebot_action",
+                    return_value=response,
+                ) as action_mock,
                 mock.patch.object(
-                    image_storage.subprocess, "run", return_value=completed
-                ) as run_mock,
-                mock.patch.object(
-                    manager, "_probe_media_duration_seconds", return_value=3.5
+                    manager,
+                    "_probe_media_duration_seconds",
+                    return_value=2.5,
                 ),
             ):
-                stored = manager.save_remote_audio("https://example.com/voice.amr")
+                stored_audios = []
+                for url in urls:
+                    segment = AudioSegmentInfo(
+                        url=url,
+                        file_id="voice-file-id",
+                        filename="voice.amr",
+                    )
+                    _, _, audios = handler._store_message_media(
+                        (),
+                        (),
+                        (segment,),
+                        manager,
+                        {},
+                        {},
+                        {},
+                    )
+                    stored_audios.extend(audios)
 
-        self.assertEqual(stored.mime_type, "audio/mpeg")
-        self.assertEqual(stored.duration_seconds, 3.5)
-        self.assertEqual(base64.b64decode(stored.base64_data), b"converted-mp3")
-        self.assertEqual(stored.path.suffix, ".mp3")
-        self.assertEqual(run_mock.call_args.kwargs["input"], b"source-audio")
-        response.close.assert_called_once_with()
+        self.assertEqual(len(stored_audios), 2)
+        self.assertTrue(
+            all(
+                base64.b64decode(audio.base64_data) == mp3_data
+                for audio in stored_audios
+            )
+        )
+        self.assertEqual(action_mock.call_count, 2)
+        action_mock.assert_has_calls(
+            [
+                mock.call(
+                    "http://napcat:3000",
+                    "get_record",
+                    {"file": "voice-file-id", "out_format": "mp3"},
+                    "secret",
+                ),
+                mock.call(
+                    "http://napcat:3000",
+                    "get_record",
+                    {"file": "voice-file-id", "out_format": "mp3"},
+                    "secret",
+                ),
+            ]
+        )
 
     def test_is_generated_path_handles_generated_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

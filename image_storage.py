@@ -209,8 +209,6 @@ class ImageStorageManager:
         }
         self._video_http_headers = dict(self._http_headers)
         self._video_http_headers["Accept"] = "video/mp4,video/*;q=0.9,*/*;q=0.1"
-        self._audio_http_headers = dict(self._http_headers)
-        self._audio_http_headers["Accept"] = "audio/*;q=0.9,*/*;q=0.1"
 
     @property
     def generated_dir(self) -> Path:
@@ -722,74 +720,24 @@ class ImageStorageManager:
             duration_seconds=duration_seconds,
         )
 
-    def save_remote_audio(self, url: str) -> StoredAudio:
+    def save_base64_audio(self, base64_data: str) -> StoredAudio:
         """
-        下载远程语音并转换为 MP3 保存。
+        保存 NapCat 已转换为 MP3 的 Base64 语音。
 
         Args:
-            url (str): 语音下载地址，仅支持 HTTP(S)。
+            base64_data (str): MP3 语音的 Base64 内容。
 
         Returns:
             StoredAudio: 本地化后的语音信息。
 
         Raises:
-            AssertionError: 当 URL 无效、音频转换失败或体积超限时抛出。
-            RuntimeError: 当网络请求失败或响应为空时抛出。
+            AssertionError: 当语音内容为空或体积超限时抛出。
         """
-        assert url and url.startswith("http"), "仅支持通过 HTTP(S) 下载语音"
-        response = requests.get(
-            url,
-            stream=True,
-            timeout=30,
-            headers=self._audio_http_headers,
-        )
-        if response.status_code != 200:
-            raise RuntimeError(f"下载语音失败：HTTP {response.status_code}")
-        buffer = BytesIO()
-        total = 0
-        try:
-            for chunk in response.iter_content(chunk_size=256 * 1024):
-                if not chunk:
-                    continue
-                total += len(chunk)
-                assert total <= self._max_audio_bytes, (
-                    f"语音体积超过 {self._max_audio_bytes // (1024 * 1024)}MB，"
-                    "无法内联分析。"
-                )
-                buffer.write(chunk)
-        finally:
-            response.close()
-        source_data = buffer.getvalue()
-        if not source_data:
-            raise RuntimeError("语音内容为空")
-
-        result = subprocess.run(
-            [
-                "ffmpeg",
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-i",
-                "pipe:0",
-                "-vn",
-                "-codec:a",
-                "libmp3lame",
-                "-b:a",
-                "64k",
-                "-f",
-                "mp3",
-                "pipe:1",
-            ],
-            input=source_data,
-            capture_output=True,
-            check=False,
-        )
-        error_text = result.stderr.decode("utf-8", errors="replace").strip()
-        assert result.returncode == 0, f"ffmpeg 转换语音失败: {error_text}"
-        mp3_data = result.stdout
-        assert mp3_data, "ffmpeg 未输出 MP3 数据"
+        assert base64_data, "语音 Base64 内容不能为空"
+        mp3_data = base64.b64decode(base64_data)
+        assert mp3_data, "语音内容为空"
         assert len(mp3_data) <= self._max_audio_bytes, (
-            f"转换后语音体积超过 {self._max_audio_bytes // (1024 * 1024)}MB，"
+            f"语音体积超过 {self._max_audio_bytes // (1024 * 1024)}MB，"
             "无法内联分析。"
         )
 
