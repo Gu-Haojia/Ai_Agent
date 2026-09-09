@@ -222,6 +222,7 @@ class YtDlpDownloaderTest(unittest.TestCase):
         """确认 /imageprovider 默认在 Gemini 与 OpenAI 之间循环。"""
         old_provider = os.environ.pop("IMAGE_PROVIDER", None)
         old_next_provider = os.environ.pop("NEXT_IMAGE_PROVIDER", None)
+        os.environ.pop("GEMINI_IMAGE_MODEL", None)
         try:
             handler = object.__new__(QQBotHandler)
             handler.bot_cfg = SimpleNamespace(
@@ -251,6 +252,9 @@ class YtDlpDownloaderTest(unittest.TestCase):
             self.assertEqual(os.environ.get("IMAGE_PROVIDER"), "gemini")
             send_mock.assert_called_once()
             self.assertIn("openai -> gemini", send_mock.call_args.args[2])
+            self.assertIn(
+                "当前生图模型：gemini-2.5-flash-image。", send_mock.call_args.args[2]
+            )
         finally:
             if old_provider is None:
                 os.environ.pop("IMAGE_PROVIDER", None)

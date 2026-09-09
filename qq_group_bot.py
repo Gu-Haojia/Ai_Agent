@@ -3575,6 +3575,11 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 msg = f"生图服务商已切换：{current_provider} -> {next_provider}。"
                 if next_provider == "openai":
                     msg += f"当前生图模型：{ImageStorageManager.DEFAULT_OPENAI_IMAGE_MODEL}。"
+                elif next_provider == "gemini":
+                    model_name = os.environ.get(
+                        "GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image"
+                    )
+                    msg += f"当前生图模型：{model_name}。"
             except AssertionError as e:
                 msg = f"切换失败：{e}"
             _send_group_msg(

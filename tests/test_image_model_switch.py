@@ -116,6 +116,11 @@ class ImageModelSwitchTest(unittest.TestCase):
                             image=reference_path.resolve(),
                             prompt="edit the cat",
                         )
+                    else:
+                        self.assertIn(
+                            "当前生图模型：gemini-3.1-flash-image。",
+                            send_mock.call_args.args[2],
+                        )
 
     def test_image_uses_internal_state_without_creating_environment_variable(self) -> None:
         """
