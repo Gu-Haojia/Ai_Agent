@@ -3530,17 +3530,13 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 )
                 if provider == "openai":
                     candidates = ImageStorageManager.OPENAI_IMAGE_MODELS
-                    model_env = "IMAGE_MODEL_NAME"
-                    current_model = os.environ.get(
-                        model_env, ImageStorageManager.DEFAULT_OPENAI_IMAGE_MODEL
-                    )
+                    current_model = self._require_image_storage().openai_image_model
                 else:
                     candidates = (
                         "gemini-3-pro-image",
                         "gemini-3.1-flash-image",
                     )
-                    model_env = "GEMINI_IMAGE_MODEL"
-                    current_model = os.environ.get(model_env) or candidates[1]
+                    current_model = os.environ.get("GEMINI_IMAGE_MODEL") or candidates[1]
                 current_model = current_model.strip()
                 assert (
                     current_model in candidates
@@ -3548,7 +3544,10 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 next_model = (
                     candidates[1] if current_model == candidates[0] else candidates[0]
                 )
-                os.environ[model_env] = next_model
+                if provider == "openai":
+                    self._require_image_storage().set_openai_image_model(next_model)
+                else:
+                    os.environ["GEMINI_IMAGE_MODEL"] = next_model
                 msg = f"生图模型已切换（{provider}）：{current_model} -> {next_model}。"
             except AssertionError as e:
                 msg = f"切换失败：{e}"
@@ -3567,14 +3566,17 @@ class QQBotHandler(BaseHTTPRequestHandler):
             next_provider = (
                 configured_provider if current_provider == "gemini" else "gemini"
             )
-            if next_provider == "openai":
-                os.environ["IMAGE_MODEL_NAME"] = (
-                    ImageStorageManager.DEFAULT_OPENAI_IMAGE_MODEL
-                )
-            os.environ["IMAGE_PROVIDER"] = next_provider
-            msg = f"生图服务商已切换：{current_provider} -> {next_provider}。"
-            if next_provider == "openai":
-                msg += f"当前生图模型：{ImageStorageManager.DEFAULT_OPENAI_IMAGE_MODEL}。"
+            try:
+                if next_provider == "openai":
+                    self._require_image_storage().set_openai_image_model(
+                        ImageStorageManager.DEFAULT_OPENAI_IMAGE_MODEL
+                    )
+                os.environ["IMAGE_PROVIDER"] = next_provider
+                msg = f"生图服务商已切换：{current_provider} -> {next_provider}。"
+                if next_provider == "openai":
+                    msg += f"当前生图模型：{ImageStorageManager.DEFAULT_OPENAI_IMAGE_MODEL}。"
+            except AssertionError as e:
+                msg = f"切换失败：{e}"
             _send_group_msg(
                 self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
             )

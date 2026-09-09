@@ -153,18 +153,18 @@ class ImageStorageManager:
 
     def __init__(self, base_dir: str, image_model: Optional[str] = None) -> None:
         """
-        初始化媒体存储目录，并保存可选的 OpenAI 模型覆盖配置。
+        初始化媒体存储目录和实例内的 OpenAI 生图模型状态。
 
         Args:
             base_dir (str): 媒体存储根目录。
-            image_model (Optional[str]): 显式指定的 OpenAI 模型；未指定时，
-                每次请求读取 IMAGE_MODEL_NAME，未配置则使用 Flare。
+            image_model (Optional[str]): 实例初始模型，仅支持 Flare 和 Sunburst；
+                未指定时使用 Flare。
 
         Returns:
             None: 初始化方法无返回值。
 
         Raises:
-            AssertionError: 当存储根目录为空时抛出。
+            AssertionError: 当存储根目录为空或初始模型不受支持时抛出。
             OSError: 当存储目录创建失败时抛出。
         """
         assert isinstance(base_dir, str) and base_dir.strip(), "base_dir 不能为空"
@@ -175,8 +175,10 @@ class ImageStorageManager:
         self._incoming_dir.mkdir(parents=True, exist_ok=True)
         self._incoming_video_dir.mkdir(parents=True, exist_ok=True)
         self._generated_dir.mkdir(parents=True, exist_ok=True)
-        self._image_model = image_model
         self._lock = threading.Lock()
+        self.set_openai_image_model(
+            self.DEFAULT_OPENAI_IMAGE_MODEL if image_model is None else image_model
+        )
         self._max_video_bytes = 32 * 1024 * 1024  # 32MB 上限，避免超大视频内联
         self._http_headers = {
             "User-Agent": "Mozilla/5.0",
@@ -185,6 +187,42 @@ class ImageStorageManager:
         }
         self._video_http_headers = dict(self._http_headers)
         self._video_http_headers["Accept"] = "video/mp4,video/*;q=0.9,*/*;q=0.1"
+
+    @property
+    def openai_image_model(self) -> str:
+        """
+        获取当前实例选择的 OpenAI 生图模型。
+
+        Returns:
+            str: 当前生图模型的 API 标识。
+
+        Raises:
+            None: 无主动抛出的异常。
+        """
+        with self._lock:
+            return self._image_model
+
+    def set_openai_image_model(self, model: str) -> None:
+        """
+        更新实例内的 OpenAI 模型，供后续生成和编辑请求使用。
+
+        Args:
+            model (str): Flare 或 Sunburst 的 API 模型标识。
+
+        Returns:
+            None: 更新运行时状态，无返回值。
+
+        Raises:
+            AssertionError: 当模型为空或不在候选列表时抛出。
+        """
+        assert isinstance(model, str) and model.strip(), "OpenAI 生图模型名称不能为空"
+        normalized = model.strip()
+        assert normalized in self.OPENAI_IMAGE_MODELS, (
+            f"当前模型 {normalized} 不在 OpenAI 可切换列表："
+            f"{', '.join(self.OPENAI_IMAGE_MODELS)}。"
+        )
+        with self._lock:
+            self._image_model = normalized
 
     @property
     def generated_dir(self) -> Path:
@@ -891,7 +929,7 @@ class ImageStorageManager:
         """
         使用 OpenAI Images API 生成或参考图编辑图像。
 
-        未显式指定实例模型时，每次请求读取环境中的模型，使命令切换立即生效。
+        每次请求读取实例内的模型选择，使命令切换立即生效。
 
         Args:
             prompt (str): 图像描述。
@@ -904,18 +942,14 @@ class ImageStorageManager:
                 生成图像的 Base64 数据位于 ``response.data[0].b64_json``。
 
         Raises:
-            AssertionError: 当提示或模型名称为空时抛出。
+            AssertionError: 当提示为空时抛出。
             AssertionError: 当参考图路径非法或不存在时抛出。
         """
         from openai import OpenAI
 
         assert isinstance(prompt, str) and prompt.strip(), "prompt 不能为空"
         prompt_text = prompt.strip()
-        model = self._image_model
-        if model is None:
-            model = os.environ.get("IMAGE_MODEL_NAME", self.DEFAULT_OPENAI_IMAGE_MODEL)
-        assert isinstance(model, str) and model.strip(), "OpenAI 生图模型名称不能为空"
-        model = model.strip()
+        model = self.openai_image_model
         client = OpenAI()
         if reference_image is None:
             return client.images.generate(

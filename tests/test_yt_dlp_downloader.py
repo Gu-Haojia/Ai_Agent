@@ -230,7 +230,13 @@ class YtDlpDownloaderTest(unittest.TestCase):
                 cmd_allowed_users=(),
             )
 
-            with mock.patch("qq_group_bot._send_group_msg") as send_mock:
+            with (
+                tempfile.TemporaryDirectory() as tmp_dir,
+                mock.patch.object(
+                    QQBotHandler, "image_storage", ImageStorageManager(tmp_dir)
+                ),
+                mock.patch("qq_group_bot._send_group_msg") as send_mock,
+            ):
                 handled = handler._handle_commands(10001, 20002, "/imageprovider")
 
             self.assertTrue(handled)
