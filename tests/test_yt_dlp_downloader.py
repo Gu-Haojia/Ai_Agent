@@ -217,6 +217,7 @@ class YtDlpDownloaderTest(unittest.TestCase):
         )
 
     @unittest.skipUnless(_QQ_MODULE_AVAILABLE, "缺少 langgraph 依赖，跳过 QQ 命令测试")
+    @mock.patch.dict(os.environ)
     def test_handle_commands_imageprovider_toggles_env(self) -> None:
         """确认 /imageprovider 默认在 Gemini 与 OpenAI 之间循环。"""
         old_provider = os.environ.pop("IMAGE_PROVIDER", None)

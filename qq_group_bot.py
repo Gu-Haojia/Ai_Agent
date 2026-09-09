@@ -3125,8 +3125,8 @@ class QQBotHandler(BaseHTTPRequestHandler):
         - /power              → 开关非命令消息输入
         - /searchlimit [数量] → 查看或修改单轮 Tavily 搜索提醒阈值
         - /location [地点]    → 查看或修改早晚简报地点
-        - /image              → 在 Gemini 生图模型之间切换
-        - /imageprovider      → 在 Gemini 与环境指定的生图服务商之间切换
+        - /image              → 切换当前服务商的生图模型（Gemini 或 OpenAI）
+        - /imageprovider      → 切换生图服务商，切入 OpenAI 时使用 Flare
         - /xtrans             → 循环切换 XMonitor 推文翻译模式
         - /xlink <url>        → 解析指定 X 推文链接并按当前翻译模式发图
         - /clear              → 为当前群的当前 Prompt 新建线程
@@ -3196,8 +3196,8 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 "7) /forget - 清空消息上下文（/forget hard 同时清空摘要）\n"
                 "8) /rmdata - 清除长期记忆\n"
                 "9) /boost - 切换后端可用模型\n"
-                "10) /image - 切换生图模型\n"
-                "11) /imageprovider - 切换生图服务商\n"
+                "10) /image - 切换当前服务商的生图模型（OpenAI：Flare / Sunburst）\n"
+                "11) /imageprovider - 切换生图服务商（切入 OpenAI 时使用 Flare）\n"
                 "12) /apicheck - 检测当前模型 API 是否可用\n"
                 "13) /merusearch \"关键词\" [limit] - 查询 Meru 最新在售\n"
                 "14) /meruwatch \"关键词\" <间隔秒> [价格阈值] - 新品监控 (/meruwatch off 停止)\n"
@@ -3523,24 +3523,35 @@ class QQBotHandler(BaseHTTPRequestHandler):
             return True
 
         if cmd == "/image" and len(parts) == 1:
-            candidates = (
-                "gemini-3-pro-image",
-                "gemini-3.1-flash-image",
-            )
-            current_model = os.environ.get("GEMINI_IMAGE_MODEL") or candidates[1]
+            provider = (os.environ.get("IMAGE_PROVIDER") or "gemini").strip().lower()
             try:
+                assert provider in {"gemini", "openai"}, (
+                    f"当前服务商 {provider} 不支持切换生图模型。"
+                )
+                if provider == "openai":
+                    candidates = ImageStorageManager.OPENAI_IMAGE_MODELS
+                    model_env = "IMAGE_MODEL_NAME"
+                    current_model = os.environ.get(
+                        model_env, ImageStorageManager.DEFAULT_OPENAI_IMAGE_MODEL
+                    )
+                else:
+                    candidates = (
+                        "gemini-3-pro-image",
+                        "gemini-3.1-flash-image",
+                    )
+                    model_env = "GEMINI_IMAGE_MODEL"
+                    current_model = os.environ.get(model_env) or candidates[1]
+                current_model = current_model.strip()
                 assert (
                     current_model in candidates
-                ), f"当前模型 {current_model} 不在可切换列表，请先设置为 Gemini 生图模型。"
+                ), f"当前模型 {current_model} 不在 {provider} 可切换列表：{', '.join(candidates)}。"
                 next_model = (
                     candidates[1] if current_model == candidates[0] else candidates[0]
                 )
-                os.environ["GEMINI_IMAGE_MODEL"] = next_model
-                msg = f"生图模型已切换：{current_model} -> {next_model}。"
+                os.environ[model_env] = next_model
+                msg = f"生图模型已切换（{provider}）：{current_model} -> {next_model}。"
             except AssertionError as e:
                 msg = f"切换失败：{e}"
-            except Exception as e:
-                msg = f"切换失败（内部错误）：{e}"
             _send_group_msg(
                 self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
             )
@@ -3556,8 +3567,14 @@ class QQBotHandler(BaseHTTPRequestHandler):
             next_provider = (
                 configured_provider if current_provider == "gemini" else "gemini"
             )
+            if next_provider == "openai":
+                os.environ["IMAGE_MODEL_NAME"] = (
+                    ImageStorageManager.DEFAULT_OPENAI_IMAGE_MODEL
+                )
             os.environ["IMAGE_PROVIDER"] = next_provider
             msg = f"生图服务商已切换：{current_provider} -> {next_provider}。"
+            if next_provider == "openai":
+                msg += f"当前生图模型：{ImageStorageManager.DEFAULT_OPENAI_IMAGE_MODEL}。"
             _send_group_msg(
                 self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
             )

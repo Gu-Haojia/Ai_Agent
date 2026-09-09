@@ -145,7 +145,28 @@ class ImageStorageManager:
     - OpenAI Images API 返回官方响应对象；必要时可通过保存方法落盘。
     """
 
+    OPENAI_IMAGE_MODELS: tuple[str, str] = (
+        "gpt-image-2.5-flare",
+        "gpt-image-2.5-sunburst",
+    )
+    DEFAULT_OPENAI_IMAGE_MODEL: str = OPENAI_IMAGE_MODELS[0]
+
     def __init__(self, base_dir: str, image_model: Optional[str] = None) -> None:
+        """
+        初始化媒体存储目录，并保存可选的 OpenAI 模型覆盖配置。
+
+        Args:
+            base_dir (str): 媒体存储根目录。
+            image_model (Optional[str]): 显式指定的 OpenAI 模型；未指定时，
+                每次请求读取 IMAGE_MODEL_NAME，未配置则使用 Flare。
+
+        Returns:
+            None: 初始化方法无返回值。
+
+        Raises:
+            AssertionError: 当存储根目录为空时抛出。
+            OSError: 当存储目录创建失败时抛出。
+        """
         assert isinstance(base_dir, str) and base_dir.strip(), "base_dir 不能为空"
         self._base_dir = Path(base_dir).expanduser().resolve()
         self._incoming_dir = self._base_dir / "incoming"
@@ -154,7 +175,7 @@ class ImageStorageManager:
         self._incoming_dir.mkdir(parents=True, exist_ok=True)
         self._incoming_video_dir.mkdir(parents=True, exist_ok=True)
         self._generated_dir.mkdir(parents=True, exist_ok=True)
-        self._image_model = image_model or os.environ.get("IMAGE_MODEL_NAME", "gpt-image-2")
+        self._image_model = image_model
         self._lock = threading.Lock()
         self._max_video_bytes = 32 * 1024 * 1024  # 32MB 上限，避免超大视频内联
         self._http_headers = {
@@ -870,6 +891,8 @@ class ImageStorageManager:
         """
         使用 OpenAI Images API 生成或参考图编辑图像。
 
+        未显式指定实例模型时，每次请求读取环境中的模型，使命令切换立即生效。
+
         Args:
             prompt (str): 图像描述。
             reference_image (Optional[OpenAIReferenceImage]):
@@ -881,23 +904,28 @@ class ImageStorageManager:
                 生成图像的 Base64 数据位于 ``response.data[0].b64_json``。
 
         Raises:
-            AssertionError: 当提示为空时抛出。
+            AssertionError: 当提示或模型名称为空时抛出。
             AssertionError: 当参考图路径非法或不存在时抛出。
         """
         from openai import OpenAI
 
         assert isinstance(prompt, str) and prompt.strip(), "prompt 不能为空"
         prompt_text = prompt.strip()
+        model = self._image_model
+        if model is None:
+            model = os.environ.get("IMAGE_MODEL_NAME", self.DEFAULT_OPENAI_IMAGE_MODEL)
+        assert isinstance(model, str) and model.strip(), "OpenAI 生图模型名称不能为空"
+        model = model.strip()
         client = OpenAI()
         if reference_image is None:
             return client.images.generate(
-                model=self._image_model,
+                model=model,
                 prompt=prompt_text,
             )
 
         image = self._normalize_openai_reference_image(reference_image)
         return client.images.edit(
-            model=self._image_model,
+            model=model,
             image=image,
             prompt=prompt_text,
         )

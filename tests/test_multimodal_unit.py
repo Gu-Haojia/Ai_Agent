@@ -515,6 +515,7 @@ class MultimodalUnitTest(unittest.TestCase):
 
         self.assertEqual(result, "image/webp")
 
+    @mock.patch.dict(os.environ)
     def test_generate_image_via_openai_uses_generate_without_reference(self) -> None:
         """确认未传参考图时调用 OpenAI 图像生成接口。"""
         fake_response = SimpleNamespace(data=[SimpleNamespace(b64_json="ZmFrZQ==")])
@@ -524,6 +525,7 @@ class MultimodalUnitTest(unittest.TestCase):
         )
         fake_client = SimpleNamespace(images=fake_images)
 
+        os.environ.pop("IMAGE_MODEL_NAME", None)
         with tempfile.TemporaryDirectory() as tmp_dir:
             manager = ImageStorageManager(tmp_dir)
             with mock.patch("openai.OpenAI", return_value=fake_client):
@@ -531,11 +533,12 @@ class MultimodalUnitTest(unittest.TestCase):
 
         self.assertIs(result, fake_response)
         fake_images.generate.assert_called_once_with(
-            model="gpt-image-2",
+            model="gpt-image-2.5-flare",
             prompt="draw a cat",
         )
         fake_images.edit.assert_not_called()
 
+    @mock.patch.dict(os.environ)
     def test_generate_image_via_openai_uses_edit_with_reference(self) -> None:
         """确认传入参考图时调用 OpenAI 图像编辑接口。"""
         fake_response = SimpleNamespace(data=[SimpleNamespace(b64_json="ZmFrZQ==")])
@@ -545,6 +548,7 @@ class MultimodalUnitTest(unittest.TestCase):
         )
         fake_client = SimpleNamespace(images=fake_images)
 
+        os.environ.pop("IMAGE_MODEL_NAME", None)
         with tempfile.TemporaryDirectory() as tmp_dir:
             manager = ImageStorageManager(tmp_dir)
             reference_path = Path(tmp_dir) / "reference.png"
@@ -555,7 +559,7 @@ class MultimodalUnitTest(unittest.TestCase):
         self.assertIs(result, fake_response)
         fake_images.generate.assert_not_called()
         fake_images.edit.assert_called_once_with(
-            model="gpt-image-2",
+            model="gpt-image-2.5-flare",
             image=reference_path.resolve(),
             prompt="edit this",
         )
