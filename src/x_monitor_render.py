@@ -821,7 +821,8 @@ def render_tweet_html(
     .media-row-single {{
       display: block;
     }}
-    .media {{
+    .media,
+    .media-video {{
       width: 100%;
       height: auto;
       display: block;
@@ -830,6 +831,7 @@ def render_tweet_html(
       border: 1px solid var(--soft);
     }}
     .media-row-pair > .media,
+    .media-row-pair > .media-video,
     .media-row-pair > .media-placeholder {{
       width: 0;
       min-width: 0;
@@ -841,6 +843,28 @@ def render_tweet_html(
       border-radius: 16px;
       background: #f7f9f9;
       border: 1px solid var(--soft);
+    }}
+    .media-video {{
+      position: relative;
+      overflow: hidden;
+    }}
+    .media-video > .media,
+    .media-video > .media-placeholder {{
+      border: 0;
+      border-radius: 0;
+    }}
+    .media-video-badge {{
+      position: absolute;
+      right: 10px;
+      bottom: 10px;
+      width: 32px;
+      height: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 8px;
+      background: rgba(0, 0, 0, 0.65);
+      color: #fff;
     }}
     .quote {{
       margin-top: 12px;
@@ -1430,7 +1454,7 @@ def _render_media_row(row: MediaLayoutRow) -> str:
 
 def _render_media(item: XRenderedMedia, flex_grow: Optional[float] = None) -> str:
     """
-    渲染单个媒体 HTML。
+    渲染单个媒体 HTML，并为视频封面叠加右下角摄像机图标。
 
     Args:
         item (XRenderedMedia): 媒体对象。
@@ -1443,17 +1467,32 @@ def _render_media(item: XRenderedMedia, flex_grow: Optional[float] = None) -> st
         None: 本函数不主动抛出异常。
     """
     url = item.best_url
+    is_video = item.media_type == "video"
     flex_style = _media_flex_style(flex_grow)
+    image_flex_style = "" if is_video else flex_style
     if url and _url_scheme(url) not in {"", "placeholder"}:
-        return (
+        content = (
             f'<img class="media" src="{_attr(url)}" '
-            f'alt="{_attr(item.alt_text or "")}"{flex_style}>'
+            f'alt="{_attr(item.alt_text or "")}"{image_flex_style}>'
         )
-    ratio = _media_ratio(item)
-    styles = [f"--ratio:{ratio:.4f}"]
-    if flex_grow is not None:
-        styles.append(f"flex-grow:{flex_grow:.6f}")
-    return f'<div class="media-placeholder" style="{_attr(";".join(styles))}"></div>'
+    else:
+        ratio = _media_ratio(item)
+        styles = [f"--ratio:{ratio:.4f}"]
+        if flex_grow is not None and not is_video:
+            styles.append(f"flex-grow:{flex_grow:.6f}")
+        content = f'<div class="media-placeholder" style="{_attr(";".join(styles))}"></div>'
+    if not is_video:
+        return content
+    return (
+        f'<div class="media-video"{flex_style}>{content}'
+        '<span class="media-video-badge" role="img" aria-label="视频">'
+        '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" '
+        'stroke="currentColor" stroke-width="2" stroke-linecap="round" '
+        'stroke-linejoin="round" aria-hidden="true">'
+        '<rect x="3" y="6" width="13" height="12" rx="2"/>'
+        '<path d="m16 9 5-3v12l-5-3"/>'
+        '</svg></span></div>'
+    )
 
 
 def _media_flex_style(flex_grow: Optional[float]) -> str:
