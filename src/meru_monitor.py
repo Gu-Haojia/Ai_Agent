@@ -966,7 +966,6 @@ class MeruMonitorManager:
                     f"{item.name or '(无标题)'}",
                     f"价格：{price_part}",
                     f"时间：{created}",
-                    f"链接：{item.url}",
                 ]
             )
         return "\n".join(lines)
@@ -997,7 +996,6 @@ class MeruMonitorManager:
                     f"{item.name or '(无标题)'}",
                     f"价格：{price_part}",
                     f"时间：{created}",
-                    f"链接：{item.url}",
                 ]
             )
         return "\n".join(lines)
@@ -1043,7 +1041,6 @@ class MeruMonitorManager:
                     f"价格：{price_part}",
                     f"原价：{previous_part}",
                     f"时间：{created}",
-                    f"链接：{item.url}",
                 ]
             )
         return "\n".join(lines)
