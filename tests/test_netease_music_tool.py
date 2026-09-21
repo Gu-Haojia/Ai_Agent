@@ -206,6 +206,9 @@ class OneBotMusicCardSenderTests(unittest.TestCase):
         http_get = mock.Mock(
             side_effect=[
                 _response(_detail_payload()),
+                _response(
+                    {"code": 200, "data": {"url": "https://audio.example/song.mp3"}}
+                ),
                 _response({"code": 200, "msg": "success", "data": ark}),
             ]
         )
@@ -230,7 +233,7 @@ class OneBotMusicCardSenderTests(unittest.TestCase):
         message_id = sender.send("1357375695", 123456)
 
         self.assertEqual(message_id, "987654")
-        self.assertEqual(http_get.call_count, 2)
+        self.assertEqual(http_get.call_count, 3)
         http_get.assert_has_calls(
             [
                 mock.call(
@@ -239,13 +242,19 @@ class OneBotMusicCardSenderTests(unittest.TestCase):
                     timeout=60.0,
                 ),
                 mock.call(
+                    "https://apii.xianyuw.cn/api/v1/163-music-search",
+                    params={
+                        "key": "sign-key",
+                        "id": "1357375695",
+                        "br": "standard",
+                    },
+                    timeout=60.0,
+                ),
+                mock.call(
                     "https://apii.xianyuw.cn/api/v1/qq-musicArk",
                     params={
                         "key": "sign-key",
-                        "url": (
-                            "http://music.163.com/song/media/outer/url"
-                            "?id=1357375695"
-                        ),
+                        "url": "https://audio.example/song.mp3",
                         "song": "海阔天空",
                         "singer": "Beyond",
                         "cover": "https://image.example/cover.jpg",
@@ -272,6 +281,40 @@ class OneBotMusicCardSenderTests(unittest.TestCase):
             },
             timeout=60.0,
         )
+
+    def test_send_passes_playback_url_through_without_probe(self) -> None:
+        """空地址或不可播地址仍应原样交给签名接口并继续发送。"""
+        for playback_url in ("", "https://music.163.com/404"):
+            with self.subTest(playback_url=playback_url):
+                http_get = mock.Mock(
+                    side_effect=[
+                        _response(_detail_payload()),
+                        _response({"code": 200, "data": {"url": playback_url}}),
+                        _response({"code": 200, "data": _signed_ark()}),
+                    ]
+                )
+                http_post = mock.Mock(
+                    return_value=_response(
+                        {
+                            "status": "ok",
+                            "retcode": 0,
+                            "data": {"message_id": 987654},
+                        }
+                    )
+                )
+                sender = OneBotMusicCardSender(
+                    api_base="http://onebot",
+                    http_get=http_get,
+                    http_post=http_post,
+                    signed_api_key="sign-key",
+                )
+
+                self.assertEqual(sender.send("1357375695", 123456), "987654")
+                self.assertEqual(http_get.call_count, 3)
+                self.assertEqual(
+                    http_get.call_args.kwargs["params"]["url"], playback_url
+                )
+                http_post.assert_called_once()
 
     def test_send_keeps_legacy_music_segment(self) -> None:
         """关闭内部开关时应继续使用原有 163 音乐段。"""

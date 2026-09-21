@@ -20,6 +20,7 @@ HttpPost = Callable[..., requests.Response]
 DEFAULT_NETEASE_MUSIC_API_BASE = "https://nce.gqzsldy.com"
 DEFAULT_ONEBOT_API_BASE = "http://127.0.0.1:3000"
 NETEASE_SONG_DETAIL_API_URL = "https://music.163.com/api/song/detail/"
+XIANYUW_NETEASE_MUSIC_API_URL = "https://apii.xianyuw.cn/api/v1/163-music-search"
 XIANYUW_MUSIC_ARK_API_URL = "https://apii.xianyuw.cn/api/v1/qq-musicArk"
 USE_SIGNED_MUSIC_CARD = True
 
@@ -363,11 +364,22 @@ class OneBotMusicCardSender:
         cover = album.get("picUrl")
         assert isinstance(cover, str) and cover.strip(), "网易云歌曲详情缺少封面"
 
+        playback_payload = self._get_json(
+            XIANYUW_NETEASE_MUSIC_API_URL,
+            {"key": self._signed_api_key, "id": song_id, "br": "standard"},
+            "网易云播放地址接口",
+        )
+        assert playback_payload.get("code") == 200, "网易云播放地址响应 code 不是 200"
+        playback_data = playback_payload.get("data")
+        assert isinstance(playback_data, dict), "网易云播放地址响应缺少 data"
+        playback_url = playback_data.get("url")
+        assert isinstance(playback_url, str), "网易云播放地址响应缺少 url 字符串"
+
         signed_payload = self._get_json(
             XIANYUW_MUSIC_ARK_API_URL,
             {
                 "key": self._signed_api_key,
-                "url": f"http://music.163.com/song/media/outer/url?id={song_id}",
+                "url": playback_url,
                 "song": title.strip(),
                 "singer": "/".join(artist_names),
                 "cover": cover.strip(),
