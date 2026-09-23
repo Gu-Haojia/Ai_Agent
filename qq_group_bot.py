@@ -3651,8 +3651,8 @@ class QQBotHandler(BaseHTTPRequestHandler):
             current_model = self.agent._config.model_name
             next_model = (
                 _INITIAL_MODEL_NAME
-                if current_model == "openai:gpt-5.6-luna"
-                else "openai:gpt-5.6-luna"
+                if current_model == "openai:gpt-6-luna"
+                else "openai:gpt-6-luna"
             )
             os.environ["MODEL_NAME"] = next_model
             self.rebuild_agent()
