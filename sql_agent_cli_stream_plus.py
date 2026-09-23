@@ -3377,7 +3377,7 @@ class SQLCheckpointAgentStreamingPlus:
                 + basic_msg
             )
             state_messages = list(state.get("messages", []))
-            if model_name.lower() != "openai:gpt-5.6-luna":
+            if model_name.lower() != "openai:gpt-6-luna":
                 state_messages = [
                     message.model_copy(
                         update={
