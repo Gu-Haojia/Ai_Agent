@@ -223,6 +223,7 @@ from src.timer_reminder import JsonReminderStore, TimerReminderManager
 from src.token_usage_chart import TOKEN_USAGE_CHART_RENDERER
 from src.token_usage_logger import TOKEN_USAGE_LOGGER
 from src.tts_command import TTS_API_BASE_ENV, TTSCommandHandler
+from src.tts_mode import TTSModeService
 from src.x_monitor import (
     DEFAULT_LIMIT as X_DEFAULT_LIMIT,
     XMonitorManager,
@@ -1502,6 +1503,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
     runtime_settings_store: RuntimeSettingsStore
     _post_lock: ClassVar[Lock] = Lock()  # 串行化处理 POST 请求
     power_enabled: ClassVar[bool] = True
+    tts_mode: ClassVar[TTSModeService | None] = None
     # 群/Prompt -> 线程ID 映射，用于在 Prompt 间恢复各自的群对话线程
     _group_threads: dict[str, str] = {}
     _thread_store_file: str = ""
@@ -2253,6 +2255,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 return
 
         # 调用 Agent 生成回复（返回最后聚合文本）
+        tts_reply_ready = False
         try:
             # 终端打印服务消息
             author = _extract_sender_name(event)
@@ -2372,6 +2375,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
             if not answer:
                 answer = "（未生成回复）"
             generated_images = self.agent.consume_generated_images()
+            tts_reply_ready = answer != "（未生成回复）"
         except KeyboardInterrupt:
             answer = "（生成已中断）"
             generated_images = []
@@ -2454,6 +2458,18 @@ class QQBotHandler(BaseHTTPRequestHandler):
 
         # 发送回群
         try:
+            tts_mode = self.__class__.tts_mode
+            if tts_reply_ready and tts_mode is not None:
+                if tts_mode.enqueue_if_enabled(
+                    group_id,
+                    answer,
+                    image_payloads,
+                    self.image_storage,
+                    self.bot_cfg.api_base,
+                    self.bot_cfg.access_token,
+                ):
+                    self._send_no_content()
+                    return
             # 轻量方案：使用 CQ at 前缀 @ 该用户，便于区分接收者
             # at_prefix = f"[CQ:at,qq={user_id}] "
             message_body = self._compose_group_message(answer, image_payloads)
@@ -3139,6 +3155,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
         - /apicheck           → 使用当前模型自检 API 调用耗时
         - /update             → 快进更新 main，并在有新提交时重启 app
         - /tts "文本"         → 配置 TTS_API_BASE 后，将文本转换为群语音
+        - /ttsmode [on|off]   → 切换本群日语文本＋语音回复模式
 
         Args:
             group_id (int): 群号
@@ -3167,6 +3184,17 @@ class QQBotHandler(BaseHTTPRequestHandler):
 
         if cmd == "/tts":
             TTSCommandHandler(_call_onebot_action).handle(
+                text, group_id, self.bot_cfg.api_base, self.bot_cfg.access_token
+            )
+            return True
+
+        if cmd == "/ttsmode":
+            cls = self.__class__
+            if cls.tts_mode is None:
+                cls.tts_mode = TTSModeService(
+                    _call_onebot_action, self._compose_group_message
+                )
+            cls.tts_mode.handle_command(
                 text, group_id, self.bot_cfg.api_base, self.bot_cfg.access_token
             )
             return True
@@ -3222,6 +3250,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
             )
             if os.environ.get(TTS_API_BASE_ENV, "").strip():
                 msg += '\n25) /tts "文本" - 将文本转换为语音并发送到本群'
+                msg += '\n26) /ttsmode [on|off] - 切换本群日语文本＋语音回复模式'
             _send_group_msg(
                 self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
             )
