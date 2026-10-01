@@ -222,6 +222,7 @@ from src.runtime_settings import RuntimeSettings, RuntimeSettingsStore
 from src.timer_reminder import JsonReminderStore, TimerReminderManager
 from src.token_usage_chart import TOKEN_USAGE_CHART_RENDERER
 from src.token_usage_logger import TOKEN_USAGE_LOGGER
+from src.tts_command import TTS_API_BASE_ENV, TTSCommandHandler
 from src.x_monitor import (
     DEFAULT_LIMIT as X_DEFAULT_LIMIT,
     XMonitorManager,
@@ -3137,6 +3138,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
         - /forget hard        → 清空当前线程的消息上下文和压缩摘要
         - /apicheck           → 使用当前模型自检 API 调用耗时
         - /update             → 快进更新 main，并在有新提交时重启 app
+        - /tts "文本"         → 配置 TTS_API_BASE 后，将文本转换为群语音
 
         Args:
             group_id (int): 群号
@@ -3160,6 +3162,12 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 group_id,
                 "无权执行命令（需在白名单内）。",
                 self.bot_cfg.access_token,
+            )
+            return True
+
+        if cmd == "/tts":
+            TTSCommandHandler(_call_onebot_action).handle(
+                text, group_id, self.bot_cfg.api_base, self.bot_cfg.access_token
             )
             return True
 
@@ -3212,6 +3220,8 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 "23) /location [地点] - 查看或修改早晚简报地点\n"
                 "24) /power - 开关非命令消息输入"
             )
+            if os.environ.get(TTS_API_BASE_ENV, "").strip():
+                msg += '\n25) /tts "文本" - 将文本转换为语音并发送到本群'
             _send_group_msg(
                 self.bot_cfg.api_base, group_id, msg, self.bot_cfg.access_token
             )

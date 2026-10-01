@@ -112,6 +112,7 @@ LangGraph/
 | `BOT_HOST` / `BOT_PORT` | HTTP 回调监听地址与端口（默认 `0.0.0.0:8080`） |
 | `ONEBOT_API_BASE` | NapCat HTTP API 地址（默认 `http://127.0.0.1:3000`） |
 | `ONEBOT_SECRET` / `ONEBOT_ACCESS_TOKEN` | 回调签名与 API Token（可选） |
+| `TTS_API_BASE` | `/tts` 使用的 TTS 服务基地址，例如 `http://192.168.3.221:18763`；未配置或留空时禁用 |
 | `X_MONITOR_TRANSLATION_MODE` | X 推文翻译模式：`none`、`translated` 或 `bilingual` |
 | `X_MONITOR_TRANSLATION_MODEL` | X 推文翻译使用的 Gemini 模型，默认 `gemini-3.5-flash-lite` |
 | `X_MONITOR_ALERT` | X API 余额或用量耗尽通知目标，格式为 `群号,QQ号`；留空时不通知 |
@@ -149,6 +150,8 @@ python qq_group_bot.py
 ```
 
 - 支持 @ 机器人触发、`/switch` Prompt 并恢复对应线程、`/clear` 重置当前 Prompt 线程、`/cmd` 查看指令。
+- 设置 `TTS_API_BASE=http://192.168.3.221:18763` 并重启机器人后，在群内 @ 机器人发送 `/tts "こんにちは、プロデューサーさん。"`，即可收到语音消息。文本必须使用双引号包裹，最多 2000 个字符；生成使用服务端默认模型与角色。
+- `/tts` 由 `src/tts_command.py` 独立处理，在专用工作线程中请求 `/v1/audio/speech`，再通过 NapCat 的 `record` 消息段发送 WAV 的 Base64 内容，不需要共享本地文件。沿用现有群限制与命令白名单；生成失败时向原群返回错误提示。未配置 `TTS_API_BASE` 时不请求服务、不回复，也不在 `/cmd` 列表中显示。
 - `/switch` 会读取 `prompts/avatars/account_profiles.json`；已登记 Prompt 会同步同目录中的头像，未登记 Prompt 保持当前账号资料不变。
 - `account_profiles.json` 在首次启动时自动创建为空配置，仅作为本地文件使用，不纳入 Git 追踪。
 - 提供健康检查：`curl http://127.0.0.1:8080/healthz`.
