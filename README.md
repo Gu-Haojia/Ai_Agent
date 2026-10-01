@@ -114,7 +114,7 @@ LangGraph/
 | `ONEBOT_SECRET` / `ONEBOT_ACCESS_TOKEN` | 回调签名与 API Token（可选） |
 | `TTS_API_BASE` | `/tts` 使用的 TTS 服务基地址，例如 `http://192.168.3.221:18763`；未配置或留空时禁用 |
 | `TTS_REWRITE_MODEL` | `/ttsmode` 独立日语改写模型，默认 `gemini-3.8-flash` |
-| `TTS_REWRITE_PROMPT_FILE` | `/ttsmode` 的提示词文件；留空使用 `src/tts_yoshino_prompt.txt` |
+| `TTS_REWRITE_PROMPT_FILE` | `/ttsmode` 的提示词文件；留空读取 `prompts/tts/tts_yoshino_prompt.txt`，该文件不纳入 Git |
 | `X_MONITOR_TRANSLATION_MODE` | X 推文翻译模式：`none`、`translated` 或 `bilingual` |
 | `X_MONITOR_TRANSLATION_MODEL` | X 推文翻译使用的 Gemini 模型，默认 `gemini-3.5-flash-lite` |
 | `X_MONITOR_ALERT` | X API 余额或用量耗尽通知目标，格式为 `群号,QQ号`；留空时不通知 |
@@ -157,6 +157,7 @@ python qq_group_bot.py
 - 在群内 @ 机器人发送 `/ttsmode` 可切换本群模式，也可用 `/ttsmode on` 和 `/ttsmode off` 明确开启、关闭（支持 `开启`、`关闭`）。各群默认关闭，重启后恢复关闭；关闭只影响后续回复，已经排队的回复仍完成投递。开启前必须配置 `TTS_API_BASE` 和已有的 Gemini Key 或 Vertex AI 凭据。
 - `/ttsmode` 由 `src/tts_mode.py` 独立处理：主 Agent 仍按原流程生成回复、使用工具和保存原回复；仅将最终发送改为独立 Flash 请求生成的日语文本＋语音。改写器只有本轮正文，没有主 Agent 的历史或工具，不追加 AI 回合，也不保存译文、消息 ID 或投递日志。改写和语音生成在专用串行队列中执行，不占用 QQ 消息处理锁。
 - 原回复中的 `[IMAGE]链接[/IMAGE]` 和生成图片沿用已有处理；开启模式时额外提取 Markdown 图片及带 `.png`、`.jpg` 等图片扩展名的直接链接，图片地址不进入改写或合成。先发送日语文本与图片，再单独发送语音；纯图片回复只发图片。普通网页链接仍按文字处理。改写或合成失败时明确回群提示，保留已准备的图片；日语超过服务的 2000 字限制时也会明确提示失败。
+- 日语提示词默认从项目目录下的 `prompts/tts/tts_yoshino_prompt.txt` 读取；`prompts/` 不纳入 Git，部署时需单独复制该文件，Docker 挂载后对应 `/app/prompts/tts/tts_yoshino_prompt.txt`。未准备文件时，开启 `/ttsmode` 会明确报错，普通聊天不受影响。
 - 日语提示词采用任务、篇幅与输出格式约束，加 20 条原始游戏台词，不指定风格形容词或口癖。修改改写模型、提示词或服务地址后，先关闭再开启本群模式以重新读取配置。
 - `/switch` 会读取 `prompts/avatars/account_profiles.json`；已登记 Prompt 会同步同目录中的头像，未登记 Prompt 保持当前账号资料不变。
 - `account_profiles.json` 在首次启动时自动创建为空配置，仅作为本地文件使用，不纳入 Git 追踪。

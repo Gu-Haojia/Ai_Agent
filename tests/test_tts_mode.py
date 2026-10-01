@@ -250,7 +250,7 @@ def test_env_configuration_is_snapshotted_and_prompt_is_separate(tmp_path: Path)
 
 
 def test_vertex_configuration_and_default_prompt() -> None:
-    """验证已有 Vertex AI 环境也能启用，默认模板随仓库分发。
+    """验证已有 Vertex AI 环境使用默认提示词，不依赖本地私有文件。
 
     Returns:
         None: 无返回值。
@@ -266,6 +266,7 @@ def test_vertex_configuration_and_default_prompt() -> None:
             "GOOGLE_CLOUD_LOCATION": "global",
         }, clear=True),
         mock.patch.object(mode_module.genai, "Client", return_value=client) as create,
+        mock.patch.object(Path, "read_text", return_value="<游戏台词>独立原句校准"),
     ):
         JapaneseReplyRewriter.from_env().rewrite("正文")
     assert create.call_args.kwargs["vertexai"] is True
@@ -351,6 +352,35 @@ def test_missing_configuration_keeps_mode_off() -> None:
             service.handle_command("/ttsmode on", 10001, "http://onebot", "")
         assert "设置失败" in send.call_args.args[2]["message"]
         assert service.enqueue_if_enabled(10001, "正文", [], None, "http://onebot", "") is False
+
+
+def test_missing_local_prompt_keeps_mode_off(tmp_path: Path) -> None:
+    """验证部署遗漏本地提示词时明确报错，普通回复仍走原流程。
+
+    Args:
+        tmp_path (Path): 不含提示词的临时部署目录。
+
+    Returns:
+        None: 无返回值。
+
+    Raises:
+        None: 本函数不主动抛出异常；测试结果由断言验证。
+    """
+    prompt = tmp_path / "prompts" / "tts" / "tts_yoshino_prompt.txt"
+    service, send, executor, _, _ = _service()
+    with (
+        mock.patch.dict(mode_module.os.environ, {
+            "TTS_API_BASE": "http://tts", "GEMINI_API_KEY": "test-key",
+        }, clear=True),
+        mock.patch.object(mode_module, "DEFAULT_REWRITE_PROMPT", prompt),
+        mock.patch.object(mode_module.genai, "Client") as create,
+    ):
+        service.handle_command("/ttsmode on", 10001, "http://onebot", "")
+    assert "设置失败" in send.call_args.args[2]["message"]
+    assert str(prompt) in send.call_args.args[2]["message"]
+    assert service.enqueue_if_enabled(10001, "原回复", [], None, "http://onebot", "") is False
+    create.assert_not_called()
+    executor.submit.assert_not_called()
 
 
 def test_snapshot_preserves_original_group_images_and_configuration() -> None:

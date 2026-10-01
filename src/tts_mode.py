@@ -27,7 +27,9 @@ from src.tts_command import OneBotAction, TTSClient
 TTS_REWRITE_MODEL_ENV = "TTS_REWRITE_MODEL"
 TTS_REWRITE_PROMPT_ENV = "TTS_REWRITE_PROMPT_FILE"
 DEFAULT_REWRITE_MODEL = "gemini-3.8-flash"
-DEFAULT_REWRITE_PROMPT = Path(__file__).with_name("tts_yoshino_prompt.txt")
+DEFAULT_REWRITE_PROMPT = (
+    Path(__file__).resolve().parent.parent / "prompts" / "tts" / "tts_yoshino_prompt.txt"
+)
 _TTS_MODE_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="tts-mode")
 _MARKDOWN_IMAGE = re.compile(
     r'!\[[^\]]*\]\((https?://(?:[^\s()]|\([^\s()]*\))+)(?:\s+"[^"]*")?\)',
