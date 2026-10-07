@@ -3573,7 +3573,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 else:
                     candidates = (
                         "gemini-3-pro-image",
-                        "gemini-3.1-flash-image",
+                        "gemini-nano-banana-2.1",
                     )
                     current_model = os.environ.get("GEMINI_IMAGE_MODEL") or candidates[1]
                 current_model = current_model.strip()
