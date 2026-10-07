@@ -144,7 +144,7 @@ class ImageModelSwitchTest(unittest.TestCase):
 
     def test_image_preserves_gemini_cycle_and_openai_selection(self) -> None:
         """
-        Gemini 应保留原有默认值和循环顺序，且不改变 OpenAI 的模型选择。
+        Gemini 应在 Nano Banana 2.1 与 Pro 间切换，且不改变 OpenAI 的模型选择。
 
         Returns:
             None: 测试无返回值。
@@ -154,8 +154,8 @@ class ImageModelSwitchTest(unittest.TestCase):
         """
         cases = (
             (None, "gemini-3-pro-image"),
-            ("gemini-3.1-flash-image", "gemini-3-pro-image"),
-            ("gemini-3-pro-image", "gemini-3.1-flash-image"),
+            ("gemini-nano-banana-2.1", "gemini-3-pro-image"),
+            ("gemini-3-pro-image", "gemini-nano-banana-2.1"),
         )
         self.manager.set_openai_image_model("gpt-image-2.5-sunburst")
         for current, expected in cases:
