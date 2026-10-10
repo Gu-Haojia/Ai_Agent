@@ -117,7 +117,7 @@ LangGraph/
 | `TTS_REWRITE_PROMPT_FILE` | `/ttsmode` 的提示词文件；留空读取 `prompts/tts/tts_yoshino_prompt.txt`，该文件不纳入 Git |
 | `X_MONITOR_TRANSLATION_MODE` | X 推文翻译模式：`none`、`translated` 或 `bilingual` |
 | `X_MONITOR_TRANSLATION_MODEL` | X 推文翻译使用的 Gemini 模型，默认 `gemini-3.5-flash-lite` |
-| `X_MONITOR_ALERT` | X API 余额或用量耗尽通知目标，格式为 `群号,QQ号`；留空时不通知 |
+| `X_MONITOR_ALERT` | X API 余额或用量耗尽通知目标，格式为 `群号,QQ号`；支持 HTTP 402、CreditsDepleted 和 usage-capped，连续失败只告警一次，API 恢复后可再次告警；留空时不通知 |
 | `ALLOWED_GROUPS` / `CMD_ALLOWED_USERS` | 群聊/命令白名单，逗号分隔 |
 | `THREAD_STORE_FILE` | 群 + Prompt → 线程 ID 映射文件，默认 `.qq_group_threads.json` |
 | `DAILY_TASK` / `NIGHTLY_TASK` | 需要播报的群号（逗号分隔） |

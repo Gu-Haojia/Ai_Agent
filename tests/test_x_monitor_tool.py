@@ -187,16 +187,34 @@ class XMonitorToolCoreTests(unittest.TestCase):
         self.assertIs(first, second)
         self.assertEqual(first._store_path, Path(store_path))
 
-    def test_get_manager_wires_configured_usage_capped_alert(self) -> None:
-        """配置余额通知目标时应向固定群发送带 @ 的消息。
+    def test_start_payment_failure_alerts_once_and_reopens_after_success(self) -> None:
+        """启动遇到 HTTP 402 时应告警去重，并在 API 恢复后重新开放告警。
 
         Returns:
             None: 测试通过时无返回值。
 
         Raises:
-            None: 断言失败时由 unittest 报告。
+            AssertionError: 当告警、错误分类或任务状态不符合预期时抛出。
         """
         tool_module._X_MONITOR_MANAGER = None
+        depleted = mock.Mock(status_code=402)
+        depleted.json.return_value = {
+            "title": "CreditsDepleted",
+            "detail": "Insufficient API credits.",
+            "type": "https://api.x.com/2/problems/credits",
+        }
+        payment_required = mock.Mock(status_code=402)
+        payment_required.json.return_value = {}
+        profile = mock.Mock(status_code=200)
+        profile.json.return_value = {
+            "data": {"id": "10", "username": "tsumugi_nanase", "name": "Test"}
+        }
+        posts = mock.Mock(status_code=200)
+        posts.json.return_value = {"data": []}
+        expected_message = (
+            "[CQ:at,qq=456] XMonitor 检测到 X API 余额或用量上限已耗尽，"
+            "监控暂时无法更新，请及时充值。"
+        )
         with tempfile.TemporaryDirectory() as tmpdir:
             store_path = str(Path(tmpdir) / "x_monitor.json")
             with mock.patch.dict(
@@ -204,21 +222,39 @@ class XMonitorToolCoreTests(unittest.TestCase):
                 {
                     "X_MONITOR_STORE": store_path,
                     "X_MONITOR_ALERT": "123,456",
+                    "X_BEARER_TOKEN": "test-token",
                     "ONEBOT_API_BASE": "http://onebot/",
                     "ONEBOT_ACCESS_TOKEN": "token",
                 },
-            ), mock.patch.object(tool_module, "_send_group_msg") as send:
+            ), mock.patch.object(tool_module, "_send_group_msg") as send, mock.patch(
+                "src.x_monitor.requests.get",
+                side_effect=[depleted, payment_required, profile, posts, depleted],
+            ) as request:
                 manager = tool_module.get_x_monitor_manager()
-                manager._notify_usage_capped_once()
+                for username in ("tsumugi_nanase", "another_user"):
+                    with self.assertRaises(XMonitorToolError) as caught:
+                        tool_module.start_x_monitor(username, 60, 789, 987)
+                    result = tool_module.build_x_monitor_tool_failure(
+                        "start", 789, 987, caught.exception, username
+                    )
+                    self.assertEqual(result["status"], "failed")
+                    self.assertEqual(result["error"], "usage_capped")
+                    self.assertIn("余额或用量上限已耗尽", result["message"])
 
-        send.assert_called_once_with(
-            "http://onebot",
-            123,
-            (
-                "[CQ:at,qq=456] XMonitor 检测到 X API 余额或用量上限已耗尽，"
-                "监控暂时无法更新，请及时充值。"
-            ),
-            "token",
+                send.assert_called_once_with(
+                    "http://onebot", 123, expected_message, "token"
+                )
+                self.assertEqual(manager.latest("tsumugi_nanase"), [])
+                with self.assertRaises(XMonitorToolError) as caught:
+                    tool_module.start_x_monitor("tsumugi_nanase", 60, 789, 987)
+                self.assertEqual(caught.exception.error_code, "usage_capped")
+                self.assertEqual(manager.list_watch_tasks(), [])
+                self.assertFalse(Path(store_path).exists())
+                self.assertEqual(request.call_count, 5)
+
+        self.assertEqual(
+            send.call_args_list,
+            [mock.call("http://onebot", 123, expected_message, "token")] * 2,
         )
 
     def test_get_manager_without_alert_does_not_send_notification(self) -> None:

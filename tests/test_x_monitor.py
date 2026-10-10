@@ -395,6 +395,62 @@ class XMonitorParseTests(unittest.TestCase):
 
         self.assertEqual(caught.exception.error_code, "usage_capped")
 
+    def test_request_json_classifies_payment_and_credit_errors(self) -> None:
+        """HTTP 402 和余额耗尽标识应复用余额不足错误码。
+
+        Returns:
+            None: 测试通过时无返回值。
+
+        Raises:
+            AssertionError: 当余额不足响应未被正确分类时抛出。
+        """
+        client = XAPIClient(bearer_token="test-token")
+        cases: list[tuple[int, dict[str, object]]] = [(402, {})]
+        for error in (
+            {"type": "https://api.twitter.com/2/problems/credits"},
+            {"type": "https://api.x.com/2/problems/credits-depleted"},
+            {"title": "CreditsDepleted"},
+        ):
+            cases.extend([(403, error), (429, {"errors": [error]})])
+
+        for status_code, payload in cases:
+            with self.subTest(status_code=status_code, payload=payload):
+                response = mock.Mock(status_code=status_code)
+                response.json.return_value = payload
+                with mock.patch(
+                    "src.x_monitor.requests.get", return_value=response
+                ), self.assertRaises(XMonitorToolError) as caught:
+                    client.get_user_profile("tsumugi_nanase")
+
+                self.assertEqual(caught.exception.error_code, "usage_capped")
+                self.assertEqual(str(caught.exception), "X API 余额或用量上限已耗尽。")
+
+    def test_request_json_keeps_unrelated_http_errors_separate(self) -> None:
+        """普通鉴权、权限、限流和服务错误不应误报余额不足。
+
+        Returns:
+            None: 测试通过时无返回值。
+
+        Raises:
+            AssertionError: 当其他 HTTP 错误被误分类时抛出。
+        """
+        client = XAPIClient(bearer_token="test-token")
+        for status_code, error_code in (
+            (401, "authentication_failed"),
+            (403, "access_denied"),
+            (429, "rate_limited"),
+            (500, "upstream_http_error"),
+        ):
+            with self.subTest(status_code=status_code):
+                response = mock.Mock(status_code=status_code)
+                response.json.return_value = {"title": "Unrelated error"}
+                with mock.patch(
+                    "src.x_monitor.requests.get", return_value=response
+                ), self.assertRaises(XMonitorToolError) as caught:
+                    client.get_user_profile("tsumugi_nanase")
+
+                self.assertEqual(caught.exception.error_code, error_code)
+
     def test_request_json_keeps_plain_429_as_rate_limited(self) -> None:
         """不含 usage-capped 类型的 HTTP 429 应保持普通限流错误。
 

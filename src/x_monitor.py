@@ -202,7 +202,7 @@ def _is_usage_capped_error(payload: object) -> bool:
         payload (object): X API 返回的 JSON 对象。
 
     Returns:
-        bool: 响应包含 ``usage-capped`` 错误类型时返回 ``True``。
+        bool: 响应包含用量耗尽或余额不足标识时返回 ``True``。
 
     Raises:
         None: 本函数不主动抛出异常。
@@ -217,7 +217,10 @@ def _is_usage_capped_error(payload: object) -> bool:
         if not isinstance(candidate, dict):
             continue
         error_type = str(candidate.get("type") or "").strip()
-        if error_type.endswith("/usage-capped"):
+        title = str(candidate.get("title") or "").strip()
+        if error_type.endswith(("/usage-capped", "/credits", "/credits-depleted")):
+            return True
+        if title == "CreditsDepleted":
             return True
     return False
 
@@ -618,7 +621,7 @@ class XAPIClient:
                 "invalid_response",
                 "X API 返回格式异常，应为 JSON 对象。",
             )
-        if _is_usage_capped_error(payload):
+        if response.status_code == 402 or _is_usage_capped_error(payload):
             raise XMonitorToolError(
                 "usage_capped",
                 "X API 余额或用量上限已耗尽。",
