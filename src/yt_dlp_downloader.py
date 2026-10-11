@@ -13,6 +13,7 @@ import subprocess
 import time
 
 from image_storage import ImageStorageManager
+from src.video_validation import VideoMetadata, VideoValidator
 from yt_dlp import YoutubeDL
 
 __all__ = ["DownloadedVideo", "YtDlpVideoDownloader"]
@@ -72,6 +73,7 @@ class YtDlpVideoDownloader:
         assert video_dir, "video_dir 不能为空"
         self._video_dir = Path(video_dir).expanduser().resolve()
         self._video_dir.mkdir(parents=True, exist_ok=True)
+        self._validator = VideoValidator()
 
     @staticmethod
     def _log(message: str) -> None:
@@ -119,7 +121,7 @@ class YtDlpVideoDownloader:
             DownloadedVideo: 下载完成后的本地文件信息。
 
         Raises:
-            AssertionError: 当 URL 非法或下载结果缺少文件路径时抛出。
+            AssertionError: 当 URL、下载结果或视频完整性校验不符合要求时抛出。
             Exception: 当 yt-dlp 下载失败时透传原始异常。
         """
         assert isinstance(url, str) and url.strip(), "下载链接不能为空"
@@ -133,7 +135,11 @@ class YtDlpVideoDownloader:
             path = self._extract_downloaded_path(info)
             title = str(info.get("title") or path.stem)
             extractor = str(info.get("extractor") or "generic")
-            path = self._compress_if_needed(path)
+            duration = info.get("duration")
+            expected_duration = None if duration is None else float(duration)
+            self._log(f"开始视频完整性校验: path={path}")
+            metadata = self._validator.validate(path, expected_duration)
+            path = self._compress_if_needed(path, metadata)
         except Exception as exc:
             self._log(f"下载失败: {type(exc).__name__}: {exc}")
             raise
@@ -159,7 +165,7 @@ class YtDlpVideoDownloader:
         """
         options: dict[str, object] = {
             "quiet": True,
-            "no_warnings": True,
+            "no_warnings": False,
             "noprogress": True,
             "noplaylist": True,
             "overwrites": True,
@@ -177,12 +183,13 @@ class YtDlpVideoDownloader:
         }
         return options
 
-    def _compress_if_needed(self, video_path: Path) -> Path:
+    def _compress_if_needed(self, video_path: Path, metadata: VideoMetadata) -> Path:
         """
-        在文件超过阈值时压制视频到可发送大小。
+        对超出阈值或编码不兼容的视频转码，校验完成后才替换原文件。
 
         Args:
             video_path (Path): 已下载完成的视频文件路径。
+            metadata (VideoMetadata): 已通过完整性校验的视频信息。
 
         Returns:
             Path: 可直接用于发送的视频文件路径。
@@ -194,13 +201,22 @@ class YtDlpVideoDownloader:
         resolved = video_path.expanduser().resolve()
         assert resolved.is_file(), "待压制视频文件不存在"
         current_size = resolved.stat().st_size
-        if current_size <= self._COMPRESS_TRIGGER_BYTES:
+        if current_size <= self._COMPRESS_TRIGGER_BYTES and not metadata.requires_transcode:
             return resolved
-        self._log(f"文件超过压制阈值，开始压制: path={resolved} size={current_size}")
-        duration_seconds = self._probe_duration_seconds(resolved)
-        video_bitrate_kbps, audio_bitrate_kbps = self._calculate_target_bitrates(
-            duration_seconds
+        self._log(
+            f"开始视频压制或兼容性转换: path={resolved} size={current_size} "
+            f"codec={metadata.video_codec} pixel_format={metadata.pixel_format}"
         )
+        video_bitrate_kbps, audio_bitrate_kbps = self._calculate_target_bitrates(
+            metadata.duration_seconds
+        )
+        if current_size <= self._COMPRESS_TRIGGER_BYTES:
+            # 小文件只做兼容性转换，避免短片按 70MB 预算被设置成极高码率。
+            source_bitrate_kbps = int(current_size * 8 / metadata.duration_seconds / 1000)
+            video_bitrate_kbps = min(
+                video_bitrate_kbps,
+                max(self._MIN_VIDEO_BITRATE_KBPS, source_bitrate_kbps * 2),
+            )
         compressed_path = resolved.with_name(f"{resolved.stem}_compressed.mp4")
         if compressed_path.exists():
             compressed_path.unlink()
@@ -217,45 +233,12 @@ class YtDlpVideoDownloader:
             f"video_bitrate={video_bitrate_kbps}k audio_bitrate={audio_bitrate_kbps}k"
         )
         assert compressed_size <= self._MAX_SENDABLE_BYTES, "压制后视频仍超过 70MB"
+        compressed_metadata = self._validator.validate(
+            compressed_path, metadata.duration_seconds
+        )
+        assert not compressed_metadata.requires_transcode, "转码结果不符合 QQ 视频格式要求"
         resolved.unlink()
         return compressed_path
-
-    def _probe_duration_seconds(self, video_path: Path) -> float:
-        """
-        使用 ffprobe 读取视频时长。
-
-        Args:
-            video_path (Path): 视频文件路径。
-
-        Returns:
-            float: 视频时长，单位为秒。
-
-        Raises:
-            AssertionError: 当 ffprobe 执行失败或时长非法时抛出。
-        """
-        command = [
-            "ffprobe",
-            "-v",
-            "error",
-            "-show_entries",
-            "format=duration",
-            "-of",
-            "default=noprint_wrappers=1:nokey=1",
-            str(video_path),
-        ]
-        completed = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        stderr = completed.stderr.strip()
-        assert completed.returncode == 0, f"ffprobe 读取时长失败: {stderr or completed.stdout.strip()}"
-        duration_text = completed.stdout.strip()
-        assert duration_text, "ffprobe 未返回视频时长"
-        duration_seconds = float(duration_text)
-        assert duration_seconds > 0, "视频时长必须大于 0"
-        return duration_seconds
 
     def _calculate_target_bitrates(self, duration_seconds: float) -> tuple[int, int]:
         """
@@ -299,14 +282,30 @@ class YtDlpVideoDownloader:
 
         Raises:
             AssertionError: 当 ffmpeg 执行失败或未产出文件时抛出。
+            subprocess.TimeoutExpired: 当压制超过三十分钟时抛出。
         """
         command = [
             "ffmpeg",
             "-y",
+            "-hide_banner",
+            "-nostdin",
+            "-v",
+            "error",
+            "-xerror",
+            "-err_detect",
+            "explode",
             "-i",
             str(input_path),
+            "-map",
+            "0:v:0",
+            "-map",
+            "0:a:0?",
             "-c:v",
             "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-vf",
+            "scale=ceil(iw*sar/2)*2:ceil(ih/2)*2,setsar=1",
             "-preset",
             "veryfast",
             "-b:v",
@@ -328,9 +327,12 @@ class YtDlpVideoDownloader:
             capture_output=True,
             text=True,
             check=False,
+            timeout=1800,
         )
         stderr = completed.stderr.strip()
-        assert completed.returncode == 0, f"ffmpeg 压制失败: {stderr or completed.stdout.strip()}"
+        assert completed.returncode == 0 and not stderr, (
+            f"ffmpeg 压制失败: {stderr or completed.stdout.strip()}"
+        )
         assert output_path.is_file(), "ffmpeg 未生成压制文件"
 
     def _extract_downloaded_path(self, info: dict[str, object]) -> Path:

@@ -1,4 +1,5 @@
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,6 +8,7 @@ from unittest import mock
 
 from image_storage import ImageStorageManager
 from src.yt_dlp_downloader import DownloadedVideo, YtDlpVideoDownloader
+from src.video_validation import VideoMetadata
 
 try:
     from qq_group_bot import QQBotHandler
@@ -81,10 +83,72 @@ class YtDlpDownloaderTest(unittest.TestCase):
                 (Path(tmp_dir) / "incoming" / "video").resolve(),
             )
 
+    def test_download_rejects_corrupt_small_video_with_zero_probe_exit(self) -> None:
+        """拦截 ffprobe 返回成功但报告非法帧大小的小视频。
+
+        Returns:
+            None: 验证下载失败且保留诊断文件。
+
+        Raises:
+            AssertionError: 当损坏文件被当作下载成功时抛出。
+        """
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            downloader = YtDlpVideoDownloader(tmp_dir)
+            probe_result = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="{}",
+                stderr="Sample size 3199971767 is too large",
+            )
+            with (
+                mock.patch("src.yt_dlp_downloader.YoutubeDL", FakeYoutubeDL),
+                mock.patch("subprocess.run", return_value=probe_result),
+            ):
+                with self.assertRaisesRegex(AssertionError, "3199971767"):
+                    downloader.download("https://x.com/example/status/123456")
+            self.assertEqual(len(list(Path(tmp_dir).glob("*.mp4"))), 1)
+
+    @unittest.skipUnless(_QQ_MODULE_AVAILABLE, "缺少 langgraph 依赖")
+    def test_dl_rejects_corrupt_video_before_sending(self) -> None:
+        """通过真实命令处理链确认坏文件只产生失败提示。
+
+        Returns:
+            None: 验证不会构造视频消息或删除诊断文件。
+
+        Raises:
+            AssertionError: 当命令仍发送视频或删除坏文件时抛出。
+        """
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            handler = object.__new__(QQBotHandler)
+            handler.bot_cfg = SimpleNamespace(
+                api_base="http://127.0.0.1:3000", access_token="",
+                cmd_allowed_users=(),
+            )
+            manager = ImageStorageManager(tmp_dir)
+            with (
+                mock.patch.object(QQBotHandler, "_require_image_storage", return_value=manager),
+                mock.patch("src.yt_dlp_downloader.YoutubeDL", FakeYoutubeDL),
+                mock.patch("subprocess.run", return_value=subprocess.CompletedProcess(
+                    args=[], returncode=0, stdout="{}",
+                    stderr="Sample size 3199971767 is too large",
+                )),
+                mock.patch("qq_group_bot._send_group_msg") as send_mock,
+                mock.patch("qq_group_bot._delete_local_video_after_delay") as cleanup_mock,
+            ):
+                self.assertTrue(handler._handle_commands(
+                    10001, 20002, "/dl https://x.com/example/status/123456"
+                ))
+            send_mock.assert_called_once()
+            self.assertIsInstance(send_mock.call_args.args[2], str)
+            self.assertIn("下载失败", send_mock.call_args.args[2])
+            cleanup_mock.assert_not_called()
+
     def test_download_uses_auto_extractor_for_x_url(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             downloader = YtDlpVideoDownloader(Path(tmp_dir) / "incoming" / "video")
-            with mock.patch("src.yt_dlp_downloader.YoutubeDL", FakeYoutubeDL):
+            with (
+                mock.patch("src.yt_dlp_downloader.YoutubeDL", FakeYoutubeDL),
+                mock.patch.object(downloader._validator, "validate", return_value=
+                    VideoMetadata(10.0, 320, 180, "h264", "yuv420p", False)),
+            ):
                 result = downloader.download(
                     "https://x.com/example/status/1234567890?s=20"
                 )
@@ -117,7 +181,8 @@ class YtDlpDownloaderTest(unittest.TestCase):
 
             with (
                 mock.patch("src.yt_dlp_downloader.YoutubeDL", FakeYoutubeDL),
-                mock.patch.object(downloader, "_probe_duration_seconds", return_value=10.0),
+                mock.patch.object(downloader._validator, "validate", return_value=
+                    VideoMetadata(10.0, 320, 180, "h264", "yuv420p", False)),
                 mock.patch.object(
                     downloader,
                     "_calculate_target_bitrates",
@@ -151,7 +216,8 @@ class YtDlpDownloaderTest(unittest.TestCase):
 
             with (
                 mock.patch("src.yt_dlp_downloader.YoutubeDL", FakeYoutubeDL),
-                mock.patch.object(downloader, "_probe_duration_seconds", return_value=10.0),
+                mock.patch.object(downloader._validator, "validate", return_value=
+                    VideoMetadata(10.0, 320, 180, "h264", "yuv420p", False)),
                 mock.patch.object(
                     downloader,
                     "_calculate_target_bitrates",
