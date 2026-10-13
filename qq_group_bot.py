@@ -3658,7 +3658,7 @@ class QQBotHandler(BaseHTTPRequestHandler):
         if cmd == "/boost" and len(parts) == 1:
             candidates = (
                 _INITIAL_MODEL_NAME,
-                "google_genai:gemini-3.1-pro-preview",
+                "google_genai:gemini-4-argon",
             )
             current_model = self.agent._config.model_name
             try:
