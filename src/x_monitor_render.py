@@ -551,19 +551,28 @@ def collect_referenced_tweet_ids(payload: Mapping[str, Any]) -> list[str]:
 
 def clean_tweet_text(raw_tweet: Mapping[str, Any]) -> str:
     """
-    清洗推文正文并替换 URL entity。
+    清洗文章或推文正文并替换对应的 URL entity。
 
     Args:
         raw_tweet (Mapping[str, Any]): X API 原始推文对象。
 
     Returns:
-        str: 清洗后的正文。
+        str: 文章标题与全文，或清洗后的推文正文。
 
     Raises:
-        AssertionError: 当 entities.urls 类型异常时抛出。
+        AssertionError: 当文章缺少标题或全文，或 entities.urls 类型异常时抛出。
     """
+    article = raw_tweet.get("article")
     note_tweet = raw_tweet.get("note_tweet")
-    if isinstance(note_tweet, Mapping) and note_tweet.get("text"):
+    if article is not None:
+        assert isinstance(article, Mapping), "X API article 必须为对象"
+        title = article.get("title")
+        body = article.get("plain_text")
+        assert isinstance(title, str) and title.strip(), "X API article 缺少 title"
+        assert isinstance(body, str) and body.strip(), "X API article 缺少 plain_text 全文"
+        text = f"{title.strip()}\n\n{body.strip()}"
+        entities = article.get("entities") or {}
+    elif isinstance(note_tweet, Mapping) and note_tweet.get("text"):
         text = str(note_tweet["text"])
         entities = note_tweet.get("entities") or {}
     else:

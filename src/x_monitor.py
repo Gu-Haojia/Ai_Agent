@@ -19,6 +19,8 @@ from urllib.parse import urlparse
 
 import requests
 
+from src.x_monitor_render import clean_tweet_text
+
 USER_LOOKUP_URL = "https://api.x.com/2/users/by/username/{username}"
 USER_BY_ID_URL = "https://api.x.com/2/users/{user_id}"
 USER_POSTS_URL = "https://api.x.com/2/users/{user_id}/tweets"
@@ -128,7 +130,7 @@ def _tweet_payload_params() -> dict[str, str]:
     """
     return {
         "tweet.fields": (
-            "attachments,author_id,created_at,entities,note_tweet,public_metrics,"
+            "article,attachments,author_id,created_at,entities,note_tweet,public_metrics,"
             "referenced_tweets"
         ),
         "expansions": (
@@ -1451,7 +1453,11 @@ class XMonitorManager:
             assert isinstance(raw_post, dict), "X API 单条推文必须为对象"
             post_id = str(raw_post.get("id") or "").strip()
             assert post_id, "X API 推文缺少 id"
-            text = str(raw_post.get("text") or "").strip()
+            text = (
+                clean_tweet_text(raw_post)
+                if raw_post.get("article") is not None
+                else str(raw_post.get("text") or "").strip()
+            )
             created_label = _format_created_at(raw_post.get("created_at"))
             image_urls = _collect_post_image_urls(raw_post, media_by_key, limit=4)
             post_username = self._post_username(raw_post, user_by_id, username)
