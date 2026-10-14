@@ -162,7 +162,7 @@ def test_boost_command_prints_model_rebuild_log(
     output = capsys.readouterr().out
     assert (
         "/boost 已切换模型：google_genai:gemini-3.6-flash -> "
-        "google_genai:gemini-3.1-pro-preview，Agent 已重建。"
+        "google_genai:gemini-4-argon，Agent 已重建。"
     ) in output
 
 
