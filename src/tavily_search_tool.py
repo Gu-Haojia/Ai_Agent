@@ -1,5 +1,5 @@
 """
-按图片搜索参数路由的 Tavily 搜索工具。
+按图片搜索参数路由并提供单轮超限提醒的 Tavily 搜索工具。
 
 该模块保持原生 TavilySearch 的模型可见接口不变，仅在请求图片时
 使用启用了图片描述的 TavilySearch 实例。
@@ -7,15 +7,163 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 
 from langchain_core.callbacks import (
     AsyncCallbackManagerForToolRun,
     CallbackManagerForToolRun,
 )
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.tools import BaseTool
 from langchain_tavily import TavilySearch
+from langgraph.prebuilt.tool_node import ToolCallRequest
+from langgraph.types import Command
 from pydantic import PrivateAttr
+
+
+TAVILY_SEARCH_TOOL_NAME: str = "tavily_search"
+TAVILY_SEARCH_LIMIT_NOTICE: str = (
+    "本轮 Tavily 调用次数已经超过规定上限。"
+    "请尽量不要再次调用 Tavily，优先基于已有搜索结果完成回答；"
+    "只有在现有信息无法回答且确实需要新的独立事实时才继续搜索。"
+)
+
+
+class TavilySearchReminder:
+    """在单轮首次超限的 Tavily 调用中返回提醒，后续调用正常执行。
+
+    Args:
+        search_limit_getter (Callable[[], int]): 获取当前搜索提醒阈值的函数。
+
+    Returns:
+        None: 初始化不返回额外值。
+
+    Raises:
+        None: 初始化不主动抛出异常。
+    """
+
+    def __init__(self, search_limit_getter: Callable[[], int]) -> None:
+        """保存读取实时阈值的函数，不维护跨会话共享计数。
+
+        Args:
+            search_limit_getter (Callable[[], int]): 当前阈值的读取函数。
+
+        Returns:
+            None: 初始化不返回额外值。
+
+        Raises:
+            None: 初始化不主动抛出异常。
+        """
+        self._search_limit_getter = search_limit_getter
+
+    def wrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        execute: Callable[[ToolCallRequest], ToolMessage | Command],
+    ) -> ToolMessage | Command:
+        """首次超限时同步返回提醒，其余调用交给原工具执行。
+
+        Args:
+            request (ToolCallRequest): 当前工具调用及其会话状态。
+            execute (Callable): 原工具的同步执行函数。
+
+        Returns:
+            ToolMessage | Command: 提醒消息或原工具返回值。
+
+        Raises:
+            AssertionError: 当阈值或 Tavily 调用状态非法时抛出。
+        """
+        notice = self._build_notice(request)
+        if notice is not None:
+            return notice
+        return execute(request)
+
+    async def awrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        execute: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command]],
+    ) -> ToolMessage | Command:
+        """首次超限时异步返回提醒，其余调用交给原工具执行。
+
+        Args:
+            request (ToolCallRequest): 当前工具调用及其会话状态。
+            execute (Callable): 原工具的异步执行函数。
+
+        Returns:
+            ToolMessage | Command: 提醒消息或原工具返回值。
+
+        Raises:
+            AssertionError: 当阈值或 Tavily 调用状态非法时抛出。
+        """
+        notice = self._build_notice(request)
+        if notice is not None:
+            return notice
+        return await execute(request)
+
+    def _build_notice(self, request: ToolCallRequest) -> ToolMessage | None:
+        """根据本轮调用顺序构造首次超限的工具提醒。
+
+        Args:
+            request (ToolCallRequest): 当前工具调用及其会话状态。
+
+        Returns:
+            ToolMessage | None: 首次超限时返回提醒，其他调用返回 None。
+
+        Raises:
+            AssertionError: 当阈值、状态或工具调用标识非法时抛出。
+        """
+        if request.tool_call["name"] != TAVILY_SEARCH_TOOL_NAME:
+            return None
+        search_limit = self._search_limit_getter()
+        assert type(search_limit) is int and search_limit > 0, (
+            "搜索提醒阈值必须为正整数"
+        )
+        assert isinstance(request.state, dict), "工具调用状态必须为字典"
+        call_number = self._current_call_number(
+            request.state["messages"], request.tool_call["id"]
+        )
+        if call_number != search_limit + 1:
+            return None
+        return ToolMessage(
+            content=TAVILY_SEARCH_LIMIT_NOTICE,
+            name=TAVILY_SEARCH_TOOL_NAME,
+            tool_call_id=request.tool_call["id"],
+        )
+
+    @staticmethod
+    def _current_call_number(
+        messages: Sequence[BaseMessage], tool_call_id: str
+    ) -> int:
+        """按消息中声明的顺序计算当前 Tavily 调用在本轮的序号。
+
+        Args:
+            messages (Sequence[BaseMessage]): 当前会话的消息序列。
+            tool_call_id (str): 当前 Tavily 调用的标识。
+
+        Returns:
+            int: 从最近一条用户消息开始计算的调用序号。
+
+        Raises:
+            AssertionError: 当消息不是序列、缺少用户消息或调用时抛出。
+        """
+        assert isinstance(messages, Sequence), "messages 必须是序列"
+        last_human_index = -1
+        for index, message in enumerate(messages):
+            if isinstance(message, HumanMessage):
+                last_human_index = index
+        assert last_human_index >= 0, "Tavily 调用必须包含当前轮用户消息"
+        call_number = 0
+        for message in messages[last_human_index + 1 :]:
+            if not isinstance(message, AIMessage):
+                continue
+            for tool_call in message.tool_calls:
+                if tool_call["name"] != TAVILY_SEARCH_TOOL_NAME:
+                    continue
+                call_number += 1
+                if tool_call["id"] == tool_call_id:
+                    return call_number
+        raise AssertionError("当前 Tavily 调用未出现在本轮消息中")
 
 
 class RoutedTavilySearch(BaseTool):

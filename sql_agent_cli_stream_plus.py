@@ -84,7 +84,7 @@ from src.google_reverse_image_tool import GoogleReverseImageTool, ReverseImageUp
 from src.google_lens_tool import GoogleLensClient, GoogleLensTool
 from src.web_browser_tool import WebBrowserTool
 from src.serper_image_search_tool import SerperImageSearchTool
-from src.tavily_search_tool import RoutedTavilySearch
+from src.tavily_search_tool import RoutedTavilySearch, TavilySearchReminder
 from src.anilist_client import AniListAPI, ANILIST_MEDIA_SORTS
 from src.timer_reminder import TimerReminderManager
 from src.token_usage_logger import TOKEN_USAGE_LOGGER
@@ -123,7 +123,6 @@ from src.imas_setlist_tool import (
 from src.meru_search_tool import meru_search
 
 ANILIST_SORT_CHOICES_TEXT: str = ", ".join(ANILIST_MEDIA_SORTS)
-TAVILY_SEARCH_TOOL_NAME: str = "tavily_search"
 DEFAULT_TAVILY_SEARCH_LIMIT: int = 5
 GOOGLE_RETRY_HTTP_STATUS_CODES: tuple[int, ...] = (
     408,
@@ -503,64 +502,6 @@ def _normalize_blocked_ai_message(message: AIMessage) -> AIMessage:
                 }
             ]
         }
-    )
-
-
-def _count_current_turn_tavily_calls(messages: Sequence[Any]) -> int:
-    """
-    统计当前用户轮次已经发起的 Tavily 调用次数。
-
-    Args:
-        messages (Sequence[Any]): 当前 LangGraph 状态中的消息序列。
-
-    Returns:
-        int: 从最近一条用户消息开始统计的 Tavily 工具调用次数。
-
-    Raises:
-        AssertionError: 当 ``messages`` 不是序列时抛出。
-    """
-    assert isinstance(messages, Sequence), "messages 必须是序列"
-    last_human_index = -1
-    for index, message in enumerate(messages):
-        if isinstance(message, HumanMessage):
-            last_human_index = index
-
-    if last_human_index < 0:
-        return 0
-
-    tavily_calls = 0
-    for message in messages[last_human_index + 1 :]:
-        if not isinstance(message, AIMessage):
-            continue
-        for tool_call in message.tool_calls:
-            if tool_call.get("name") == TAVILY_SEARCH_TOOL_NAME:
-                tavily_calls += 1
-    return tavily_calls
-
-
-def _build_tavily_prompt_notice(tavily_calls: int, search_limit: int) -> str:
-    """
-    根据当前轮次的 Tavily 调用次数构造临时提示。
-
-    Args:
-        tavily_calls (int): 当前用户轮次已经发起的 Tavily 调用次数。
-        search_limit (int): 单轮 Tavily 搜索提醒阈值。
-
-    Returns:
-        str: 达到提醒阈值时返回提示文本，否则返回空字符串。
-
-    Raises:
-        AssertionError: 当调用次数不合法时抛出。
-    """
-    assert isinstance(tavily_calls, int) and tavily_calls >= 0, (
-        "tavily_calls 必须是非负整数"
-    )
-    if tavily_calls < search_limit:
-        return ""
-    return (
-        "本轮 Tavily 调用次数已经达到或超过规定上限。"
-        "请尽量不要再次调用 Tavily，优先基于已有搜索结果完成回答；"
-        "只有在现有信息无法回答且确实需要新的独立事实时才继续搜索。"
     )
 
 
@@ -3398,12 +3339,6 @@ class SQLCheckpointAgentStreamingPlus:
                     for message in state_messages
                 ]
             messages = [sys_msg]
-            tavily_notice = _build_tavily_prompt_notice(
-                _count_current_turn_tavily_calls(state_messages),
-                self._config.tavily_search_limit,
-            )
-            if tavily_notice:
-                messages.append(SystemMessage(content=tavily_notice))
             group_summary = str(state.get("group_context_summary") or "").strip()
             if group_summary:
                 messages.append(
@@ -3463,7 +3398,17 @@ class SQLCheckpointAgentStreamingPlus:
         builder.add_node("chatbot", chatbot)
 
         if tools:
-            builder.add_node("tools", ToolNode(tools=tools))
+            search_reminder = TavilySearchReminder(
+                lambda: self._config.tavily_search_limit
+            )
+            builder.add_node(
+                "tools",
+                ToolNode(
+                    tools=tools,
+                    wrap_tool_call=search_reminder.wrap_tool_call,
+                    awrap_tool_call=search_reminder.awrap_tool_call,
+                ),
+            )
             builder.add_edge(START, "compress_context")
             builder.add_edge("compress_context", "chatbot")
             builder.add_conditional_edges("chatbot", tools_condition)
