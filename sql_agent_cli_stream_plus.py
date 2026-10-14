@@ -2803,10 +2803,11 @@ class SQLCheckpointAgentStreamingPlus:
 
                     tools.append(google_lens_search)
 
-                @tool("load_image_data_url")
-                def load_image_data_url(image: str) -> list[dict[str, Any]]:
+                @tool("view_image")
+                def view_image(image: str) -> list[dict[str, Any]]:
                     """
-                    读取 URL 或已保存文件名的图像，并返回可供 LLM 消费的图片消息片段。
+                    查看一张图片，将图像内容提供给你，用于描述画面、识别对象、读取文字和检查细节。
+                    当只有图片链接或已保存文件名时，可以调用本工具。
 
                     Args:
                         image (str): HTTP(S) URL 或已保存的图像文件名（仅文件名，禁止包含路径）。
@@ -2840,7 +2841,7 @@ class SQLCheckpointAgentStreamingPlus:
                         {"type": "image_url", "image_url": {"url": data_url}},
                     ]
 
-                tools.append(load_image_data_url)
+                tools.append(view_image)
 
                 from langchain_experimental.utilities import PythonREPL
 
