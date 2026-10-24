@@ -3449,10 +3449,32 @@ class QQBotHandler(BaseHTTPRequestHandler):
                     self.bot_cfg.access_token,
                 )
                 return True
+
+            def send_download_notice(message: str) -> None:
+                """在当前群发送视频信息与开始下载提示。
+
+                Args:
+                    message (str): 下载器生成的已解析视频信息。
+
+                Returns:
+                    None: 完成文本提示发送。
+
+                Raises:
+                    OSError: 网络请求失败时透传。
+                    RuntimeError: OneBot HTTP 请求失败时透传。
+                """
+                _send_group_msg(
+                    self.bot_cfg.api_base, group_id,
+                    [{"type": "text", "data": {"text": message}}],
+                    self.bot_cfg.access_token,
+                )
+
             try:
                 storage = self._require_image_storage()
                 downloader = YtDlpVideoDownloader.from_image_storage(storage)
-                downloaded = downloader.download(target_url)
+                downloaded = downloader.download(
+                    target_url, on_download_start=send_download_notice
+                )
                 payload = _build_group_video_message(downloaded.path)
                 _send_group_msg(
                     self.bot_cfg.api_base,

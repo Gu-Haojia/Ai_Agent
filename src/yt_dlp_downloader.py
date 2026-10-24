@@ -7,15 +7,19 @@ yt-dlp 视频下载模块。
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 import os
 from pathlib import Path
 import subprocess
 import time
+from typing import Any
 
 from image_storage import ImageStorageManager
 from src.video_validation import VideoMetadata, VideoValidator
 from yt_dlp import YoutubeDL
+from yt_dlp.postprocessor.common import PostProcessor
+from yt_dlp.utils import format_bytes
 
 __all__ = ["DownloadedVideo", "YtDlpVideoDownloader"]
 
@@ -28,6 +32,119 @@ class DownloadedVideo:
     source_url: str
     extractor: str
     title: str
+
+
+class DownloadStartNoticePP(PostProcessor):
+    """在视频解析完成、媒体下载开始前发送一次基本信息提示。
+
+    Args:
+        notify (Callable[[str], None]): 接收提示文本的回调。
+
+    Returns:
+        None: 构造时不发送提示。
+
+    Raises:
+        None: 构造时不主动抛出异常。
+    """
+
+    def __init__(self, notify: Callable[[str], None]) -> None:
+        """保存当前下载请求的通知回调。
+
+        Args:
+            notify (Callable[[str], None]): 在下载前同步执行的通知函数。
+
+        Returns:
+            None: 初始化通知状态。
+
+        Raises:
+            None: 构造时不主动抛出异常。
+        """
+        super().__init__()
+        self._notify = notify
+        self._notified = False
+
+    def run(self, info: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
+        """依据已选中的下载格式发送信息，后续分轨或重试不重复通知。
+
+        Args:
+            info (dict[str, Any]): yt-dlp 已解析并选择格式的视频信息。
+
+        Returns:
+            tuple[list[str], dict[str, Any]]: 空删除列表和原视频信息。
+
+        Raises:
+            AssertionError: 当视频标题缺失、时长或大小无效时抛出。
+            Exception: 通知回调失败时透传异常，停止下载。
+        """
+        if not self._notified:
+            self._notify(self._format_message(info))
+            self._notified = True
+        return [], info
+
+    @staticmethod
+    def _format_message(info: dict[str, Any]) -> str:
+        """格式化标题、时长、分辨率与下载大小。
+
+        Args:
+            info (dict[str, Any]): yt-dlp 视频信息。
+
+        Returns:
+            str: 视频基本信息与开始下载提示。
+
+        Raises:
+            AssertionError: 当标题缺失、时长或大小无效时抛出。
+        """
+        title = info.get("title")
+        assert isinstance(title, str) and title.strip(), "解析结果缺少视频标题"
+        lines = ["视频解析成功，开始下载…", f"标题：{title.strip()}"]
+        duration = info.get("duration")
+        if duration is not None:
+            assert isinstance(duration, (int, float)) and duration >= 0, "视频时长无效"
+            hours, remainder = divmod(int(duration), 3600)
+            minutes, seconds = divmod(remainder, 60)
+            time_text = f"{minutes:02d}:{seconds:02d}"
+            if hours:
+                time_text = f"{hours}:{time_text}"
+            lines.append(f"时长：{time_text}")
+        width, height = info.get("width"), info.get("height")
+        if width and height:
+            lines.append(f"分辨率：{width}×{height}")
+        lines.append(f"大小：{DownloadStartNoticePP._format_size(info)}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _format_size(info: dict[str, Any]) -> str:
+        """显示选中格式的大小，分轨合计标为估算且不将部分大小当总量。
+
+        Args:
+            info (dict[str, Any]): 包含单文件或所选音视频分轨的视频信息。
+
+        Returns:
+            str: 实际大小、带“约”的估算大小，或“未知”。
+
+        Raises:
+            AssertionError: 当已提供的大小不是非负数时抛出。
+        """
+        selected_formats = info.get("requested_formats")
+        if selected_formats:
+            sizes: list[float] = []
+            for item in selected_formats:
+                size = item.get("filesize")
+                if size is None:
+                    size = item.get("filesize_approx")
+                if size is None:
+                    return "未知"
+                assert isinstance(size, (int, float)) and size >= 0, "视频大小无效"
+                sizes.append(size)
+            return f"约 {format_bytes(sum(sizes))}"
+        size = info.get("filesize")
+        approximate = size is None
+        if approximate:
+            size = info.get("filesize_approx")
+        if size is None:
+            return "未知"
+        assert isinstance(size, (int, float)) and size >= 0, "视频大小无效"
+        return f"{'约 ' if approximate else ''}{format_bytes(size)}"
 
 
 class YtDlpVideoDownloader:
@@ -112,12 +229,16 @@ class YtDlpVideoDownloader:
         video_dir = Path(getattr(manager, "_incoming_video_dir")).resolve()
         return cls(video_dir)
 
-    def download(self, url: str) -> DownloadedVideo:
+    def download(
+        self, url: str, on_download_start: Callable[[str], None] | None = None
+    ) -> DownloadedVideo:
         """
         下载给定 URL 对应的视频。
 
         Args:
             url (str): 视频页面链接。
+            on_download_start (Callable[[str], None] | None): 解析成功后、媒体下载前
+                接收基本信息提示的回调；未提供时不发送提示。
 
         Returns:
             DownloadedVideo: 下载完成后的本地文件信息。
@@ -133,6 +254,10 @@ class YtDlpVideoDownloader:
         self._log(f"开始下载到目录: {self._video_dir}")
         try:
             with YoutubeDL(self._build_options()) as ydl:
+                if on_download_start is not None:
+                    ydl.add_post_processor(
+                        DownloadStartNoticePP(on_download_start), when="before_dl"
+                    )
                 info = ydl.extract_info(target_url, download=True)
             path = self._extract_downloaded_path(info)
             title = str(info.get("title") or path.stem)

@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from yt_dlp import YoutubeDL
+from yt_dlp.postprocessor.common import PostProcessor
 
 from image_storage import ImageStorageManager
 from src.yt_dlp_downloader import DownloadedVideo, YtDlpVideoDownloader
@@ -30,7 +31,24 @@ class FakeYoutubeDL:
 
     def __init__(self, options: dict[str, object]) -> None:
         self._options = options
+        self._before_download: list[PostProcessor] = []
         FakeYoutubeDL.last_options = options
+
+    def add_post_processor(self, processor: PostProcessor, when: str) -> None:
+        """记录下载前处理器，模拟解析与下载之间的通知边界。
+
+        Args:
+            processor (PostProcessor): 待调用的处理器。
+            when (str): 处理阶段，必须为 before_dl。
+
+        Returns:
+            None: 保存处理器供解析完成后调用。
+
+        Raises:
+            AssertionError: 当阶段不是下载前时抛出。
+        """
+        assert when == "before_dl"
+        self._before_download.append(processor)
 
     def __enter__(self) -> "FakeYoutubeDL":
         return self
@@ -55,6 +73,8 @@ class FakeYoutubeDL:
         """
         assert download is True, "测试中必须执行 download=True"
         FakeYoutubeDL.last_url = url
+        for processor in self._before_download:
+            processor.run({"id": "123456", "title": "测试视频", "extractor": "twitter"})
         template = str(self._options["outtmpl"]["default"])
         file_path = (
             template.replace("%(extractor)s", "twitter")
@@ -224,7 +244,8 @@ class YtDlpDownloaderTest(unittest.TestCase):
                 self.assertTrue(handler._handle_commands(
                     10001, 20002, "/dl https://x.com/example/status/123456"
                 ))
-            send_mock.assert_called_once()
+            self.assertEqual(send_mock.call_count, 2)
+            self.assertIn("开始下载", send_mock.call_args_list[0].args[2][0]["data"]["text"])
             self.assertIsInstance(send_mock.call_args.args[2], str)
             self.assertIn("下载失败", send_mock.call_args.args[2])
             cleanup_mock.assert_not_called()
@@ -359,7 +380,7 @@ class YtDlpDownloaderTest(unittest.TestCase):
                 )
         self.assertTrue(handled)
         factory_mock.return_value.download.assert_called_once_with(
-            "https://x.com/example/status/1"
+            "https://x.com/example/status/1", on_download_start=mock.ANY
         )
         send_mock.assert_called_once()
         cleanup_mock.assert_called_once_with(video_path)
