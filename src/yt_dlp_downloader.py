@@ -8,6 +8,7 @@ yt-dlp 视频下载模块。
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from pathlib import Path
 import subprocess
 import time
@@ -49,6 +50,7 @@ class YtDlpVideoDownloader:
     _TARGET_SIZE_RATIO = 0.92
     _DEFAULT_AUDIO_BITRATE_KBPS = 128
     _MIN_VIDEO_BITRATE_KBPS = 180
+    _COOKIE_FILE = Path(__file__).resolve().parent.parent / "secret" / "bilibili_cookies.txt"
     _DEFAULT_HEADERS: dict[str, str] = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -155,13 +157,13 @@ class YtDlpVideoDownloader:
 
     def _build_options(self) -> dict[str, object]:
         """
-        构造 yt-dlp 下载参数。
+        构造 yt-dlp 下载参数，自动加载项目内已有的 Cookie 文件。
 
         Returns:
             dict[str, object]: yt-dlp 参数字典。
 
         Raises:
-            None: 本方法不会主动抛出异常。
+            AssertionError: 当 Cookie 路径不是文件、不可读或内容为空时抛出。
         """
         options: dict[str, object] = {
             "quiet": True,
@@ -181,6 +183,11 @@ class YtDlpVideoDownloader:
                 "default": str(self._video_dir / "%(extractor)s_%(id)s.%(ext)s")
             },
         }
+        if self._COOKIE_FILE.exists():
+            assert self._COOKIE_FILE.is_file(), "Cookie 路径必须为普通文件"
+            assert os.access(self._COOKIE_FILE, os.R_OK), "Cookie 文件不可读"
+            assert self._COOKIE_FILE.stat().st_size > 0, "Cookie 文件不能为空"
+            options["cookiefile"] = str(self._COOKIE_FILE)
         return options
 
     def _compress_if_needed(self, video_path: Path, metadata: VideoMetadata) -> Path:

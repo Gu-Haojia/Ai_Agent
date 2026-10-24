@@ -6,6 +6,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+from yt_dlp import YoutubeDL
+
 from image_storage import ImageStorageManager
 from src.yt_dlp_downloader import DownloadedVideo, YtDlpVideoDownloader
 from src.video_validation import VideoMetadata
@@ -73,6 +75,92 @@ class FakeYoutubeDL:
 class YtDlpDownloaderTest(unittest.TestCase):
     def setUp(self) -> None:
         FakeYoutubeDL.file_bytes = b"fake-video"
+
+    def test_cookie_file_is_optional_and_detected_on_next_download(self) -> None:
+        """缺少文件时保持原行为，新增文件后无需重建下载器即可加载。
+
+        Returns:
+            None: 验证不存在时不创建文件，存在时正确加载并限定域名。
+
+        Raises:
+            AssertionError: 当自动检测或 Cookie 域名隔离失效时抛出。
+        """
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            cookie_path = Path(tmp_dir) / "secret" / "bilibili_cookies.txt"
+            downloader = YtDlpVideoDownloader(Path(tmp_dir) / "videos")
+            with mock.patch.object(YtDlpVideoDownloader, "_COOKIE_FILE", cookie_path):
+                options = downloader._build_options()
+                self.assertNotIn("cookiefile", options)
+                with YoutubeDL(options) as ydl:
+                    self.assertEqual(len(ydl.cookiejar), 0)
+                self.assertFalse(cookie_path.parent.exists())
+                cookie_path.parent.mkdir()
+                cookie_path.write_text(
+                    "# Netscape HTTP Cookie File\n"
+                    ".bilibili.com\tTRUE\t/\tTRUE\t0\tSESSDATA\ttest-session\n",
+                    encoding="utf-8",
+                )
+                options = downloader._build_options()
+                self.assertEqual(options["cookiefile"], str(cookie_path))
+                self.assertNotIn("cookiesfrombrowser", options)
+                with YoutubeDL(options) as ydl:
+                    self.assertEqual(
+                        ydl.cookiejar.get_cookie_header("https://www.bilibili.com/"),
+                        "SESSDATA=test-session",
+                    )
+                    self.assertIsNone(ydl.cookiejar.get_cookie_header("https://x.com/"))
+
+    def test_cookie_directory_is_rejected(self) -> None:
+        """固定路径被误建为目录时明确失败。
+
+        Returns:
+            None: 验证错误路径不会被忽略。
+
+        Raises:
+            AssertionError: 当目录被接受为 Cookie 文件时抛出。
+        """
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            downloader = YtDlpVideoDownloader(tmp_dir)
+            with mock.patch.object(YtDlpVideoDownloader, "_COOKIE_FILE", Path(tmp_dir)):
+                with self.assertRaisesRegex(AssertionError, "必须为普通文件"):
+                    downloader._build_options()
+
+    def test_empty_cookie_file_is_rejected(self) -> None:
+        """拒绝空 Cookie 文件，避免悄悄发起未登录请求。
+
+        Returns:
+            None: 验证空文件检查。
+
+        Raises:
+            AssertionError: 当空文件未被拒绝时抛出。
+        """
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            cookie_path = Path(tmp_dir) / "cookies.txt"
+            cookie_path.touch()
+            downloader = YtDlpVideoDownloader(tmp_dir)
+            with mock.patch.object(YtDlpVideoDownloader, "_COOKIE_FILE", cookie_path):
+                with self.assertRaisesRegex(AssertionError, "不能为空"):
+                    downloader._build_options()
+
+    def test_unreadable_cookie_file_is_rejected(self) -> None:
+        """拦截不可读文件，防止 yt-dlp 静默忽略登录信息。
+
+        Returns:
+            None: 验证权限错误在请求前暴露。
+
+        Raises:
+            AssertionError: 当不可读文件被静默忽略时抛出。
+        """
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            cookie_path = Path(tmp_dir) / "cookies.txt"
+            cookie_path.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+            downloader = YtDlpVideoDownloader(tmp_dir)
+            with (
+                mock.patch.object(YtDlpVideoDownloader, "_COOKIE_FILE", cookie_path),
+                mock.patch("src.yt_dlp_downloader.os.access", return_value=False),
+            ):
+                with self.assertRaisesRegex(AssertionError, "不可读"):
+                    downloader._build_options()
 
     def test_from_image_storage_uses_same_video_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

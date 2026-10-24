@@ -1,6 +1,7 @@
 .git
 .gitignore
 .env
+secret/
 .venv*
 __pycache__/
 *.pyc
