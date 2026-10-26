@@ -153,15 +153,26 @@ class GeminiTweetTranslator:
 
     def _create_client(self) -> Any:
         """
-        创建 Google GenAI 客户端。
+        按 Vertex 开关创建 Google GenAI 客户端。
 
         Returns:
             Any: Google GenAI 客户端。
 
         Raises:
-            AssertionError: 当缺少可用 Gemini 凭据时抛出。
+            AssertionError: 当启用 Vertex 却缺少项目或区域，
+                或未启用 Vertex 且缺少 API Key 时抛出。
         """
         from google import genai
+
+        use_vertex = os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "").strip().lower()
+        if use_vertex in {"1", "true", "yes", "on"}:
+            project = (os.environ.get("GOOGLE_CLOUD_PROJECT") or "").strip()
+            location = (os.environ.get("GOOGLE_CLOUD_LOCATION") or "").strip()
+            assert project and location, (
+                "启用 Vertex AI 时必须配置项目与区域："
+                "GOOGLE_CLOUD_PROJECT、GOOGLE_CLOUD_LOCATION。"
+            )
+            return genai.Client(vertexai=True, project=project, location=location)
 
         api_key = (
             os.environ.get("GOOGLE_API_KEY")
@@ -169,17 +180,11 @@ class GeminiTweetTranslator:
             or os.environ.get("GOOGLE_GENERATIVE_AI_API_KEY")
             or ""
         ).strip()
-        if api_key:
-            return genai.Client(api_key=api_key)
-
-        use_vertex = os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "").lower()
-        project = (os.environ.get("GOOGLE_CLOUD_PROJECT") or "").strip()
-        location = (os.environ.get("GOOGLE_CLOUD_LOCATION") or "").strip()
-        assert use_vertex in {"1", "true", "yes", "on"} and project and location, (
+        assert api_key, (
             "缺少 Gemini 可用环境变量，请设置 GOOGLE_API_KEY / GEMINI_API_KEY / "
-            "GOOGLE_GENERATIVE_AI_API_KEY，或配置 Vertex AI 项目与区域。"
+            "GOOGLE_GENERATIVE_AI_API_KEY，或启用 Vertex AI 并配置项目与区域。"
         )
-        return genai.Client(vertexai=True, project=project, location=location)
+        return genai.Client(vertexai=False, api_key=api_key)
 
     def _build_config(self) -> Any:
         """
