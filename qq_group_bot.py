@@ -2401,40 +2401,45 @@ class QQBotHandler(BaseHTTPRequestHandler):
                 image_payloads.append((data_b64, img.mime_type))
             except Exception as err:
                 sys.stderr.write(f"[Chat] 读取生成图片失败: {img.path} -> {err}\n")
-        # 解析 Agent 回复中的 [IMAGE]url[/IMAGE] 标签，转换为本地图片
+        # 解析 Agent 回复中的图片标签，支持网络链接与本地绝对路径
         image_tags = re.findall(
             r"\[IMAGE\](.+?)\[/IMAGE\]", answer, flags=re.IGNORECASE
         )
         if image_tags:
             manager = self._require_image_storage()
-            failed_urls: list[str] = []
-            downloaded = False
-            for url in image_tags:
-                url_norm = url.strip()
-                if not url_norm:
+            failed_sources: list[str] = []
+            loaded = False
+            for source in image_tags:
+                normalized_source = source.strip()
+                if not normalized_source:
                     continue
-                if manager.is_generated_path(url_norm):
+                if manager.is_generated_path(normalized_source):
                     continue
                 try:
-                    saved = manager.save_remote_image(url_norm)
+                    if Path(normalized_source).is_absolute():
+                        saved = manager.load_local_image(normalized_source)
+                    else:
+                        saved = manager.save_remote_image(normalized_source)
                     if saved:
                         image_payloads.append((saved.base64_data, saved.mime_type))
-                        downloaded = True
+                        loaded = True
                 except Exception as err:
-                    failed_urls.append(url_norm)
+                    failed_sources.append(normalized_source)
                     sys.stderr.write(
-                        f"\033[34m[Chat]\033[0m 下载回复图片失败: {url_norm} -> {err}\n"
+                        f"\033[34m[Chat]\033[0m 加载回复图片失败: {normalized_source} -> {err}\n"
                     )
             cleaned = re.sub(
                 r"\[IMAGE\].+?\[/IMAGE\]", "", answer, flags=re.IGNORECASE
             ).strip()
-            if failed_urls and downloaded:
-                note = "（部分图片下载失败，已忽略无法访问的链接）"
+            if failed_sources:
+                note = (
+                    "（部分图片加载失败，请检查路径或链接）"
+                    if image_payloads
+                    else "（未能加载图片，请检查路径或链接）"
+                )
                 answer = f"{cleaned}\n{note}" if cleaned else note
-            elif failed_urls and not downloaded and not image_payloads:
-                answer = cleaned or "（未能下载图片，请稍后重试）"
             else:
-                answer = cleaned or ("（图片已发送）" if downloaded else cleaned)
+                answer = cleaned or ("（图片已发送）" if loaded else cleaned)
 
         if answer:
             # 计算字数

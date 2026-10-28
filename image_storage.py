@@ -803,37 +803,66 @@ class ImageStorageManager:
         normalized = filename.strip()
         assert Path(normalized).name == normalized, "filename 仅支持文件名，不支持文件夹路径"
 
-        def _read_from(path: Path) -> StoredImage:
-            data_bytes = path.read_bytes()
-            guessed = mimetypes.guess_type(str(path))[0]
-            mime = (
-                guessed
-                if guessed and guessed.startswith("image/")
-                else self._infer_mime(data_bytes, guessed)
-            )
-            normalized_data, normalized_mime = self._resize_image_data_if_needed(
-                data_bytes, mime
-            )
-            if normalized_data != data_bytes:
-                suffix = self._suffix_for_image_mime(normalized_mime, path.name)
-                normalized_path = self._write_bytes(
-                    self._incoming_dir, normalized_data, suffix
-                )
-                encoded = base64.b64encode(normalized_data).decode("ascii")
-                return StoredImage(
-                    path=normalized_path,
-                    mime_type=normalized_mime,
-                    base64_data=encoded,
-                )
-            encoded = base64.b64encode(data_bytes).decode("ascii")
-            return StoredImage(path=path, mime_type=mime, base64_data=encoded)
-
         for directory in (self._incoming_dir, self._generated_dir):
             candidate = directory / normalized
             if candidate.is_file():
-                return _read_from(candidate)
+                return self._read_stored_image(candidate)
 
         raise AssertionError(f"找不到已保存的图像文件: {normalized}")
+
+    def load_local_image(self, source: str) -> StoredImage:
+        """根据绝对路径读取当前存储目录中的图片。
+
+        Args:
+            source (str): incoming 或 generated 目录内图片的绝对路径。
+
+        Returns:
+            StoredImage: 指定图片的路径、MIME 类型与 Base64 内容。
+
+        Raises:
+            AssertionError: 当路径为空、不是绝对路径、越界或文件无效时抛出。
+            OSError: 当路径无法解析或文件无法读取时抛出。
+            RuntimeError: 当路径包含循环软链接时抛出。
+        """
+        assert isinstance(source, str) and source.strip(), "图片路径不能为空"
+        path = Path(source.strip())
+        assert path.is_absolute(), "本地图片必须使用绝对路径"
+        resolved = path.resolve()
+        assert resolved.parent in (
+            self._incoming_dir,
+            self._generated_dir,
+        ), "本地图片必须位于当前 incoming 或 generated 目录内"
+        assert resolved.is_file(), f"找不到本地图片文件: {source}"
+        return self._read_stored_image(resolved)
+
+    def _read_stored_image(self, path: Path) -> StoredImage:
+        """读取并规范化指定图片，供文件名和绝对路径入口共用。
+
+        Args:
+            path (Path): 调用方已确认可读取的图片路径。
+
+        Returns:
+            StoredImage: 规范化后的图片路径、MIME 类型与 Base64 内容。
+
+        Raises:
+            AssertionError: 当图片内容、类型或尺寸无效时抛出。
+            OSError: 当图片无法读取、解码或保存时抛出。
+        """
+        data_bytes = path.read_bytes()
+        guessed = mimetypes.guess_type(str(path))[0]
+        mime = (
+            guessed
+            if guessed and guessed.startswith("image/")
+            else self._infer_mime(data_bytes, guessed)
+        )
+        normalized_data, normalized_mime = self._resize_image_data_if_needed(
+            data_bytes, mime
+        )
+        if normalized_data != data_bytes:
+            suffix = self._suffix_for_image_mime(normalized_mime, path.name)
+            path = self._write_bytes(self._incoming_dir, normalized_data, suffix)
+        encoded = base64.b64encode(normalized_data).decode("ascii")
+        return StoredImage(path=path, mime_type=normalized_mime, base64_data=encoded)
 
     def resolve_image_path(self, filename: str) -> Path:
         """

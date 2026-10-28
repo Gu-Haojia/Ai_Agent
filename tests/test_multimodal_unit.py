@@ -755,6 +755,90 @@ class MultimodalUnitTest(unittest.TestCase):
             ):
                 manager.load_stored_image("folder/image.png")
 
+    def test_load_local_image_preserves_exact_path_and_bytes(self) -> None:
+        """验证绝对路径读取指定图片，不被另一目录的同名图片替代。
+
+        Returns:
+            None: 无返回值。
+
+        Raises:
+            AssertionError: 当路径、类型或图片内容与预期不符时抛出。
+        """
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            manager = ImageStorageManager(tmp_dir)
+            original = self._make_image_base64(2, 3, "JPEG")
+            stored = manager.save_base64_image(original, "image/jpeg")
+            other = manager.generated_dir / stored.path.name
+            other.write_bytes(base64.b64decode(self._make_image_base64(4, 5, "JPEG")))
+
+            loaded = manager.load_local_image(str(stored.path))
+            self.assertEqual(loaded.path, stored.path)
+            self.assertEqual(loaded.mime_type, "image/jpeg")
+            self.assertEqual(loaded.base64_data, original)
+            self.assertEqual(
+                base64.b64decode(manager.load_local_image(str(other)).base64_data),
+                other.read_bytes(),
+            )
+
+    def test_load_local_image_rejects_invalid_and_missing_files(self) -> None:
+        """验证相对路径、缺失文件、目录和伪装图片均明确失败。
+
+        Returns:
+            None: 无返回值。
+
+        Raises:
+            AssertionError: 当无效文件未被拒绝时抛出。
+        """
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            manager = ImageStorageManager(tmp_dir)
+            stored = manager.save_base64_image(
+                self._make_image_base64(1, 1, "PNG"), "image/png"
+            )
+            corrupt = stored.path.parent / "corrupt.jpg"
+            corrupt.write_text("这不是图片", encoding="utf-8")
+            for source in (
+                stored.path.name,
+                str(stored.path.parent / "missing.jpg"),
+                str(stored.path.parent),
+                str(corrupt),
+            ):
+                with self.subTest(source=source), self.assertRaises(AssertionError):
+                    manager.load_local_image(source)
+
+    def test_load_local_image_rejects_paths_outside_storage(self) -> None:
+        """验证目录穿越、相似目录前缀和软链接不能读取存储目录外的图片。
+
+        Returns:
+            None: 无返回值。
+
+        Raises:
+            AssertionError: 当越界路径未被拒绝时抛出。
+        """
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir).resolve()
+            manager = ImageStorageManager(str(root / "images"))
+            stored = manager.save_base64_image(
+                self._make_image_base64(1, 1, "PNG"), "image/png"
+            )
+            outside = root / "outside.png"
+            outside.write_bytes(stored.path.read_bytes())
+            similar = stored.path.parent.with_name("incoming-other")
+            similar.mkdir()
+            sibling = similar / "outside.png"
+            sibling.write_bytes(stored.path.read_bytes())
+            linked = stored.path.parent / "linked.png"
+            linked.symlink_to(outside)
+            for source in (
+                outside,
+                stored.path.parent / ".." / ".." / outside.name,
+                sibling,
+                linked,
+            ):
+                with self.subTest(source=source), self.assertRaisesRegex(
+                    AssertionError, "必须位于当前"
+                ):
+                    manager.load_local_image(str(source))
+
     def test_save_base64_image_resizes_when_pixels_exceed_limit(self) -> None:
         """确认超过像素上限的入站图片会自动缩放后保存。"""
         with tempfile.TemporaryDirectory() as tmp_dir:

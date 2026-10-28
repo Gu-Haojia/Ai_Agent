@@ -16,6 +16,7 @@ import httpx
 import pytest
 from google.auth.exceptions import GoogleAuthError
 from google.genai import errors, types
+from PIL import Image
 
 import qq_group_bot
 import src.tts_mode as mode_module
@@ -682,6 +683,152 @@ def test_existing_image_tags_and_generated_images_keep_their_original_path(tmp_p
     assert job.images == ((base64.b64encode(b"generated-image").decode(), "image/png"), ("cmVtb3Rl", "image/png"))
     assert handler.agent.chat_once_stream.call_count == 1
     handler._send_no_content.assert_called_once()
+
+
+def _local_reply_images(storage: ImageStorageManager) -> tuple[StoredImage, StoredImage]:
+    """创建两张内容不同的 JPEG，用于验证图片回复的顺序及字节内容。
+
+    Args:
+        storage (ImageStorageManager): 测试用图片存储管理器。
+
+    Returns:
+        tuple[StoredImage, StoredImage]: 两张已保存的测试图片。
+
+    Raises:
+        AssertionError: 当测试图片无法保存时抛出。
+    """
+    images: list[StoredImage] = []
+    for color in ("red", "blue"):
+        buffer = io.BytesIO()
+        Image.new("RGB", (2, 2), color).save(buffer, format="JPEG")
+        images.append(storage.save_base64_image(
+            base64.b64encode(buffer.getvalue()).decode("ascii"), "image/jpeg"
+        ))
+    return images[0], images[1]
+
+
+@pytest.mark.parametrize("tts_enabled", [False, True])
+@pytest.mark.parametrize("with_text", [False, True])
+def test_local_absolute_image_tags_reach_qq_in_order(
+    tmp_path: Path, tts_enabled: bool, with_text: bool
+) -> None:
+    """验证两个绝对路径标签通过普通及 TTS 出口按序发送原有图片字节。
+
+    Args:
+        tmp_path (Path): 临时图片目录。
+        tts_enabled (bool): 是否启用 TTS 模式。
+        with_text (bool): 图片标签前是否携带正文。
+
+    Returns:
+        None: 无返回值。
+
+    Raises:
+        AssertionError: 当图片缺失、乱序或被错误下载时抛出。
+    """
+    storage = ImageStorageManager(str(tmp_path / "images" / "20261028~run"))
+    images = _local_reply_images(storage)
+    tags = "\n\n".join(f"[IMAGE]{image.path}[/IMAGE]" for image in images)
+    handler = _handler(("请看这两张图片。\n" if with_text else "") + tags)
+    service, tts_send, executor, tts, rewriter = _service()
+    if tts_enabled:
+        _enable(service, tts, rewriter)
+        tts_send.reset_mock()
+    with (
+        mock.patch.object(QQBotHandler, "image_storage", storage),
+        mock.patch.object(QQBotHandler, "tts_mode", service if tts_enabled else None),
+        mock.patch.object(storage, "save_remote_image") as download,
+        mock.patch.object(qq_group_bot, "_send_group_msg") as normal_send,
+    ):
+        handler.do_POST()
+        download.assert_not_called()
+        if tts_enabled:
+            normal_send.assert_not_called()
+            job = executor.submit.call_args.args[1]
+            assert job.images == tuple((image.base64_data, image.mime_type) for image in images)
+            service._deliver(job)
+            message = tts_send.call_args_list[0].args[2]["message"]
+            if not with_text:
+                rewriter.rewrite.assert_not_called()
+                tts.synthesize.assert_not_called()
+        else:
+            normal_send.assert_called_once()
+            message = normal_send.call_args.args[2]
+    assert message.count("[CQ:image,") == 2
+    assert message.index(images[0].base64_data) < message.index(images[1].base64_data)
+    assert "[IMAGE]" not in message
+    assert str(storage.generated_dir.parent) not in message
+
+
+@pytest.mark.parametrize("include_valid_image", [False, True])
+def test_missing_local_image_is_reported_without_losing_other_images(
+    tmp_path: Path, include_valid_image: bool
+) -> None:
+    """验证本地图片缺失时保留正文和成功图片，并明确报告加载失败。
+
+    Args:
+        tmp_path (Path): 临时图片目录。
+        include_valid_image (bool): 是否同时包含可读取图片。
+
+    Returns:
+        None: 无返回值。
+
+    Raises:
+        AssertionError: 当失败被隐藏或成功图片丢失时抛出。
+    """
+    storage = ImageStorageManager(str(tmp_path))
+    image, _ = _local_reply_images(storage)
+    missing = image.path.parent / "missing.jpg"
+    answer = f"请看图片。\n[IMAGE]{missing}[/IMAGE]"
+    if include_valid_image:
+        answer += f"\n\n[IMAGE]{image.path}[/IMAGE]"
+    handler = _handler(answer)
+    with (
+        mock.patch.object(QQBotHandler, "image_storage", storage),
+        mock.patch.object(storage, "save_remote_image") as download,
+        mock.patch.object(qq_group_bot, "_send_group_msg") as send,
+    ):
+        handler.do_POST()
+    download.assert_not_called()
+    send.assert_called_once()
+    message = send.call_args.args[2]
+    assert "请看图片。" in message
+    assert ("部分图片加载失败" if include_valid_image else "未能加载图片") in message
+    assert message.count("[CQ:image,") == int(include_valid_image)
+    assert "[IMAGE]" not in message
+
+
+def test_local_remote_and_generated_images_share_existing_delivery(tmp_path: Path) -> None:
+    """验证本地、网络和本轮生成图片可混合发送，生成图标签不重复发图。
+
+    Args:
+        tmp_path (Path): 临时图片目录。
+
+    Returns:
+        None: 无返回值。
+
+    Raises:
+        AssertionError: 当原有图片流程被改变或图片重复发送时抛出。
+    """
+    storage = ImageStorageManager(str(tmp_path))
+    local, remote = _local_reply_images(storage)
+    generated = storage.save_generated_image(local.base64_data, "测试", "image/jpeg")
+    url = "https://example.test/image.jpg"
+    handler = _handler(
+        f"[IMAGE]{local.path}[/IMAGE]\n[IMAGE]{url}[/IMAGE]\n"
+        f"[IMAGE]{generated.path}[/IMAGE]"
+    )
+    handler.agent.consume_generated_images.return_value = [generated]
+    with (
+        mock.patch.object(QQBotHandler, "image_storage", storage),
+        mock.patch.object(storage, "save_remote_image", return_value=remote) as download,
+        mock.patch.object(qq_group_bot, "_send_group_msg") as send,
+    ):
+        handler.do_POST()
+    download.assert_called_once_with(url)
+    message = send.call_args.args[2]
+    assert message.count("[CQ:image,") == 3
+    assert message.count(local.base64_data) == 2
+    assert message.count(remote.base64_data) == 1
 
 
 def test_agent_error_is_not_rewritten_even_when_mode_is_on() -> None:
